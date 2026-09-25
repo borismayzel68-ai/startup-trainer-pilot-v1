@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Startup Trainer — закрытый пилот</title>
+<style>
+body{font-family:Arial,sans-serif;max-width:820px;margin:40px auto;padding:0 18px;color:#111;background:#f7f7f8}
+.card{background:white;border:1px solid #ddd;border-radius:16px;padding:24px;margin-bottom:16px}
+h1{margin-top:0}.muted{color:#666}.row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+input,textarea,select,button{font:inherit;padding:12px;border:1px solid #bbb;border-radius:10px;width:100%;box-sizing:border-box}
+textarea{min-height:110px}button{cursor:pointer;background:#111;color:white;border:none}
+.hidden{display:none}.tag{display:inline-block;padding:5px 9px;background:#eee;border-radius:999px;font-size:12px}
+.msg{white-space:pre-wrap;line-height:1.45}.q{font-size:20px;font-weight:700}.error{color:#a00}
+ul{padding-left:22px}
+</style>
+</head>
+<body>
+<div class="card">
+<span class="tag">Закрытый пилот</span>
+<h1>Startup Readiness Trainer</h1>
+<p>Проверьте, насколько ваш стартап готов к содержательному разговору с инвестором. Тренажёр отделяет факты от гипотез, задаёт вопросы по главным пробелам и в конце формирует карту готовности и следующие проверки.</p>
+<p class="muted"><b>Важно:</b> это инструмент подготовки, а не инвестиционное решение Artgen и не обещание инвестиций.</p>
+</div>
+<div id="start" class="card">
+<div class="row">
+<div><label>Название проекта</label><input id="project" value="Doctum"></div>
+<div><label>Код доступа</label><input id="code" placeholder="Код пилота"></div>
+</div>
+<p><label>Сценарий</label>
+<select id="mode">
+<option value="A">A — проверить текущую модель</option>
+<option value="B" selected>B — проверить новую гипотезу</option>
+<option value="C">C — сравнить две гипотезы без победителя</option>
+</select></p>
+<p><label>Текущая модель (для A/C)</label><textarea id="ha">Бесплатный B2C-сервис → лабораторный referral → комиссия.</textarea></p>
+<p><label>Новая гипотеза (для B/C)</label><textarea id="hb">Персональный банк лабораторной истории по модели Гемабанка: импорт и нормализация → многолетний архив → ежегодная подписка / family plan → медицинские партнёры → дополнительные транзакции.</textarea></p>
+<p><label>Краткое описание проекта</label><textarea id="desc" placeholder="Что уже работает, кто пользователь, кто платит, стадия"></textarea></p>
+<p><label>Pitch deck, PDF (необязательно)</label><input id="deck" type="file" accept="application/pdf"></p>
+<p><label><input id="consent" type="checkbox" style="width:auto"> Я согласен на обработку материалов для этого закрытого пилота и не загружаю персональные медицинские данные пациентов.</label></p>
+<button onclick="startSession()">Начать</button>
+<p id="startErr" class="error"></p>
+</div>
+<div id="chat" class="card hidden">
+<div id="progress" class="muted"></div>
+<p id="why" class="muted"></p>
+<div id="question" class="q"></div>
+<p><textarea id="answer" placeholder="Ответьте по существу. Если данных нет — так и напишите: «нет данных»."></textarea></p>
+<div class="row"><button onclick="sendAnswer()">Ответить</button><button onclick="stopSession()">Завершить сейчас</button></div>
+<p id="chatErr" class="error"></p>
+</div>
+<div id="report" class="card hidden">
+<h2>Отчёт готовности</h2>
+<div id="reportBody" class="msg"></div>
+<hr>
+<p class="muted">Это оценка готовности пакета к разговору с инвестором, а не инвестиционная рекомендация Artgen и не обещание инвестиций.</p>
+<h3>Короткая обратная связь</h3>
+<p><textarea id="feedback" placeholder="Что было полезно? Что было лишним? Что вы измените после сессии?"></textarea></p>
+<button onclick="sendFeedback()">Отправить обратную связь</button>
+</div>
+<script>
+let sid=null, state=null;
+async function startSession(){
+  document.getElementById('startErr').textContent='';
+  const fd=new FormData();
+  fd.append('invite_code',document.getElementById('code').value);
+  fd.append('project_name',document.getElementById('project').value);
+  fd.append('mode',document.getElementById('mode').value);
+  fd.append('hypothesis_a',document.getElementById('ha').value);
+  fd.append('hypothesis_b',document.getElementById('hb').value);
+  fd.append('description',document.getElementById('desc').value);
+  fd.append('consent',document.getElementById('consent').checked?'true':'false');
+  const f=document.getElementById('deck').files[0]; if(f) fd.append('deck',f);
+  const r=await fetch('/api/start',{method:'POST',body:fd}); const j=await r.json();
+  if(!r.ok){document.getElementById('startErr').textContent=j.error||'Ошибка';return;}
+  sid=j.id; state=j; document.getElementById('start').classList.add('hidden'); document.getElementById('chat').classList.remove('hidden'); renderState();
+}
+function renderState(){
+ if(state.done){ showReport(); return; }
+ document.getElementById('progress').textContent='Вопрос '+(state.turn+1)+' из максимум 12';
+ document.getElementById('question').textContent=state.current_question.question;
+ document.getElementById('why').textContent=state.current_question.why||'';
+ document.getElementById('answer').value='';
+}
+async function sendAnswer(){
+ const a=document.getElementById('answer').value.trim(); if(!a)return;
+ const r=await fetch('/api/session/'+sid+'/answer',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({answer:a})});
+ const j=await r.json(); if(!r.ok){document.getElementById('chatErr').textContent=j.error||'Ошибка';return;}
+ state=j; renderState();
+}
+async function stopSession(){
+ document.getElementById('answer').value='стоп'; await sendAnswer();
+}
+function esc(x){return String(x||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+function list(title,arr){return '<h3>'+title+'</h3><ul>'+(arr||[]).map(x=>'<li>'+esc(typeof x==='string'?x:JSON.stringify(x))+'</li>').join('')+'</ul>';}
+function showReport(){
+ document.getElementById('chat').classList.add('hidden'); document.getElementById('report').classList.remove('hidden');
+ const r=state.report||{}; let h='<h3>Тезис</h3><p>'+esc(r.thesis)+'</p>';
+ h+=list('Подтверждено',r.facts)+list('Гипотезы',r.hypotheses)+list('Слабые доказательства',r.weak)+list('Недостающие доказательства',r.missing);
+ h+=list('Главные пробелы',r.gaps)+list('Следующие проверки',r.next_tests);
+ h+='<h3>Итог</h3><p><b>'+esc(r.recommendation)+'</b></p>';
+ if(r.comparison) h+='<h3>Сравнение гипотез</h3><pre>'+esc(JSON.stringify(r.comparison,null,2))+'</pre>';
+ document.getElementById('reportBody').innerHTML=h;
+}
+async function sendFeedback(){
+ const t=document.getElementById('feedback').value;
+ await fetch('/api/session/'+sid+'/feedback',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:t})});
+ alert('Спасибо. Обратная связь сохранена.');
+}
+</script>
+</body></html>
