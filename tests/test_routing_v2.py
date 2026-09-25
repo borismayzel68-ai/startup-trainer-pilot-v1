@@ -69,6 +69,14 @@ class RoutingOracleTests(unittest.TestCase):
         us={"active_markets":["US"],"description":"","deck_text":"","intended_use":"","qa":[]}
         self.assertIsNone(guard_question(us,{"question":"What is the FDA route?"}).get("jurisdiction_leak"))
 
+    def test_rf_eaeu_regulatory_question_gets_local_prefix(self):
+        rf={"active_markets":["RF"],"description":"","deck_text":"","intended_use":"","qa":[]}
+        out=guard_question(rf,{"question":"\u041a\u0430\u043a \u043e\u043f\u0440\u0435\u0434\u0435\u043b\u044f\u0435\u0442\u0441\u044f \u043a\u043b\u0430\u0441\u0441\u0438\u0444\u0438\u043a\u0430\u0446\u0438\u044f?","why":"\u042d\u0442\u043e \u0432\u043b\u0438\u044f\u0435\u0442 \u043d\u0430 \u0433\u0440\u0430\u043d\u0438\u0446\u0443 \u043c\u0435\u0434\u0438\u0446\u0438\u043d\u0441\u043a\u043e\u0433\u043e \u0438\u0437\u0434\u0435\u043b\u0438\u044f \u0420\u0424/\u0415\u0410\u042d\u0421 \u0438 \u043c\u0430\u0440\u0448\u0440\u0443\u0442 \u0447\u0435\u0440\u0435\u0437 \u0420\u043e\u0441\u0437\u0434\u0440\u0430\u0432\u043d\u0430\u0434\u0437\u043e\u0440."})
+        self.assertTrue(out["question"].startswith("\u0414\u043b\u044f \u0420\u0424:"))
+        eu={"active_markets":["EAEU"],"description":"","deck_text":"","intended_use":"","qa":[]}
+        out=guard_question(eu,{"question":"\u041a\u0430\u043a \u043e\u043f\u0440\u0435\u0434\u0435\u043b\u044f\u0435\u0442\u0441\u044f \u043a\u043b\u0430\u0441\u0441\u0438\u0444\u0438\u043a\u0430\u0446\u0438\u044f?","why":"\u042d\u0442\u043e \u0432\u043b\u0438\u044f\u0435\u0442 \u043d\u0430 \u0433\u0440\u0430\u043d\u0438\u0446\u0443 \u043c\u0435\u0434\u0438\u0446\u0438\u043d\u0441\u043a\u043e\u0433\u043e \u0438\u0437\u0434\u0435\u043b\u0438\u044f \u0420\u0424/\u0415\u0410\u042d\u0421."})
+        self.assertTrue(out["question"].startswith("\u0414\u043b\u044f \u0415\u0410\u042d\u0421:"))
+
     def test_a5_source_raised_requires_provenance(self):
         material={"active_markets":["RF"],"description":"We plan FDA 510(k) in 2027","deck_text":"","intended_use":"","qa":[]}
         blocked=guard_question(material,{"question":"Clarify the FDA 510(k) route"})

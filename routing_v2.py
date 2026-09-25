@@ -127,19 +127,39 @@ def guard_question(session,obj):
     q=str(out.get("question") or "")
     active=set(session.get("active_markets") or [])
     for pattern,markets,label in TERM_RULES:
-        if not pattern.search(q): continue
-        if active & markets: continue
+        if not pattern.search(q):
+            continue
+        if active & markets:
+            continue
         raised_by,ref,_=_route_source(session,markets)
         supplied_ref=str(out.get("source_ref") or "").strip()
         if raised_by and supplied_ref and supplied_ref==ref:
             out["route_raised_by"]=raised_by
             out["source_ref"]=ref
-            return out
+            break
         out["jurisdiction_leak"]=label
         out["question"]="\u041a\u0430\u043a\u043e\u0439 \u0440\u0435\u0433\u0443\u043b\u044f\u0442\u043e\u0440\u043d\u044b\u0439 \u043c\u0430\u0440\u0448\u0440\u0443\u0442 \u0438 \u043a\u0430\u043a\u043e\u0435 \u0434\u043e\u043a\u0430\u0437\u0430\u0442\u0435\u043b\u044c\u0441\u0442\u0432\u043e \u043f\u0440\u0438\u043c\u0435\u043d\u0438\u043c\u044b \u0438\u043c\u0435\u043d\u043d\u043e \u0432 \u0437\u0430\u044f\u0432\u043b\u0435\u043d\u043d\u043e\u0439 \u044e\u0440\u0438\u0441\u0434\u0438\u043a\u0446\u0438\u0438 \u043f\u0440\u043e\u0435\u043a\u0442\u0430?"
         out["why"]="\u0423\u0431\u0440\u0430\u043d \u043d\u0435\u0440\u0435\u043b\u0435\u0432\u0430\u043d\u0442\u043d\u044b\u0439 \u0437\u0430\u0440\u0443\u0431\u0435\u0436\u043d\u044b\u0439 regulatory default."
         out["topic"]="regulatory"
         out.pop("source_ref",None)
-        return out
+        break
+    why=str(out.get("why") or "").lower()
+    regulatory_context = (
+        str(out.get("topic") or "").lower()=="regulatory"
+        or any(k in why for k in (
+            "\u0440\u043e\u0441\u0437\u0434\u0440\u0430\u0432\u043d\u0430\u0434\u0437\u043e\u0440",
+            "\u0440\u0444/\u0435\u0430\u044d\u0441",
+            "\u0440\u0435\u0433\u0443\u043b\u044f\u0442\u043e\u0440",
+            "\u0440\u0435\u0433\u0438\u0441\u0442\u0440\u0430\u0446",
+            "\u043c\u0435\u0434\u0438\u0446\u0438\u043d\u0441\u043a"
+        ))
+    )
+    if regulatory_context:
+        question=str(out.get("question") or "")
+        if active=={"RF"} and not question.startswith("\u0414\u043b\u044f \u0420\u0424:"):
+            out["question"]="\u0414\u043b\u044f \u0420\u0424: "+question
+        elif active=={"EAEU"} and not question.startswith("\u0414\u043b\u044f \u0415\u0410\u042d\u0421:"):
+            out["question"]="\u0414\u043b\u044f \u0415\u0410\u042d\u0421: "+question
+        elif "RF" in active and "EAEU" in active and not question.startswith("\u0414\u043b\u044f \u0420\u0424/\u0415\u0410\u042d\u0421:"):
+            out["question"]="\u0414\u043b\u044f \u0420\u0424/\u0415\u0410\u042d\u0421: "+question
     return out
-
