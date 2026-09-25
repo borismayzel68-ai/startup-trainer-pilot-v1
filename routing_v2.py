@@ -1,4 +1,4 @@
-import re
+﻿import re
 
 JURISDICTIONS={"RF","EAEU","EU","US","GCC","MULTI"}
 PRODUCT_CLASSES={"THERAPEUTIC","MEDICAL_DEVICE","SOFTWARE_POTENTIAL_MD","IVD","LAB_SERVICE","WELLNESS_INFORMATION","RESEARCH_ONLY"}
@@ -100,7 +100,7 @@ def vocab(markets):
 def profile_question(session):
     for field,q in PROFILE_FIELDS:
         if not str(session.get(field) or "").strip():
-            return {"question":q,"why":"Needed for routing and triage.","topic":"profile","profile_field":field}
+            return {"question":q,"why":"Нужно для маршрутизации и triage.","topic":"profile","profile_field":field}
     return None
 
 def _route_source(session, markets):
@@ -142,3 +142,4 @@ def guard_question(session,obj):
         out.pop("source_ref",None)
         return out
     return out
+
