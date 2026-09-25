@@ -25,9 +25,32 @@ ul{padding-left:22px}
 </div>
 <div id="start" class="card">
 <div class="row">
+<div><label>Project ID</label><input id="projectId" value="VC-178" placeholder="VC-178"></div>
 <div><label>Название проекта</label><input id="project" value="Doctum"></div>
-<div><label>Код доступа</label><input id="code" placeholder="Код пилота"></div>
 </div>
+<div class="row">
+<div><label>Имя founder</label><input id="founderName" placeholder="Имя"></div>
+<div><label>Email founder</label><input id="founderEmail" type="email" placeholder="name@example.com"></div>
+</div>
+<div class="row">
+<div><label>Юрисдикция</label><select id="jurisdiction">
+<option value="RF">РФ</option><option value="EAEU">ЕАЭС</option><option value="EU">ЕС</option><option value="US">США</option><option value="GCC">GCC</option><option value="MULTI">Несколько</option>
+</select></div>
+<div><label>Target markets (MULTI)</label><input id="targetMarkets" placeholder="RF, EU"></div>
+</div>
+<p><label>Intended use / заявленное назначение</label><textarea id="intendedUse" placeholder="Что именно делает продукт"></textarea></p>
+<p><label>Product class</label><select id="productClass">
+<option value="THERAPEUTIC">Therapeutic</option><option value="MEDICAL_DEVICE">Medical device</option><option value="SOFTWARE_POTENTIAL_MD">Software potentially MD</option><option value="IVD">IVD</option><option value="LAB_SERVICE">Lab service</option><option value="WELLNESS_INFORMATION" selected>Wellness / information</option><option value="RESEARCH_ONLY">Research only</option>
+</select></p>
+<div class="row">
+<div><label>Стадия (опционально)</label><input id="stage" placeholder="PoC / пилоты / продажи"></div>
+<div><label>Кто пользуется</label><input id="userRole"></div>
+</div>
+<div class="row">
+<div><label>Кто покупает / решает</label><input id="buyer"></div>
+<div><label>Кто платит</label><input id="payer"></div>
+</div>
+<p><label>Код доступа</label><input id="code" placeholder="Код пилота"></p>
 <p><label>Сценарий</label>
 <select id="mode">
 <option value="A">A — проверить текущую модель</option>
@@ -65,7 +88,18 @@ async function startSession(){
   document.getElementById('startErr').textContent='';
   const fd=new FormData();
   fd.append('invite_code',document.getElementById('code').value);
+  fd.append('project_id',document.getElementById('projectId').value);
   fd.append('project_name',document.getElementById('project').value);
+  fd.append('founder_name',document.getElementById('founderName').value);
+  fd.append('founder_email',document.getElementById('founderEmail').value);
+  fd.append('jurisdiction',document.getElementById('jurisdiction').value);
+  fd.append('target_markets',document.getElementById('targetMarkets').value);
+  fd.append('intended_use',document.getElementById('intendedUse').value);
+  fd.append('product_class',document.getElementById('productClass').value);
+  fd.append('stage',document.getElementById('stage').value);
+  fd.append('user',document.getElementById('userRole').value);
+  fd.append('buyer',document.getElementById('buyer').value);
+  fd.append('payer',document.getElementById('payer').value);
   fd.append('mode',document.getElementById('mode').value);
   fd.append('hypothesis_a',document.getElementById('ha').value);
   fd.append('hypothesis_b',document.getElementById('hb').value);
@@ -96,7 +130,7 @@ function esc(x){return String(x||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;
 function list(title,arr){return '<h3>'+title+'</h3><ul>'+(arr||[]).map(x=>'<li>'+esc(typeof x==='string'?x:JSON.stringify(x))+'</li>').join('')+'</ul>';}
 function showReport(){
  document.getElementById('chat').classList.add('hidden'); document.getElementById('report').classList.remove('hidden');
- const r=state.report||{}; let h='<h3>Тезис</h3><p>'+esc(r.thesis)+'</p>';
+ const r=state.report||{}; let h='<p><b>'+esc(r.project_id||state.project_id)+' В· '+esc(r.jurisdiction||state.jurisdiction)+' В· '+esc(r.product_class||state.product_class)+'</b></p><h3>РўРµР·РёСЃ</h3><p>'+esc(r.thesis)+'</p>';
  h+=list('Подтверждено',r.facts)+list('Гипотезы',r.hypotheses)+list('Слабые доказательства',r.weak)+list('Недостающие доказательства',r.missing);
  h+=list('Главные пробелы',r.gaps)+list('Следующие проверки',r.next_tests);
  h+='<h3>Итог</h3><p><b>'+esc(r.recommendation)+'</b></p>';
