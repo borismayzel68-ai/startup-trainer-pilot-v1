@@ -1,0 +1,117 @@
+import os, unittest, io
+os.environ.setdefault("OPENAI_API_KEY","test-key")
+os.environ.setdefault("INVITE_CODE","PILOT-S1-EXT-001")
+import app as appmod
+
+class StartApiTests(unittest.TestCase):
+    def setUp(self):
+        appmod.SESSIONS.clear()
+        appmod.app.testing=True
+        self.c=appmod.app.test_client()
+
+    def base(self):
+        return {
+            "invite_code":"PILOT-S1-EXT-001",
+            "project_id":"VC-178",
+            "project_name":"Doctum",
+            "founder_name":"Test Founder",
+            "founder_email":"founder@example.com",
+            "jurisdiction":"RF",
+            "intended_use":"storage and visualization of laboratory history",
+            "product_class":"WELLNESS_INFORMATION",
+            "mode":"B",
+            "consent":"true",
+        }
+
+    def post(self,data=None):
+        return self.c.post("/api/start",data=data or self.base())
+
+    def test_valid_start_a2_a5_state(self):
+        r=self.post()
+        self.assertEqual(r.status_code,200,r.get_json())
+        j=r.get_json()
+        self.assertEqual(j["project_id"],"VC-178")
+        self.assertEqual(j["routing_steps"],["jurisdiction","intended_use","product_class"])
+        self.assertEqual(j["jurisdiction"],"RF")
+        self.assertEqual(j["product_class"],"WELLNESS_INFORMATION")
+        self.assertIn("regulatory",j["selected_modules"])
+        self.assertIn("ai_data_cybersecurity",j["selected_modules"])
+        self.assertIn("pilots_workflow",j["selected_modules"])
+        self.assertNotIn("diagnostics_validity",j["selected_modules"])
+        self.assertFalse(j["classification_check_required"])
+        self.assertEqual(j["current_question"]["profile_field"],"stage")
+
+    def test_project_id_trim_and_suffix(self):
+        x=self.base(); x["project_id"]="VC-178 "
+        self.assertEqual(self.post(x).get_json()["project_id"],"VC-178")
+        x=self.base(); x["project_id"]="VC-100a"
+        self.assertEqual(self.post(x).get_json()["project_id"],"VC-100a")
+
+    def test_project_id_missing_or_name_rejected(self):
+        x=self.base(); x.pop("project_id")
+        r=self.post(x); self.assertEqual(r.status_code,400); self.assertEqual(r.get_json()["code"],"project_id_required")
+        x=self.base(); x["project_id"]="Doctum"
+        r=self.post(x); self.assertEqual(r.status_code,400)
+
+    def test_required_routing_fields(self):
+        for field in ("jurisdiction","intended_use","product_class","founder_name","founder_email"):
+            with self.subTest(field=field):
+                x=self.base(); x.pop(field)
+                self.assertEqual(self.post(x).status_code,400)
+        x=self.base(); x["consent"]="false"
+        self.assertEqual(self.post(x).status_code,400)
+
+    def test_multi_targets_from_single_ui_string(self):
+        x=self.base(); x["jurisdiction"]="MULTI"; x["target_markets"]="RF, EU"
+        r=self.post(x)
+        self.assertEqual(r.status_code,200,r.get_json())
+        j=r.get_json()
+        self.assertEqual(j["target_markets"],["RF","EU"])
+        self.assertEqual(j["active_markets"],["EU","RF"])
+
+    def test_multi_requires_two_targets(self):
+        x=self.base(); x["jurisdiction"]="MULTI"; x["target_markets"]="RF"
+        r=self.post(x)
+        self.assertEqual(r.status_code,400)
+        self.assertEqual(r.get_json()["code"],"target_markets_required")
+
+    def test_intended_use_trigger_without_reclassification(self):
+        x=self.base(); x["intended_use"]="interpretation of results and personalized recommendations"
+        r=self.post(x); self.assertEqual(r.status_code,200,r.get_json())
+        j=r.get_json()
+        self.assertTrue(j["classification_check_required"])
+        self.assertEqual(j["product_class"],"WELLNESS_INFORMATION")
+        self.assertNotIn("diagnostics_validity",j["selected_modules"])
+
+    def test_invite_and_mode_regression(self):
+        x=self.base(); x["invite_code"]="wrong"
+        self.assertEqual(self.post(x).status_code,403)
+        x=self.base(); x["mode"]="Z"
+        self.assertEqual(self.post(x).status_code,400)
+
+
+    def test_non_pdf_regression(self):
+        x=self.base()
+        x["deck"]=(io.BytesIO(b"not-pdf"),"deck.txt")
+        r=self.c.post("/api/start",data=x,content_type="multipart/form-data")
+        self.assertEqual(r.status_code,400)
+        self.assertEqual(r.get_json()["code"],"deck_mime_invalid")
+
+    def test_ui_fields_and_report_header(self):
+        html=(__import__("pathlib").Path(appmod.app.root_path)/"templates"/"index.html").read_text(encoding="utf-8")
+        for field in ("projectId","founderName","founderEmail","jurisdiction","targetMarkets","intendedUse","productClass","stage","userRole","buyer","payer"):
+            self.assertIn(f'id="{field}"',html)
+        self.assertIn("project_id||state.project_id",html)
+
+    def test_no_completion_webhook_in_003a(self):
+        src=(__import__("pathlib").Path(appmod.app.root_path)/"app.py").read_text(encoding="utf-8")
+        self.assertNotIn("TRAINER_EVENT_WEBHOOK",src)
+        self.assertNotIn("requests.post(",src)
+
+    def test_enums_unchanged(self):
+        self.assertEqual(appmod.ALLOWED_STATUS,{"fact","hypothesis","missing","weak"})
+        self.assertEqual(appmod.ALLOWED_REC,{"not_ready","iterate","ready_for_investor_conversation"})
+        self.assertEqual(appmod.MAX_TURNS,12)
+
+if __name__=="__main__":
+    unittest.main()
