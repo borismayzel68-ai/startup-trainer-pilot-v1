@@ -29,6 +29,14 @@ names, meeting questions, deck filenames/raw text, API keys, and patient-level
 data. Only structural status tokens, counts, safe deck metadata, and the canonical
 project/founder identity fields are sent.
 
+## Completion receiver
+A9 accepts `TRAINER_COMPLETED` at `POST /api/completion-events`. The
+`Idempotency-Key` header must match the payload. PostgreSQL or SQLite records one
+technical receipt per key; later deliveries return `duplicate` without creating
+another receipt. The receipt stores only the key, event ID, session ID, and time,
+not the completion payload or any free text. Retry and dead-letter recovery are
+not part of this A9 atom.
+
 ## Run
 `pip install -r requirements.txt`
 `python app.py`

@@ -69,6 +69,14 @@ class DurableSessionStore:
             data_json TEXT NOT NULL
         )
         """
+        receipt_sql = """
+        CREATE TABLE IF NOT EXISTS completion_receipts (
+            idempotency_key TEXT PRIMARY KEY,
+            event_id TEXT NOT NULL,
+            session_id TEXT NOT NULL,
+            received_at TEXT NOT NULL
+        )
+        """
         index_sql = """
         CREATE INDEX IF NOT EXISTS trainer_sessions_expires_idx
         ON trainer_sessions (expires_at)
@@ -76,6 +84,7 @@ class DurableSessionStore:
         with self._lock:
             with self._connection() as conn:
                 conn.execute(sql)
+                conn.execute(receipt_sql)
                 conn.execute(index_sql)
                 conn.commit()
 
@@ -180,6 +189,55 @@ class DurableSessionStore:
             session["event_status"] = target_status
         return claimed
 
+    def accept_completion_delivery(
+        self, idempotency_key, event_id, session_id, received_at=None
+    ):
+        """Persist the first delivery for a key and reject later duplicates."""
+        values = (
+            str(idempotency_key),
+            str(event_id),
+            str(session_id),
+            str(received_at or iso_z(utc_now())),
+        )
+        placeholders = "?, ?, ?, ?" if self.backend == "sqlite" else "%s, %s, %s, %s"
+        sql = f"""
+        INSERT INTO completion_receipts
+        (idempotency_key, event_id, session_id, received_at)
+        VALUES ({placeholders})
+        ON CONFLICT(idempotency_key) DO NOTHING
+        """
+        with self._lock:
+            with self._connection() as conn:
+                cursor = conn.execute(sql, values)
+                conn.commit()
+                return cursor.rowcount == 1
+
+    def get_completion_receipt(self, idempotency_key):
+        placeholder = "?" if self.backend == "sqlite" else "%s"
+        sql = f"""
+        SELECT idempotency_key, event_id, session_id, received_at
+        FROM completion_receipts WHERE idempotency_key={placeholder}
+        """
+        with self._lock:
+            with self._connection() as conn:
+                row = conn.execute(sql, (str(idempotency_key),)).fetchone()
+        if not row:
+            return None
+        return {
+            "idempotency_key": row[0],
+            "event_id": row[1],
+            "session_id": row[2],
+            "received_at": row[3],
+        }
+
+    def count_completion_receipts(self):
+        with self._lock:
+            with self._connection() as conn:
+                row = conn.execute(
+                    "SELECT COUNT(*) FROM completion_receipts"
+                ).fetchone()
+        return int(row[0])
+
     def get(self, session_id, default=None):
         placeholder = "?" if self.backend == "sqlite" else "%s"
         sql = f"SELECT data_json, expires_at FROM trainer_sessions WHERE id={placeholder}"
@@ -224,6 +282,7 @@ class DurableSessionStore:
         with self._lock:
             with self._connection() as conn:
                 conn.execute("DELETE FROM trainer_sessions")
+                conn.execute("DELETE FROM completion_receipts")
                 conn.commit()
 
     def __setitem__(self, session_id, session):

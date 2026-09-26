@@ -1,5 +1,6 @@
 import json
 import os
+import tempfile
 import threading
 import unittest
 from concurrent.futures import ThreadPoolExecutor
@@ -16,6 +17,7 @@ from completion_event import (
     build_completion_payload,
     post_completion_json,
 )
+from session_store import DurableSessionStore
 
 
 def sample_report():
@@ -401,6 +403,97 @@ class CompletionEmissionTests(unittest.TestCase):
             observed["event_id"],
             appmod.SESSIONS.get(sid)["event_id"],
         )
+
+
+class CompletionReceiverTests(unittest.TestCase):
+    def setUp(self):
+        appmod.SESSIONS.clear()
+        appmod.app.testing = True
+
+    @staticmethod
+    def payload(key="trainer-completed:session-a9"):
+        return {
+            "event_type": "TRAINER_COMPLETED",
+            "idempotency_key": key,
+            "event_id": "7ec33b93-0847-5dcc-b5b6-ea8ac6f144d9",
+            "session_id": "session-a9",
+            "questions_answers": [{"answer": "must not be stored"}],
+        }
+
+    def post(self, payload):
+        with appmod.app.test_client() as client:
+            return client.post(
+                "/api/completion-events",
+                json=payload,
+                headers={"Idempotency-Key": payload["idempotency_key"]},
+            )
+
+    def test_duplicate_delivery_is_a_no_op(self):
+        payload = self.payload()
+        first = self.post(payload)
+        second = self.post(payload)
+
+        self.assertEqual(first.status_code, 202)
+        self.assertEqual(first.get_json()["status"], "accepted")
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(second.get_json()["status"], "duplicate")
+        self.assertEqual(appmod.SESSIONS.count_completion_receipts(), 1)
+        receipt = appmod.SESSIONS.get_completion_receipt(
+            payload["idempotency_key"]
+        )
+        self.assertEqual(set(receipt), {
+            "idempotency_key", "event_id", "session_id", "received_at"
+        })
+        self.assertNotIn("must not be stored", json.dumps(receipt))
+
+    def test_parallel_duplicate_delivery_is_recorded_once(self):
+        payload = self.payload("trainer-completed:parallel-a9")
+        barrier = threading.Barrier(8)
+
+        def send(_):
+            barrier.wait(timeout=5)
+            response = self.post(payload)
+            return response.status_code, response.get_json()["status"]
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            results = list(pool.map(send, range(8)))
+
+        self.assertEqual(sum(status == "accepted" for _, status in results), 1)
+        self.assertEqual(sum(status == "duplicate" for _, status in results), 7)
+        self.assertEqual(appmod.SESSIONS.count_completion_receipts(), 1)
+
+    def test_receipt_survives_store_restart(self):
+        handle, path = tempfile.mkstemp(suffix=".sqlite3")
+        os.close(handle)
+        try:
+            url = f"sqlite:///{path}"
+            first = DurableSessionStore(url)
+            self.assertTrue(first.accept_completion_delivery(
+                "trainer-completed:restart-a9",
+                "event-restart-a9",
+                "session-restart-a9",
+            ))
+            restarted = DurableSessionStore(url)
+            self.assertFalse(restarted.accept_completion_delivery(
+                "trainer-completed:restart-a9",
+                "event-restart-a9",
+                "session-restart-a9",
+            ))
+            self.assertEqual(restarted.count_completion_receipts(), 1)
+        finally:
+            os.unlink(path)
+
+    def test_receiver_rejects_mismatched_header(self):
+        payload = self.payload()
+        with appmod.app.test_client() as client:
+            response = client.post(
+                "/api/completion-events",
+                json=payload,
+                headers={"Idempotency-Key": "wrong"},
+            )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.get_json()["code"], "idempotency_key_mismatch")
+        self.assertEqual(appmod.SESSIONS.count_completion_receipts(), 0)
 
 
 if __name__ == "__main__":

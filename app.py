@@ -271,6 +271,45 @@ def health():
         "storage":SESSIONS.backend,
     })
 
+@app.post("/api/completion-events")
+def receive_completion_event():
+    """A9 receiver: record one delivery per deterministic key."""
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({"error":"JSON object required","code":"invalid_json"}),400
+
+    event_type = str(payload.get("event_type") or "").strip()
+    idempotency_key = str(payload.get("idempotency_key") or "").strip()
+    event_id = str(payload.get("event_id") or "").strip()
+    session_id = str(payload.get("session_id") or "").strip()
+    header_key = str(request.headers.get("Idempotency-Key") or "").strip()
+    if event_type != "TRAINER_COMPLETED":
+        return jsonify({
+            "error":"Unsupported event type",
+            "code":"event_type_invalid",
+        }),400
+    if not idempotency_key or not event_id or not session_id:
+        return jsonify({
+            "error":"idempotency_key, event_id and session_id are required",
+            "code":"event_identity_missing",
+        }),400
+    if header_key != idempotency_key:
+        return jsonify({
+            "error":"Idempotency-Key must match the payload",
+            "code":"idempotency_key_mismatch",
+        }),400
+
+    accepted = SESSIONS.accept_completion_delivery(
+        idempotency_key=idempotency_key,
+        event_id=event_id,
+        session_id=session_id,
+        received_at=now(),
+    )
+    return jsonify({
+        "ok":True,
+        "status":"accepted" if accepted else "duplicate",
+    }),202 if accepted else 200
+
 @app.get("/robots.txt")
 def robots():
     return "User-agent: *\nDisallow: /\n",200,{"Content-Type":"text/plain"}
