@@ -1,4 +1,4 @@
-import os, io, json, uuid, time, re, hashlib
+import os, io, json, uuid, time, re, hashlib, hmac
 from flask import Flask, request, jsonify, render_template
 from pypdf import PdfReader
 from openai import OpenAI
@@ -23,6 +23,10 @@ TRAINER_EVENT_WEBHOOK = os.environ.get("TRAINER_EVENT_WEBHOOK", "").strip()
 WEBHOOK_TIMEOUT_SECONDS = float(
     os.environ.get("WEBHOOK_TIMEOUT_SECONDS", "10")
 )
+COMPLETION_RECEIVER_SECRET = os.environ.get(
+    "COMPLETION_RECEIVER_SECRET", ""
+).strip()
+MAX_COMPLETION_EVENT_BYTES = 64 * 1024
 INVITE_CODE = os.environ.get("INVITE_CODE", "PILOT-S1-EXT-001")
 ADMIN_KEY = os.environ.get("ADMIN_KEY", "change-me")
 SESSION_RETENTION_DAYS = int(os.environ.get("SESSION_RETENTION_DAYS", "30"))
@@ -35,6 +39,7 @@ SESSIONS = DurableSessionStore(
     SESSION_DATABASE_URL,
     retention_days=SESSION_RETENTION_DAYS,
 )
+app.config["MAX_CONTENT_LENGTH"] = 20 * 1024 * 1024
 ALLOWED_STATUS = {"fact","hypothesis","missing","weak"}
 ALLOWED_REC = {"not_ready","iterate","ready_for_investor_conversation"}
 
@@ -274,6 +279,35 @@ def health():
 @app.post("/api/completion-events")
 def receive_completion_event():
     """A9 receiver: record one delivery per deterministic key."""
+    if not COMPLETION_RECEIVER_SECRET:
+        return jsonify({
+            "error":"Completion receiver is not configured",
+            "code":"receiver_not_configured",
+        }),503
+    supplied_secret = str(
+        request.headers.get("X-Completion-Secret") or ""
+    )
+    if not hmac.compare_digest(
+        supplied_secret, COMPLETION_RECEIVER_SECRET
+    ):
+        return jsonify({
+            "error":"Unauthorized",
+            "code":"receiver_unauthorized",
+        }),401
+    if (
+        request.content_length is not None
+        and request.content_length > MAX_COMPLETION_EVENT_BYTES
+    ):
+        return jsonify({
+            "error":"Completion event is too large",
+            "code":"event_too_large",
+        }),413
+    raw_body = request.get_data(cache=True)
+    if len(raw_body) > MAX_COMPLETION_EVENT_BYTES:
+        return jsonify({
+            "error":"Completion event is too large",
+            "code":"event_too_large",
+        }),413
     payload = request.get_json(silent=True)
     if not isinstance(payload, dict):
         return jsonify({"error":"JSON object required","code":"invalid_json"}),400
@@ -288,15 +322,28 @@ def receive_completion_event():
             "error":"Unsupported event type",
             "code":"event_type_invalid",
         }),400
-    if not idempotency_key or not event_id or not session_id:
+    try:
+        canonical_session_id = str(uuid.UUID(session_id))
+    except (ValueError, AttributeError):
+        canonical_session_id = ""
+    if not canonical_session_id or canonical_session_id != session_id:
         return jsonify({
-            "error":"idempotency_key, event_id and session_id are required",
-            "code":"event_identity_missing",
+            "error":"session_id must be a canonical UUID",
+            "code":"session_id_invalid",
         }),400
-    if header_key != idempotency_key:
+    expected_key = f"trainer-completed:{session_id}"
+    expected_event_id = str(uuid.uuid5(
+        uuid.NAMESPACE_URL, expected_key
+    ))
+    if idempotency_key != expected_key or header_key != expected_key:
         return jsonify({
-            "error":"Idempotency-Key must match the payload",
-            "code":"idempotency_key_mismatch",
+            "error":"Idempotency key is not canonical",
+            "code":"idempotency_key_invalid",
+        }),400
+    if event_id != expected_event_id:
+        return jsonify({
+            "error":"event_id is not canonical",
+            "code":"event_id_invalid",
         }),400
 
     accepted = SESSIONS.accept_completion_delivery(

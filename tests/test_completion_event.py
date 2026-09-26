@@ -3,6 +3,7 @@ import os
 import tempfile
 import threading
 import unittest
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from unittest import mock
 
@@ -409,23 +410,32 @@ class CompletionReceiverTests(unittest.TestCase):
     def setUp(self):
         appmod.SESSIONS.clear()
         appmod.app.testing = True
+        self.previous_secret = appmod.COMPLETION_RECEIVER_SECRET
+        appmod.COMPLETION_RECEIVER_SECRET = "test-receiver-secret"
+
+    def tearDown(self):
+        appmod.COMPLETION_RECEIVER_SECRET = self.previous_secret
 
     @staticmethod
-    def payload(key="trainer-completed:session-a9"):
+    def payload(session_id="11111111-1111-4111-8111-111111111111"):
+        key = f"trainer-completed:{session_id}"
         return {
             "event_type": "TRAINER_COMPLETED",
             "idempotency_key": key,
-            "event_id": "7ec33b93-0847-5dcc-b5b6-ea8ac6f144d9",
-            "session_id": "session-a9",
+            "event_id": str(uuid.uuid5(uuid.NAMESPACE_URL, key)),
+            "session_id": session_id,
             "questions_answers": [{"answer": "must not be stored"}],
         }
 
-    def post(self, payload):
+    def post(self, payload, secret="test-receiver-secret"):
         with appmod.app.test_client() as client:
             return client.post(
                 "/api/completion-events",
                 json=payload,
-                headers={"Idempotency-Key": payload["idempotency_key"]},
+                headers={
+                    "Idempotency-Key": payload["idempotency_key"],
+                    "X-Completion-Secret": secret,
+                },
             )
 
     def test_duplicate_delivery_is_a_no_op(self):
@@ -447,7 +457,9 @@ class CompletionReceiverTests(unittest.TestCase):
         self.assertNotIn("must not be stored", json.dumps(receipt))
 
     def test_parallel_duplicate_delivery_is_recorded_once(self):
-        payload = self.payload("trainer-completed:parallel-a9")
+        payload = self.payload(
+            "22222222-2222-4222-8222-222222222222"
+        )
         barrier = threading.Barrier(8)
 
         def send(_):
@@ -489,10 +501,50 @@ class CompletionReceiverTests(unittest.TestCase):
             response = client.post(
                 "/api/completion-events",
                 json=payload,
-                headers={"Idempotency-Key": "wrong"},
+                headers={
+                    "Idempotency-Key": "wrong",
+                    "X-Completion-Secret": "test-receiver-secret",
+                },
             )
         self.assertEqual(response.status_code, 400)
-        self.assertEqual(response.get_json()["code"], "idempotency_key_mismatch")
+        self.assertEqual(response.get_json()["code"], "idempotency_key_invalid")
+        self.assertEqual(appmod.SESSIONS.count_completion_receipts(), 0)
+
+    def test_receiver_requires_secret(self):
+        response = self.post(self.payload(), secret="wrong")
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.get_json()["code"], "receiver_unauthorized")
+        self.assertEqual(appmod.SESSIONS.count_completion_receipts(), 0)
+
+    def test_receiver_rejects_patient_text_as_session_id(self):
+        payload = self.payload()
+        payload["session_id"] = "ФИО пациента, дата рождения"
+        response = self.post(payload)
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.get_json()["code"], "session_id_invalid")
+        self.assertEqual(appmod.SESSIONS.count_completion_receipts(), 0)
+
+    def test_receiver_rejects_noncanonical_event_id(self):
+        payload = self.payload()
+        payload["event_id"] = str(uuid.uuid4())
+        response = self.post(payload)
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.get_json()["code"], "event_id_invalid")
+        self.assertEqual(appmod.SESSIONS.count_completion_receipts(), 0)
+
+    def test_receiver_rejects_oversized_payload(self):
+        payload = self.payload()
+        payload["padding"] = "x" * appmod.MAX_COMPLETION_EVENT_BYTES
+        response = self.post(payload)
+        self.assertEqual(response.status_code, 413)
+        self.assertEqual(response.get_json()["code"], "event_too_large")
+        self.assertEqual(appmod.SESSIONS.count_completion_receipts(), 0)
+
+    def test_receiver_is_closed_when_secret_is_not_configured(self):
+        appmod.COMPLETION_RECEIVER_SECRET = ""
+        response = self.post(self.payload())
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.get_json()["code"], "receiver_not_configured")
         self.assertEqual(appmod.SESSIONS.count_completion_receipts(), 0)
 
 

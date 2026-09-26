@@ -31,11 +31,16 @@ project/founder identity fields are sent.
 
 ## Completion receiver
 A9 accepts `TRAINER_COMPLETED` at `POST /api/completion-events`. The
-`Idempotency-Key` header must match the payload. PostgreSQL or SQLite records one
-technical receipt per key; later deliveries return `duplicate` without creating
-another receipt. The receipt stores only the key, event ID, session ID, and time,
-not the completion payload or any free text. Retry and dead-letter recovery are
-not part of this A9 atom.
+`X-Completion-Secret` header is mandatory. `session_id` must be a canonical UUID;
+the idempotency key and UUIDv5 event ID are derived from it and must match exactly.
+The endpoint rejects bodies over 64 KiB. PostgreSQL or SQLite records one technical
+receipt per key; later deliveries return `duplicate` without creating another
+receipt. The receipt stores only the key, event ID, session ID, and time, not the
+completion payload or any free text.
+
+This endpoint is only A9.a. A9 is not complete and this branch must not be merged
+or deployed until A9.b places the gate on the actual Make delivery path and proves
+recovery/retry behavior without duplicate downstream delivery.
 
 ## Run
 `pip install -r requirements.txt`

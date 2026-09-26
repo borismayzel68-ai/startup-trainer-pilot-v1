@@ -6,6 +6,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
 DEFAULT_RETENTION_DAYS = 30
+POSTGRES_SCHEMA_LOCK_ID = 8675309007
 
 def utc_now():
     return datetime.now(timezone.utc)
@@ -83,6 +84,11 @@ class DurableSessionStore:
         """
         with self._lock:
             with self._connection() as conn:
+                if self.backend == "postgres":
+                    conn.execute(
+                        "SELECT pg_advisory_xact_lock(%s)",
+                        (POSTGRES_SCHEMA_LOCK_ID,),
+                    )
                 conn.execute(sql)
                 conn.execute(receipt_sql)
                 conn.execute(index_sql)
