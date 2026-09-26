@@ -23,8 +23,11 @@ A8 atomically claims a completed session and makes at most one
 `TRAINER_COMPLETED` delivery attempt. The `emitting` state is persisted before
 the network call and means the delivery outcome may be unknown after a crash.
 A8 does not guarantee exactly-once network delivery and does not retry; recovery,
-receiver-side deduplication, and dead-letter handling belong to A9. API keys,
-raw deck text, and patient identifiers are excluded.
+receiver-side deduplication, and dead-letter handling belong to A9. The event
+excludes free-text founder answers, evidence quotes, report text, missing-document
+names, meeting questions, deck filenames/raw text, API keys, and patient-level
+data. Only structural status tokens, counts, safe deck metadata, and the canonical
+project/founder identity fields are sent.
 
 ## Run
 `pip install -r requirements.txt`

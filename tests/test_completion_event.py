@@ -27,7 +27,12 @@ def sample_report():
 
 
 class CompletionPayloadTests(unittest.TestCase):
-    def test_payload_has_canonical_fields_and_redacts_secrets(self):
+    def test_payload_has_canonical_fields_without_free_text(self):
+        patient_text = (
+            "Пациент Иванов Иван Иванович, 45 лет, сахарный диабет 2 типа, "
+            "01.01.1980, СНИЛС 12345678901, +49 170 1234567, "
+            "patient@example.com, ghp_abcdefghijklmnopqrst"
+        )
         session = {
             "id": "session-1",
             "project_id": "VC-178",
@@ -39,23 +44,42 @@ class CompletionPayloadTests(unittest.TestCase):
             "mode": "B",
             "created_at": "2026-09-26T10:00:00+00:00",
             "qa": [{
-                "question": "Evidence?",
-                "answer": "MRN 12345",
+                "module": "traction",
+                "slot": "pilot_evidence",
+                "at": "2026-09-26T10:15:00+00:00",
+                "question": patient_text,
+                "answer": patient_text,
                 "api_key": "must-not-leak",
-                "analysis": {"status": "fact", "quote": "MRN 12345"},
+                "analysis": {
+                    "status": "fact",
+                    "quote": patient_text,
+                    "contradiction": patient_text,
+                },
+            }, {
+                "module": patient_text,
+                "slot": patient_text,
+                "at": patient_text,
+                "answer": patient_text,
+                "analysis": {"status": patient_text},
             }],
             "report": {
-                **sample_report(),
+                "missing": [patient_text],
+                "next_tests": [patient_text],
+                "recommendation": "iterate",
                 "note": "OpenAI key sk-proj-abcdefghijklmnop",
-                "patient_note": "ФИО Иванов, дата рождения 01.01.1980",
+                "patient_note": patient_text,
             },
-            "coverage": {"patient_id": "must-not-leak"},
+            "coverage": {"patient_id": patient_text},
             "selected_modules": ["regulatory"],
             "routing_steps": ["jurisdiction"],
             "input_manifest": {
                 "deck": {
                     "present": True,
+                    "filename": patient_text,
                     "raw_text": "alternate raw deck text",
+                    "mime_type": "application/pdf",
+                    "size_bytes": 123,
+                    "sha256": "abcdef123456",
                 },
                 "deck_text": "raw",
             },
@@ -81,15 +105,47 @@ class CompletionPayloadTests(unittest.TestCase):
             )),
         )
         serialized = json.dumps(payload, ensure_ascii=False)
-        self.assertNotIn("must-not-leak", serialized)
-        self.assertNotIn("MRN 12345", serialized)
-        self.assertNotIn("sk-proj-abcdefghijklmnop", serialized)
-        self.assertNotIn("alternate raw deck text", serialized)
-        self.assertNotIn("Иванов", serialized)
-        self.assertIn("REDACTED_PATIENT_LEVEL_DATA", serialized)
-        self.assertIn("REDACTED_SECRET", serialized)
-        self.assertFalse(
-            payload["privacy_flags"]["patient_level_data_included"]
+        for forbidden in (
+            patient_text,
+            "must-not-leak",
+            "sk-proj-abcdefghijklmnop",
+            "alternate raw deck text",
+            "Иванов",
+            "patient@example.com",
+            "ghp_abcdefghijklmnopqrst",
+        ):
+            self.assertNotIn(forbidden, serialized)
+        self.assertEqual(payload["questions_answers"], [{
+            "module": "traction",
+            "slot": "pilot_evidence",
+            "status": "fact",
+            "at": "2026-09-26T10:15:00+00:00",
+        }, {
+            "module": None,
+            "slot": None,
+            "status": "unknown",
+            "at": None,
+        }])
+        self.assertEqual(payload["missing_documents"], [])
+        self.assertEqual(payload["next_meeting_questions"], [])
+        self.assertEqual(payload["founder_report"], {
+            "recommendation": "iterate",
+            "missing_document_count": 1,
+            "next_test_count": 1,
+        })
+        self.assertNotIn(
+            "filename",
+            payload["run_manifest"]["input_manifest"]["deck"],
+        )
+        self.assertEqual(
+            payload["privacy_flags"],
+            {
+                "api_key_included": False,
+                "patient_level_data_included": False,
+                "raw_deck_included": False,
+                "free_text_answers_included": False,
+                "free_text_report_included": False,
+            },
         )
 
     def test_post_requires_https(self):
