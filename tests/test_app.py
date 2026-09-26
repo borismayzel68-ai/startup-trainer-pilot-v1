@@ -43,7 +43,7 @@ class StartApiTests(unittest.TestCase):
         self.assertFalse(j["classification_check_required"])
         self.assertEqual(j["current_question"]["profile_field"],"stage")
         self.assertFalse(j["input_manifest"]["deck"]["present"])
-        self.assertEqual(j["event_status"],"not_emitted")
+        self.assertNotIn("event_status",j)
         self.assertTrue(j["expires_at"])
 
     def test_project_id_trim_and_suffix(self):
@@ -129,10 +129,9 @@ class StartApiTests(unittest.TestCase):
         self.assertIn("state.phase==='full_readiness'",html)
         self.assertIn("до покрытия обязательных слотов",html)
 
-    def test_no_completion_webhook_in_003a(self):
-        src=(__import__("pathlib").Path(appmod.app.root_path)/"app.py").read_text(encoding="utf-8")
-        self.assertNotIn("TRAINER_EVENT_WEBHOOK",src)
-        self.assertNotIn("requests.post(",src)
+    def test_a8_completion_webhook_is_configured(self):
+        self.assertEqual(appmod.TRAINER_VERSION,"s1-ext-pilot-v1.4-completion-event")
+        self.assertTrue(hasattr(appmod,"TRAINER_EVENT_WEBHOOK"))
 
     def test_full_readiness_continues_through_question_13(self):
         x=self.base()

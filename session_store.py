@@ -117,6 +117,8 @@ class DurableSessionStore:
                 expires_at=excluded.expires_at,
                 event_status=excluded.event_status,
                 data_json=excluded.data_json
+            WHERE trainer_sessions.event_status='not_emitted'
+               OR excluded.event_status<>'not_emitted'
             """
         else:
             sql = """
@@ -129,6 +131,8 @@ class DurableSessionStore:
                 expires_at=EXCLUDED.expires_at,
                 event_status=EXCLUDED.event_status,
                 data_json=EXCLUDED.data_json
+            WHERE trainer_sessions.event_status='not_emitted'
+               OR EXCLUDED.event_status<>'not_emitted'
             """
         with self._lock:
             with self._connection() as conn:
@@ -136,6 +140,45 @@ class DurableSessionStore:
                 conn.commit()
         session["expires_at"] = data["expires_at"]
         session["event_status"] = data["event_status"]
+
+    def claim_completion_event(self, session, target_status="emitting"):
+        """Atomically move a session out of not_emitted and persist its state."""
+        if target_status not in {"emitting", "not_configured"}:
+            raise ValueError("invalid completion event claim status")
+        data = dict(session)
+        data["expires_at"] = self._expiry(data)
+        data["event_status"] = target_status
+        payload = json.dumps(
+            data, ensure_ascii=False, separators=(",", ":")
+        )
+        values = (
+            str(data.get("project_id") or ""),
+            str(data.get("updated_at") or iso_z(utc_now())),
+            str(data["expires_at"]),
+            target_status,
+            payload,
+            str(data["id"]),
+            "not_emitted",
+        )
+        placeholder = "?" if self.backend == "sqlite" else "%s"
+        sql = f"""
+        UPDATE trainer_sessions SET
+            project_id={placeholder},
+            updated_at={placeholder},
+            expires_at={placeholder},
+            event_status={placeholder},
+            data_json={placeholder}
+        WHERE id={placeholder} AND event_status={placeholder}
+        """
+        with self._lock:
+            with self._connection() as conn:
+                cursor = conn.execute(sql, values)
+                conn.commit()
+                claimed = cursor.rowcount == 1
+        if claimed:
+            session["expires_at"] = data["expires_at"]
+            session["event_status"] = target_status
+        return claimed
 
     def get(self, session_id, default=None):
         placeholder = "?" if self.backend == "sqlite" else "%s"
