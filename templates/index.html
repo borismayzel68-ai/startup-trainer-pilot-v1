@@ -112,7 +112,10 @@ async function startSession(){
 }
 function renderState(){
  if(state.done){ showReport(); return; }
- document.getElementById('progress').textContent='Вопрос '+(state.turn+1)+' из максимум 12';
+ const progress=state.phase==='full_readiness'
+   ? 'Полная готовность · вопрос '+(state.turn+1)+' · до покрытия обязательных слотов'
+   : 'Быстрая диагностика · вопрос '+(state.turn+1)+' из максимум 12';
+ document.getElementById('progress').textContent=progress;
  document.getElementById('question').textContent=state.current_question.question;
  document.getElementById('why').textContent=state.current_question.why||'';
  document.getElementById('answer').value='';

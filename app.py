@@ -7,13 +7,17 @@ from routing_v2 import (
     norm_product_class, parse_target_markets, route, vocab, profile_question,
     guard_question, raised_routes
 )
+from question_engine_v2 import (
+    QUICK_TRIAGE_MAX_TURNS, ensure_coverage, seed_source_coverage,
+    next_question as engine_next_question, record_answer, decide_progress,
+    coverage_summary, explicit_no_data,
+)
 
 app = Flask(__name__)
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 MODEL = os.environ.get("OPENAI_MODEL", "gpt-5.6")
 INVITE_CODE = os.environ.get("INVITE_CODE", "PILOT-S1-EXT-001")
 ADMIN_KEY = os.environ.get("ADMIN_KEY", "change-me")
-MAX_TURNS = 12
 SESSIONS = {}
 ALLOWED_STATUS = {"fact","hypothesis","missing","weak"}
 ALLOWED_REC = {"not_ready","iterate","ready_for_investor_conversation"}
@@ -76,38 +80,45 @@ def routing_context(s):
         "raised_foreign_routes":raised_routes(s),
     }
 
+def scan_source_coverage(s):
+    if s.get("source_coverage_scanned"):
+        return
+    ensure_coverage(s)
+    corpus=source_text(s)
+    slots=[
+        {"module":x["module"],"slot":x["slot"]}
+        for x in s.get("coverage",{}).values()
+    ]
+    system="""Extract only evidence explicitly present in the supplied source.
+Return JSON only: {"covered":[{"module":"...","slot":"...","status":"fact|hypothesis|missing|weak","quote":"verbatim source quote"}]}.
+Do not invent coverage. A quote must be verbatim. Use only listed module/slot pairs."""
+    user=f"""Allowed slots:
+{json.dumps(slots,ensure_ascii=False)}
+Source:
+{corpus[:22000]}"""
+    out=call_json(system,user)
+    seed_source_coverage(s,out.get("covered",[]),corpus)
+
 def next_question(s):
     pq=profile_question(s)
     if pq:
         return pq
-    history="\n".join([f"Q: {x['question']}\nA: {x['answer']}\nSTATUS: {x['analysis'].get('status','')}" for x in s.get("qa",[])[-6:]])
-    system="""You are Startup Readiness Trainer for Life Sciences, MedTech and Digital Health.
-Prepare the founder for an investor conversation; do not make an investment decision. All founder-facing questions and explanations MUST be in Russian.
-Ask one short question per turn, max 12 turns in this TRIAGE atom. Do not invent facts or numbers.
-Evidence statuses are only fact|hypothesis|missing|weak. Claim without primary evidence = weak or hypothesis.
-Use only the selected modules and the declared jurisdiction vocabulary. Do not default to FDA/EMA/SaMD outside a relevant market.
-A foreign regulatory route may be clarified only if it is explicitly raised in source/founder material; then return source_ref exactly from raised_foreign_routes.
-In comparison mode do not choose a winner and do not use better/worse.
-Return JSON only: {"question":"...","why":"...","topic":"...","source_ref":""}"""
-    user=f"""Project: {s['project_name']} ({s['project_id']})
-{mode_text(s)}
-Routing context:
-{json.dumps(routing_context(s),ensure_ascii=False)}
-Materials:
-{source_text(s)[:18000]}
-Recent answers:
-{history}
-Ask the next highest-value non-repeated question."""
-    out=call_json(system,user)
-    q=str(out.get("question") or "").strip()
-    if not q:
-        q="\u041a\u0430\u043a\u043e\u0439 \u043e\u0434\u0438\u043d \u0444\u0430\u043a\u0442 \u0438\u043b\u0438 \u0434\u043e\u043a\u0443\u043c\u0435\u043d\u0442 \u0441\u0438\u043b\u044c\u043d\u0435\u0435 \u0432\u0441\u0435\u0433\u043e \u043f\u043e\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0430\u0435\u0442, \u0447\u0442\u043e \u0437\u0430\u044f\u0432\u043b\u0435\u043d\u043d\u0430\u044f \u0431\u0438\u0437\u043d\u0435\u0441-\u043c\u043e\u0434\u0435\u043b\u044c \u0440\u0430\u0431\u043e\u0442\u0430\u0435\u0442 \u0443 \u0440\u0435\u0430\u043b\u044c\u043d\u044b\u0445 \u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u0435\u0439?"
-    obj={"question":q,"why":str(out.get("why") or ""),"topic":str(out.get("topic") or "evidence")}
-    if out.get("source_ref"):
-        obj["source_ref"]=str(out.get("source_ref"))
+    scan_source_coverage(s)
+    obj=engine_next_question(s)
+    if obj is None:
+        return None
+    obj["topic"]=obj["module"]
     return guard_question(s,obj)
 
 def analyze_answer(s, question, answer):
+    if explicit_no_data(answer):
+        return {
+            "status":"missing",
+            "quote":str(answer)[:500],
+            "contradiction":"",
+            "coach":"Зафиксировано отсутствие данных; слот не будет задан повторно.",
+            "stop":False,
+        }
     system="""You are an evidence reviewer. Do not upgrade a claim to fact without verbatim support. All founder-facing coach/explanation text MUST be in Russian.
 If founder says there is no data, status=missing.
 Return JSON only:
@@ -147,6 +158,9 @@ QA history:
         "product_class":s["product_class"],
         "intended_use":s["intended_use"],
         "classification_check_required":s.get("classification_check_required",False),
+        "phase":s.get("phase"),
+        "stop_reason":s.get("stop_reason"),
+        "coverage":coverage_summary(s),
         "thesis":str(out.get("thesis") or ""),
         "facts":list(out.get("facts") or [])[:8],
         "hypotheses":list(out.get("hypotheses") or [])[:8],
@@ -165,7 +179,7 @@ def home():
 
 @app.get("/health")
 def health():
-    return jsonify({"ok":True,"version":"s1-ext-pilot-v1.1-routing","model":MODEL})
+    return jsonify({"ok":True,"version":"s1-ext-pilot-v1.2-adaptive-readiness","model":MODEL})
 
 @app.get("/robots.txt")
 def robots():
@@ -252,11 +266,16 @@ def start():
         "deck_text":deck_text,
         "qa":[],
         "turn":0,
+        "phase":"quick_triage",
+        "coverage":{},
+        "source_coverage_scanned":False,
+        "stop_reason":None,
         "done":False,
         "report":None,
         "created_at":now(),
         "updated_at":now()
     }
+    ensure_coverage(s)
     s["current_question"]=next_question(s)
     SESSIONS[sid]=s
     return jsonify({k:v for k,v in s.items() if k!="deck_text"})
@@ -267,21 +286,33 @@ def answer(sid):
     if not s: return jsonify({"error":"\u0421\u0435\u0441\u0441\u0438\u044f \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d\u0430"}),404
     ans=str((request.json or {}).get("answer") or "").strip()
     if not ans: return jsonify({"error":"\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u043e\u0442\u0432\u0435\u0442"}),400
-    if re.match(r"^(\u0441\u0442\u043e\u043f|stop|\u0445\u0432\u0430\u0442\u0438\u0442|\u0437\u0430\u043a\u043e\u043d\u0447\u0438\u0442\u044c|\u0433\u043e\u0442\u043e\u0432\u043e)$",ans,re.I):
-        s["done"]=True
-        s["report"]=final_report(s)
+    founder_stop=bool(re.match(r"^(\u0441\u0442\u043e\u043f|stop|\u0445\u0432\u0430\u0442\u0438\u0442|\u0437\u0430\u043a\u043e\u043d\u0447\u0438\u0442\u044c|\u0433\u043e\u0442\u043e\u0432\u043e)$",ans,re.I))
+    if founder_stop:
+        decision=decide_progress(s,founder_stop=True)
     else:
         q=s["current_question"]
         if q.get("profile_field"):
             s[q["profile_field"]]=ans[:1000]
         a=analyze_answer(s,q["question"],ans)
-        s["qa"].append({"question":q["question"],"why":q.get("why",""),"answer":ans,"analysis":a,"at":now(),"profile_field":q.get("profile_field")})
+        s["qa"].append({
+            "question":q["question"],"why":q.get("why",""),"answer":ans,
+            "analysis":a,"at":now(),"profile_field":q.get("profile_field"),
+            "module":q.get("module"),"slot":q.get("slot"),"kind":q.get("kind"),
+        })
+        record_answer(s,q,ans,a)
         s["turn"]+=1
-        if s["turn"]>=MAX_TURNS or a.get("stop"):
+        decision=decide_progress(s)
+    s["done"]=decision["done"]
+    s["stop_reason"]=decision["stop_reason"]
+    if s["done"]:
+        s["current_question"]=None
+        s["report"]=final_report(s)
+    else:
+        s["current_question"]=next_question(s)
+        if s["current_question"] is None:
             s["done"]=True
+            s["stop_reason"]="marginal_value_low"
             s["report"]=final_report(s)
-        else:
-            s["current_question"]=next_question(s)
     s["updated_at"]=now()
     return jsonify({k:v for k,v in s.items() if k!="deck_text"})
 
