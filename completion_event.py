@@ -30,58 +30,62 @@ REQUIRED_PAYLOAD_FIELDS = (
     "run_manifest",
 )
 
-_BLOCKED_KEYS = re.compile(
-    r"(api[_-]?key|authorization|password|secret|token|deck_text|"
-    r"patient[_-]?id|mrn|medical[_-]?record|date[_-]?of[_-]?birth|"
-    r"snils|снилс|фио[_-]?пациента)",
-    re.IGNORECASE,
-)
-_PATIENT_TEXT = re.compile(
-    r"\b(mrn|patient\s*id|date\s*of\s*birth|dob|ssn)\b|"
-    r"фио|дата рождения|снилс|полис\s+омс|истори[яи]\s+болезни|"
-    r"медицинск(?:ая|ой)\s+карт(?:а|ы)|диагноз\s+пациент|"
-    r"\b\d{3}-\d{3}-\d{3}\s?\d{2}\b",
-    re.IGNORECASE,
-)
-_SECRET_TEXT = re.compile(
-    r"\bsk-(?:proj-)?[A-Za-z0-9_-]{12,}\b|"
-    r"\bBearer\s+[A-Za-z0-9._~+/=-]{12,}",
-    re.IGNORECASE,
-)
+_SAFE_TOKEN = re.compile(r"^[A-Za-z0-9_.:/+\-]{1,160}$")
 
 
-def _safe_value(value):
-    if isinstance(value, dict):
-        return {
-            str(key): _safe_value(item)
-            for key, item in value.items()
-            if not _BLOCKED_KEYS.search(str(key))
-        }
-    if isinstance(value, list):
-        return [_safe_value(item) for item in value]
-    if isinstance(value, str) and _PATIENT_TEXT.search(value):
-        return "[REDACTED_PATIENT_LEVEL_DATA]"
-    if isinstance(value, str) and _SECRET_TEXT.search(value):
-        return "[REDACTED_SECRET]"
-    return value
+def _safe_token(value, default=None):
+    value = str(value or "")
+    return value if _SAFE_TOKEN.fullmatch(value) else default
+
+
+def _safe_tokens(values):
+    return [
+        token
+        for token in (_safe_token(value) for value in (values or []))
+        if token is not None
+    ]
+
+
+def _minimal_questions_answers(rows):
+    safe_rows = []
+    for item in rows or []:
+        analysis = item.get("analysis") or {}
+        safe_rows.append(
+            {
+                "module": _safe_token(item.get("module")),
+                "slot": _safe_token(item.get("slot")),
+                "status": _safe_token(analysis.get("status"), "unknown"),
+                "at": _safe_token(item.get("at")),
+            }
+        )
+    return safe_rows
 
 
 def _evidence_delta(questions_answers):
-    rows = []
-    for item in questions_answers:
-        analysis = item.get("analysis") or {}
-        rows.append(
-            {
-                "module": item.get("module"),
-                "slot": item.get("slot"),
-                "status": analysis.get("status"),
-                "quote": analysis.get("quote"),
-                "contradiction": analysis.get("contradiction"),
-                "source": "founder_answer",
-                "at": item.get("at"),
-            }
-        )
-    return rows
+    return [
+        {
+            "module": item.get("module"),
+            "slot": item.get("slot"),
+            "status": item.get("status"),
+            "source": "founder_answer",
+            "at": item.get("at"),
+        }
+        for item in questions_answers
+    ]
+
+
+def _safe_deck_manifest(session):
+    deck = (session.get("input_manifest") or {}).get("deck") or {}
+    result = {}
+    if "present" in deck:
+        result["present"] = bool(deck["present"])
+    if isinstance(deck.get("size_bytes"), int) and deck["size_bytes"] >= 0:
+        result["size_bytes"] = deck["size_bytes"]
+    for key in ("mime_type", "sha256"):
+        value = _safe_token(deck.get(key))
+        if value is not None:
+            result[key] = value
+    return result
 
 
 def build_completion_payload(session, trainer_version, completed_at):
@@ -99,8 +103,23 @@ def build_completion_payload(session, trainer_version, completed_at):
     session["idempotency_key"] = idempotency_key
     session["completed_at"] = session.get("completed_at") or completed_at
 
-    questions_answers = _safe_value(session.get("qa") or [])
-    founder_report = _safe_value(session.get("report") or {})
+    raw_questions_answers = session.get("qa") or []
+    questions_answers = _minimal_questions_answers(raw_questions_answers)
+    raw_report = session.get("report") or {}
+    missing_items = raw_report.get("missing") or []
+    next_test_items = raw_report.get("next_tests") or []
+    if not isinstance(missing_items, list):
+        missing_items = []
+    if not isinstance(next_test_items, list):
+        next_test_items = []
+    coverage = session.get("coverage") or {}
+    founder_report = {
+        "recommendation": _safe_token(
+            raw_report.get("recommendation"), "unknown"
+        ),
+        "missing_document_count": len(missing_items),
+        "next_test_count": len(next_test_items),
+    }
     payload = {
         "event_id": event_id,
         "idempotency_key": idempotency_key,
@@ -120,40 +139,39 @@ def build_completion_payload(session, trainer_version, completed_at):
         "evidence_delta": _evidence_delta(questions_answers),
         "founder_report": founder_report,
         "internal_delta": {
-            "coverage": _safe_value(session.get("coverage") or {}),
-            "stop_reason": session.get("stop_reason"),
-            "selected_modules": list(session.get("selected_modules") or []),
+            "coverage_slot_count": (
+                len(coverage) if isinstance(coverage, dict) else 0
+            ),
+            "stop_reason": _safe_token(
+                session.get("stop_reason"), "unknown"
+            ),
+            "selected_modules": _safe_tokens(
+                session.get("selected_modules")
+            ),
+            "missing_document_count": len(missing_items),
+            "next_meeting_question_count": len(next_test_items),
         },
-        "missing_documents": list(founder_report.get("missing") or []),
-        "next_meeting_questions": list(
-            founder_report.get("next_tests") or []
-        ),
+        "missing_documents": [],
+        "next_meeting_questions": [],
         "privacy_flags": {
             "api_key_included": False,
             "patient_level_data_included": False,
             "raw_deck_included": False,
+            "free_text_answers_included": False,
+            "free_text_report_included": False,
         },
         "run_manifest": {
             "input_manifest": {
-                "deck": {
-                    key: _safe_value(value)
-                    for key, value in (
-                        (session.get("input_manifest") or {})
-                        .get("deck", {})
-                        .items()
-                    )
-                    if key in {
-                        "present", "filename", "mime_type",
-                        "size_bytes", "sha256",
-                    }
-                }
+                "deck": _safe_deck_manifest(session)
             },
-            "routing_steps": list(session.get("routing_steps") or []),
-            "selected_modules": list(
-                session.get("selected_modules") or []
+            "routing_steps": _safe_tokens(
+                session.get("routing_steps")
             ),
-            "question_count": len(questions_answers),
-            "model": session.get("model"),
+            "selected_modules": _safe_tokens(
+                session.get("selected_modules")
+            ),
+            "question_count": len(raw_questions_answers),
+            "model": _safe_token(session.get("model")),
         },
     }
     missing = [key for key in REQUIRED_PAYLOAD_FIELDS if key not in payload]
