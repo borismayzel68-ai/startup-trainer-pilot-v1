@@ -1,4 +1,5 @@
 import os, unittest, io
+from unittest import mock
 os.environ.setdefault("OPENAI_API_KEY","test-key")
 os.environ.setdefault("INVITE_CODE","PILOT-S1-EXT-001")
 import app as appmod
@@ -102,16 +103,64 @@ class StartApiTests(unittest.TestCase):
         for field in ("projectId","founderName","founderEmail","jurisdiction","targetMarkets","intendedUse","productClass","stage","userRole","buyer","payer"):
             self.assertIn(f'id="{field}"',html)
         self.assertIn("project_id||state.project_id",html)
+        self.assertIn("state.phase==='full_readiness'",html)
+        self.assertIn("до покрытия обязательных слотов",html)
 
     def test_no_completion_webhook_in_003a(self):
         src=(__import__("pathlib").Path(appmod.app.root_path)/"app.py").read_text(encoding="utf-8")
         self.assertNotIn("TRAINER_EVENT_WEBHOOK",src)
         self.assertNotIn("requests.post(",src)
 
+    def test_full_readiness_continues_through_question_13(self):
+        x=self.base()
+        x.update({
+            "stage":"pilots","user":"doctor",
+            "buyer":"clinic","payer":"clinic",
+            "intended_use":"interpretation of results and personalized recommendations",
+        })
+        with mock.patch.object(appmod,"call_json",return_value={"covered":[]}):
+            started=self.post(x)
+            self.assertEqual(started.status_code,200,started.get_json())
+            state=started.get_json()
+            self.assertTrue(state["classification_check_required"])
+            sid=state["id"]
+            for _ in range(12):
+                response=self.c.post(
+                    f"/api/session/{sid}/answer",
+                    json={"answer":"нет данных"},
+                )
+                self.assertEqual(response.status_code,200,response.get_json())
+                state=response.get_json()
+            self.assertFalse(state["done"])
+            self.assertEqual(state["phase"],"full_readiness")
+            self.assertEqual(state["turn"],12)
+            self.assertIsNotNone(state["current_question"])
+            response=self.c.post(
+                f"/api/session/{sid}/answer",
+                json={"answer":"нет данных"},
+            )
+            state=response.get_json()
+            self.assertEqual(state["turn"],13)
+            self.assertEqual(len(state["qa"]),13)
+            self.assertFalse(state["done"])
+            while not state["done"] and state["turn"]<50:
+                response=self.c.post(
+                    f"/api/session/{sid}/answer",
+                    json={"answer":"нет данных"},
+                )
+                state=response.get_json()
+            self.assertTrue(state["done"])
+            self.assertGreater(state["turn"],12)
+            self.assertEqual(
+                state["stop_reason"],
+                "required_coverage_complete",
+            )
+
     def test_enums_unchanged(self):
         self.assertEqual(appmod.ALLOWED_STATUS,{"fact","hypothesis","missing","weak"})
         self.assertEqual(appmod.ALLOWED_REC,{"not_ready","iterate","ready_for_investor_conversation"})
-        self.assertEqual(appmod.MAX_TURNS,12)
+        self.assertEqual(appmod.QUICK_TRIAGE_MAX_TURNS,12)
+        self.assertFalse(hasattr(appmod,"MAX_TURNS"))
 
 if __name__=="__main__":
     unittest.main()
