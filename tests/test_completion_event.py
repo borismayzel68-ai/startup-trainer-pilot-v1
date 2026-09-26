@@ -1,3 +1,4 @@
+import io
 import json
 import os
 import tempfile
@@ -383,13 +384,22 @@ class CompletionReceiverTests(unittest.TestCase):
     def tearDown(self):
         appmod.COMPLETION_RECEIVER_SECRET = self.previous_secret
 
-    @staticmethod
-    def payload(session_id="11111111-1111-4111-8111-111111111111"):
+    def payload(self, session_id="11111111-1111-4111-8111-111111111111"):
         key = f"trainer-completed:{session_id}"
+        event_id = str(uuid.uuid5(uuid.NAMESPACE_URL, key))
+        appmod.SESSIONS.save({
+            "id": session_id,
+            "project_id": "VC-178",
+            "created_at": appmod.now(),
+            "updated_at": appmod.now(),
+            "event_status": "queued",
+            "event_id": event_id,
+            "idempotency_key": key,
+        })
         return {
             "event_type": "TRAINER_COMPLETED",
             "idempotency_key": key,
-            "event_id": str(uuid.uuid5(uuid.NAMESPACE_URL, key)),
+            "event_id": event_id,
             "session_id": session_id,
             "questions_answers": [{"answer": "must not be stored"}],
         }
@@ -405,6 +415,19 @@ class CompletionReceiverTests(unittest.TestCase):
                 },
             )
 
+    def complete(self, payload, attempt_token, secret="test-receiver-secret"):
+        body = dict(payload)
+        body["attempt_token"] = attempt_token
+        with appmod.app.test_client() as client:
+            return client.post(
+                "/api/completion-events/complete",
+                json=body,
+                headers={
+                    "Idempotency-Key": payload["idempotency_key"],
+                    "X-Completion-Secret": secret,
+                },
+            )
+
     def test_duplicate_delivery_is_a_no_op(self):
         payload = self.payload()
         first = self.post(payload)
@@ -412,15 +435,25 @@ class CompletionReceiverTests(unittest.TestCase):
 
         self.assertEqual(first.status_code, 202)
         self.assertEqual(first.get_json()["status"], "accepted")
-        self.assertEqual(second.status_code, 200)
-        self.assertEqual(second.get_json()["status"], "duplicate")
+        self.assertEqual(second.status_code, 409)
+        self.assertEqual(second.get_json()["code"], "in_progress")
+        completed = self.complete(
+            payload, first.get_json()["attempt_token"]
+        )
+        self.assertEqual(completed.status_code, 200)
+        third = self.post(payload)
+        self.assertEqual(third.status_code, 200)
+        self.assertEqual(third.get_json()["status"], "duplicate")
         self.assertEqual(appmod.SESSIONS.count_completion_receipts(), 1)
         receipt = appmod.SESSIONS.get_completion_receipt(
             payload["idempotency_key"]
         )
         self.assertEqual(set(receipt), {
-            "idempotency_key", "event_id", "session_id", "received_at"
+            "idempotency_key", "event_id", "session_id", "state",
+            "attempt_token", "lease_until", "accepted_at",
+            "completed_at", "updated_at",
         })
+        self.assertEqual(receipt["state"], "completed")
         self.assertNotIn("must not be stored", json.dumps(receipt))
 
     def test_parallel_duplicate_delivery_is_recorded_once(self):
@@ -432,13 +465,14 @@ class CompletionReceiverTests(unittest.TestCase):
         def send(_):
             barrier.wait(timeout=5)
             response = self.post(payload)
-            return response.status_code, response.get_json()["status"]
+            body = response.get_json()
+            return response.status_code, body.get("status") or body.get("code")
 
         with ThreadPoolExecutor(max_workers=8) as pool:
             results = list(pool.map(send, range(8)))
 
         self.assertEqual(sum(status == "accepted" for _, status in results), 1)
-        self.assertEqual(sum(status == "duplicate" for _, status in results), 7)
+        self.assertEqual(sum(status == "in_progress" for _, status in results), 7)
         self.assertEqual(appmod.SESSIONS.count_completion_receipts(), 1)
 
     def test_receipt_survives_store_restart(self):
@@ -447,17 +481,27 @@ class CompletionReceiverTests(unittest.TestCase):
         try:
             url = f"sqlite:///{path}"
             first = DurableSessionStore(url)
-            self.assertTrue(first.accept_completion_delivery(
-                "trainer-completed:restart-a9",
-                "event-restart-a9",
-                "session-restart-a9",
-            ))
+            session_id = "33333333-3333-4333-8333-333333333333"
+            key = f"trainer-completed:{session_id}"
+            event_id = str(uuid.uuid5(uuid.NAMESPACE_URL, key))
+            first.save({
+                "id": session_id, "project_id": "VC-178",
+                "created_at": appmod.now(), "updated_at": appmod.now(),
+                "event_status": "queued",
+            })
+            accepted = first.begin_completion_delivery(
+                key, event_id, session_id,
+            )
+            self.assertEqual(accepted["status"], "accepted")
+            completed = first.complete_completion_delivery(
+                key, event_id, session_id, accepted["attempt_token"],
+            )
+            self.assertEqual(completed["status"], "completed")
             restarted = DurableSessionStore(url)
-            self.assertFalse(restarted.accept_completion_delivery(
-                "trainer-completed:restart-a9",
-                "event-restart-a9",
-                "session-restart-a9",
-            ))
+            duplicate = restarted.begin_completion_delivery(
+                key, event_id, session_id,
+            )
+            self.assertEqual(duplicate["status"], "duplicate")
             self.assertEqual(restarted.count_completion_receipts(), 1)
         finally:
             os.unlink(path)
@@ -483,6 +527,28 @@ class CompletionReceiverTests(unittest.TestCase):
         self.assertEqual(response.get_json()["code"], "receiver_unauthorized")
         self.assertEqual(appmod.SESSIONS.count_completion_receipts(), 0)
 
+    def test_receiver_handles_non_ascii_wrong_secret(self):
+        response = self.post(self.payload(), secret="неверный-пароль")
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.get_json()["code"], "receiver_unauthorized")
+
+    def test_stale_completion_token_is_rejected(self):
+        payload = self.payload()
+        first = self.post(payload)
+        stale = self.complete(payload, str(uuid.uuid4()))
+        self.assertEqual(stale.status_code, 409)
+        self.assertEqual(stale.get_json()["code"], "stale_attempt")
+        good = self.complete(payload, first.get_json()["attempt_token"])
+        self.assertEqual(good.status_code, 200)
+
+    def test_deleted_session_cannot_enter_gate(self):
+        payload = self.payload()
+        appmod.SESSIONS.delete(payload["session_id"])
+        response = self.post(payload)
+        self.assertEqual(response.status_code, 410)
+        self.assertEqual(response.get_json()["code"], "session_deleted")
+        self.assertEqual(appmod.SESSIONS.count_completion_receipts(), 0)
+
     def test_receiver_rejects_patient_text_as_session_id(self):
         payload = self.payload()
         payload["session_id"] = "ФИО пациента, дата рождения"
@@ -506,6 +572,30 @@ class CompletionReceiverTests(unittest.TestCase):
         self.assertEqual(response.status_code, 413)
         self.assertEqual(response.get_json()["code"], "event_too_large")
         self.assertEqual(appmod.SESSIONS.count_completion_receipts(), 0)
+
+    def test_chunked_oversized_payload_is_read_with_a_hard_limit(self):
+        payload = self.payload()
+        raw = json.dumps({
+            **payload,
+            "padding": "x" * appmod.MAX_COMPLETION_EVENT_BYTES,
+        }).encode("utf-8")
+        with appmod.app.test_client() as client:
+            response = client.open(
+                "/api/completion-events",
+                method="POST",
+                input_stream=io.BytesIO(raw),
+                content_type="application/json",
+                headers={
+                    "Idempotency-Key": payload["idempotency_key"],
+                    "X-Completion-Secret": "test-receiver-secret",
+                },
+                environ_overrides={
+                    "CONTENT_LENGTH": "",
+                    "wsgi.input_terminated": True,
+                },
+            )
+        self.assertEqual(response.status_code, 413)
+        self.assertEqual(response.get_json()["code"], "event_too_large")
 
     def test_receiver_is_closed_when_secret_is_not_configured(self):
         appmod.COMPLETION_RECEIVER_SECRET = ""

@@ -1,4 +1,5 @@
 import os, io, json, uuid, time, re, hashlib, hmac
+from datetime import timedelta
 from flask import Flask, request, jsonify, render_template
 from pypdf import PdfReader
 from openai import OpenAI
@@ -12,7 +13,7 @@ from question_engine_v2 import (
     next_question as engine_next_question, record_answer, decide_progress,
     coverage_summary, explicit_no_data,
 )
-from session_store import DurableSessionStore
+from session_store import DurableSessionStore, iso_z, utc_now
 from completion_event import build_completion_payload
 
 app = Flask(__name__)
@@ -26,6 +27,12 @@ WEBHOOK_TIMEOUT_SECONDS = float(
 COMPLETION_RECEIVER_SECRET = os.environ.get(
     "COMPLETION_RECEIVER_SECRET", ""
 ).strip()
+try:
+    COMPLETION_GATE_LEASE_SECONDS = int(os.environ.get(
+        "COMPLETION_GATE_LEASE_SECONDS", "300"
+    ))
+except ValueError:
+    COMPLETION_GATE_LEASE_SECONDS = 300
 MAX_COMPLETION_EVENT_BYTES = 64 * 1024
 INVITE_CODE = os.environ.get("INVITE_CODE", "PILOT-S1-EXT-001")
 ADMIN_KEY = os.environ.get("ADMIN_KEY", "change-me")
@@ -257,41 +264,46 @@ def health():
         "storage":SESSIONS.backend,
     })
 
-@app.post("/api/completion-events")
-def receive_completion_event():
-    """A9 receiver: record one delivery per deterministic key."""
+def completion_receiver_payload():
+    """Authenticate, bound-read and validate a completion identity."""
     if not COMPLETION_RECEIVER_SECRET:
-        return jsonify({
+        return None, (jsonify({
             "error":"Completion receiver is not configured",
             "code":"receiver_not_configured",
-        }),503
+        }),503)
     supplied_secret = str(
         request.headers.get("X-Completion-Secret") or ""
     )
     if not hmac.compare_digest(
-        supplied_secret, COMPLETION_RECEIVER_SECRET
+        supplied_secret.encode("utf-8"),
+        COMPLETION_RECEIVER_SECRET.encode("utf-8"),
     ):
-        return jsonify({
+        return None, (jsonify({
             "error":"Unauthorized",
             "code":"receiver_unauthorized",
-        }),401
+        }),401)
     if (
         request.content_length is not None
         and request.content_length > MAX_COMPLETION_EVENT_BYTES
     ):
-        return jsonify({
+        return None, (jsonify({
             "error":"Completion event is too large",
             "code":"event_too_large",
-        }),413
-    raw_body = request.get_data(cache=True)
+        }),413)
+    raw_body = request.stream.read(MAX_COMPLETION_EVENT_BYTES + 1)
     if len(raw_body) > MAX_COMPLETION_EVENT_BYTES:
-        return jsonify({
+        return None, (jsonify({
             "error":"Completion event is too large",
             "code":"event_too_large",
-        }),413
-    payload = request.get_json(silent=True)
+        }),413)
+    try:
+        payload = json.loads(raw_body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        payload = None
     if not isinstance(payload, dict):
-        return jsonify({"error":"JSON object required","code":"invalid_json"}),400
+        return None, (jsonify({
+            "error":"JSON object required", "code":"invalid_json"
+        }),400)
 
     event_type = str(payload.get("event_type") or "").strip()
     idempotency_key = str(payload.get("idempotency_key") or "").strip()
@@ -299,44 +311,109 @@ def receive_completion_event():
     session_id = str(payload.get("session_id") or "").strip()
     header_key = str(request.headers.get("Idempotency-Key") or "").strip()
     if event_type != "TRAINER_COMPLETED":
-        return jsonify({
+        return None, (jsonify({
             "error":"Unsupported event type",
             "code":"event_type_invalid",
-        }),400
+        }),400)
     try:
         canonical_session_id = str(uuid.UUID(session_id))
     except (ValueError, AttributeError):
         canonical_session_id = ""
     if not canonical_session_id or canonical_session_id != session_id:
-        return jsonify({
+        return None, (jsonify({
             "error":"session_id must be a canonical UUID",
             "code":"session_id_invalid",
-        }),400
+        }),400)
     expected_key = f"trainer-completed:{session_id}"
     expected_event_id = str(uuid.uuid5(
         uuid.NAMESPACE_URL, expected_key
     ))
     if idempotency_key != expected_key or header_key != expected_key:
-        return jsonify({
+        return None, (jsonify({
             "error":"Idempotency key is not canonical",
             "code":"idempotency_key_invalid",
-        }),400
+        }),400)
     if event_id != expected_event_id:
-        return jsonify({
+        return None, (jsonify({
             "error":"event_id is not canonical",
             "code":"event_id_invalid",
-        }),400
+        }),400)
+    return {
+        "payload": payload,
+        "idempotency_key": idempotency_key,
+        "event_id": event_id,
+        "session_id": session_id,
+    }, None
 
-    accepted = SESSIONS.accept_completion_delivery(
-        idempotency_key=idempotency_key,
-        event_id=event_id,
-        session_id=session_id,
-        received_at=now(),
+
+@app.post("/api/completion-events")
+def receive_completion_event():
+    """Grant Make a processing lease; duplicate only after completion."""
+    identity, error = completion_receiver_payload()
+    if error:
+        return error
+    accepted_at = utc_now()
+    result = SESSIONS.begin_completion_delivery(
+        idempotency_key=identity["idempotency_key"],
+        event_id=identity["event_id"],
+        session_id=identity["session_id"],
+        accepted_at=iso_z(accepted_at),
+        lease_until=iso_z(
+            accepted_at + timedelta(
+                seconds=max(1, COMPLETION_GATE_LEASE_SECONDS)
+            )
+        ),
     )
+    status = result["status"]
+    if status == "accepted":
+        return jsonify({"ok":True, **result}),202
+    if status == "duplicate":
+        return jsonify({"ok":True, **result}),200
+    if status == "session_deleted":
+        return jsonify({
+            "error":"Session was deleted", "code":"session_deleted"
+        }),410
     return jsonify({
-        "ok":True,
-        "status":"accepted" if accepted else "duplicate",
-    }),202 if accepted else 200
+        "error":"Completion event is already being processed",
+        "code":status,
+    }),409
+
+
+@app.post("/api/completion-events/complete")
+def complete_completion_event():
+    """Confirm that Make finished every downstream action."""
+    identity, error = completion_receiver_payload()
+    if error:
+        return error
+    attempt_token = str(
+        identity["payload"].get("attempt_token") or ""
+    ).strip()
+    try:
+        canonical_token = str(uuid.UUID(attempt_token))
+    except (ValueError, AttributeError):
+        canonical_token = ""
+    if canonical_token != attempt_token:
+        return jsonify({
+            "error":"attempt_token must be a canonical UUID",
+            "code":"attempt_token_invalid",
+        }),400
+    result = SESSIONS.complete_completion_delivery(
+        idempotency_key=identity["idempotency_key"],
+        event_id=identity["event_id"],
+        session_id=identity["session_id"],
+        attempt_token=attempt_token,
+        completed_at=now(),
+    )
+    if result["status"] == "completed":
+        return jsonify({"ok":True, **result}),200
+    if result["status"] == "missing":
+        return jsonify({
+            "error":"Completion receipt not found", "code":"missing"
+        }),404
+    return jsonify({
+        "error":"Completion attempt is no longer active",
+        "code":result["status"],
+    }),409
 
 @app.get("/robots.txt")
 def robots():

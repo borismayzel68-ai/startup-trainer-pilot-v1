@@ -1,3 +1,4 @@
+import logging
 import os
 import signal
 import threading
@@ -12,6 +13,7 @@ DEFAULT_CLAIM_TIMEOUT_SECONDS = 60
 DEFAULT_MAX_ATTEMPTS = 8
 DEFAULT_RETRY_BASE_SECONDS = 5
 DEFAULT_RETRY_MAX_SECONDS = 300
+LOGGER = logging.getLogger(__name__)
 
 
 def utc_now():
@@ -39,11 +41,23 @@ def deliver_one(
     if not webhook_url:
         raise ValueError("TRAINER_EVENT_WEBHOOK is required")
     current = now_value or utc_now()
+    stale_before = iso_z(
+        current - timedelta(seconds=int(claim_timeout_seconds))
+    )
+    exhausted = store.fail_exhausted_completion_deliveries(
+        max_attempts=int(max_attempts),
+        stale_before=stale_before,
+        failed_at=iso_z(current),
+    )
+    if exhausted:
+        LOGGER.error(
+            "%s completion deliveries exhausted after worker interruption",
+            exhausted,
+        )
     claimed = store.claim_next_completion_delivery(
         claimed_at=iso_z(current),
-        stale_before=iso_z(
-            current - timedelta(seconds=int(claim_timeout_seconds))
-        ),
+        stale_before=stale_before,
+        max_attempts=int(max_attempts),
     )
     if not claimed:
         return False
@@ -62,14 +76,21 @@ def deliver_one(
         )
         store.mark_completion_delivery_failed(
             claimed["idempotency_key"],
+            claimed["claim_token"],
             f"{type(exc).__name__}: {exc}",
             available_at=iso_z(current + timedelta(seconds=delay)),
             failed_at=iso_z(current),
             terminal=terminal,
         )
+        if terminal:
+            LOGGER.error(
+                "completion delivery became dead: %s",
+                claimed["idempotency_key"],
+            )
     else:
         store.mark_completion_delivery_succeeded(
             claimed["idempotency_key"],
+            claimed["claim_token"],
             int(http_status),
             delivered_at=iso_z(current),
         )
@@ -79,12 +100,17 @@ def deliver_one(
 def run_forever(store, webhook_url, stop_event, **options):
     poll_seconds = float(options.pop("poll_seconds", DEFAULT_POLL_SECONDS))
     while not stop_event.is_set():
-        processed = deliver_one(store, webhook_url, **options)
+        try:
+            processed = deliver_one(store, webhook_url, **options)
+        except Exception:
+            LOGGER.exception("completion delivery loop failed; retrying")
+            processed = False
         if not processed:
             stop_event.wait(poll_seconds)
 
 
 def main():
+    logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"))
     database_url = (
         os.environ.get("SESSION_DATABASE_URL")
         or os.environ.get("DATABASE_URL")

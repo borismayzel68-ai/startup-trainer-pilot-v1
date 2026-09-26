@@ -11,6 +11,7 @@ Private founder-facing pilot. Not an investment decision.
 - `SESSION_RETENTION_DAYS` (default: `30`)
 - `TRAINER_EVENT_WEBHOOK` (Make webhook used by the A9 delivery worker)
 - `COMPLETION_RECEIVER_SECRET` (shared secret for Make to call the A9 gate)
+- `COMPLETION_GATE_LEASE_SECONDS` (default: `300`)
 - `DELIVERY_POLL_SECONDS` (default: `2`)
 - `DELIVERY_CLAIM_TIMEOUT_SECONDS` (default: `60`)
 - `DELIVERY_MAX_ATTEMPTS` (default: `8`)
@@ -40,20 +41,31 @@ A9 accepts `TRAINER_COMPLETED` at `POST /api/completion-events`. The
 `X-Completion-Secret` header is mandatory. `session_id` must be a canonical UUID;
 the idempotency key and UUIDv5 event ID are derived from it and must match exactly.
 The endpoint rejects bodies over 64 KiB. PostgreSQL or SQLite records one technical
-receipt per key; later deliveries return `duplicate` without creating another
-receipt. The receipt stores only the key, event ID, session ID, and time, not the
-completion payload or any free text.
+receipt per key. A receipt becomes a duplicate only after Make confirms that every
+downstream action completed. An unfinished processing lease expires and can be
+acquired by a retry. The receipt stores only identifiers, lease state and
+timestamps, not the completion payload or any free text. Delivered/dead outbox
+payloads are erased; session deletion and retention remove the session, outbox
+row and receipt together.
 
 The real Make path must be ordered as follows:
 1. Custom webhook receives the sanitized outbox event.
 2. HTTP calls this service's `/api/completion-events` with the original JSON,
    `Idempotency-Key`, and `X-Completion-Secret`.
-3. Downstream actions run only when the gate returns `status=accepted`.
-4. `status=duplicate` ends the route without downstream actions.
-5. Webhook response is sent only after the gate route completes.
+3. Downstream actions run only when the gate returns `status=accepted`; Make
+   keeps the returned `attempt_token`.
+4. After the last downstream action succeeds, HTTP calls
+   `/api/completion-events/complete` with the original identifiers and the
+   `attempt_token`.
+5. `status=duplicate` ends the route successfully without downstream actions.
+6. Any other gate or completion response is an error, so Make returns an error
+   to the worker and the event remains eligible for retry.
+7. Make sends a successful webhook response only after step 4 succeeds.
 
-This makes a lost Make response safe: the worker retries the same event, the gate
-returns `duplicate`, and downstream processing still occurs once. A9 is not
+This gives at-least-once transport without silent loss: a failed downstream route
+is retried after its lease expires, while a completed route returns `duplicate`.
+Downstream actions must also use the deterministic event ID as their idempotency
+key when the target supports it. Literal network exactly-once is not claimed. A9 is not
 complete and this branch must not be merged or deployed until that Make route and
 the Render worker are wired and the end-to-end restart/retry test passes.
 
