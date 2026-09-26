@@ -9,7 +9,13 @@ Private founder-facing pilot. Not an investment decision.
 - `ADMIN_KEY`
 - `SESSION_DATABASE_URL` (or Render-provided `DATABASE_URL`)
 - `SESSION_RETENTION_DAYS` (default: `30`)
-- `TRAINER_EVENT_WEBHOOK` (HTTPS receiver for A8 completion events)
+- `TRAINER_EVENT_WEBHOOK` (Make webhook used by the A9 delivery worker)
+- `COMPLETION_RECEIVER_SECRET` (shared secret for Make to call the A9 gate)
+- `DELIVERY_POLL_SECONDS` (default: `2`)
+- `DELIVERY_CLAIM_TIMEOUT_SECONDS` (default: `60`)
+- `DELIVERY_MAX_ATTEMPTS` (default: `8`)
+- `DELIVERY_RETRY_BASE_SECONDS` (default: `5`)
+- `DELIVERY_RETRY_MAX_SECONDS` (default: `300`)
 - `WEBHOOK_TIMEOUT_SECONDS` (default: `10`)
 
 ## Session storage
@@ -19,12 +25,12 @@ report, feedback, and event status. Local development and tests can use
 service restarts. `DELETE /api/session/<id>` removes the persisted session.
 
 ## Completion event
-A8 atomically claims a completed session and makes at most one
-`TRAINER_COMPLETED` delivery attempt. The `emitting` state is persisted before
-the network call and means the delivery outcome may be unknown after a crash.
-A8 does not guarantee exactly-once network delivery and does not retry; recovery,
-receiver-side deduplication, and dead-letter handling belong to A9. The event
-excludes free-text founder answers, evidence quotes, report text, missing-document
+A8 atomically writes a completed session and one sanitized `TRAINER_COMPLETED`
+event to the same database transaction. The web request performs no network I/O.
+A9's `delivery_worker.py` claims outbox rows across processes, sends them to Make,
+recovers stale claims after restart, retries with exponential backoff and the same
+deterministic event ID/key, and moves exhausted items to `dead`. The event excludes
+free-text founder answers, evidence quotes, report text, missing-document
 names, meeting questions, deck filenames/raw text, API keys, and patient-level
 data. Only structural status tokens, counts, safe deck metadata, and the canonical
 project/founder identity fields are sent.
@@ -38,9 +44,18 @@ receipt per key; later deliveries return `duplicate` without creating another
 receipt. The receipt stores only the key, event ID, session ID, and time, not the
 completion payload or any free text.
 
-This endpoint is only A9.a. A9 is not complete and this branch must not be merged
-or deployed until A9.b places the gate on the actual Make delivery path and proves
-recovery/retry behavior without duplicate downstream delivery.
+The real Make path must be ordered as follows:
+1. Custom webhook receives the sanitized outbox event.
+2. HTTP calls this service's `/api/completion-events` with the original JSON,
+   `Idempotency-Key`, and `X-Completion-Secret`.
+3. Downstream actions run only when the gate returns `status=accepted`.
+4. `status=duplicate` ends the route without downstream actions.
+5. Webhook response is sent only after the gate route completes.
+
+This makes a lost Make response safe: the worker retries the same event, the gate
+returns `duplicate`, and downstream processing still occurs once. A9 is not
+complete and this branch must not be merged or deployed until that Make route and
+the Render worker are wired and the end-to-end restart/retry test passes.
 
 ## Run
 `pip install -r requirements.txt`
@@ -49,3 +64,4 @@ recovery/retry behavior without duplicate downstream delivery.
 ## Render
 Build: `pip install -r requirements.txt`
 Start: `gunicorn app:app`
+Worker: `python delivery_worker.py`

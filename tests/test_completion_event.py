@@ -246,19 +246,9 @@ class CompletionEmissionTests(unittest.TestCase):
             json={"answer": "стоп"},
         )
 
-    def test_completion_is_posted_once(self):
-        sent = []
+    def test_completion_is_enqueued_once(self):
         with mock.patch.object(
-            appmod, "TRAINER_EVENT_WEBHOOK",
-            "https://hooks.example.test/a8",
-        ), mock.patch.object(
             appmod, "final_report", return_value=sample_report()
-        ), mock.patch.object(
-            appmod,
-            "post_completion_json",
-            side_effect=lambda url, payload, timeout_seconds: (
-                sent.append((url, payload, timeout_seconds)) or 202
-            ),
         ):
             sid = self.start()
             first = self.finish(sid)
@@ -272,38 +262,36 @@ class CompletionEmissionTests(unittest.TestCase):
         self.assertNotIn("event_id", public_state)
         self.assertNotIn("idempotency_key", public_state)
         self.assertNotIn("event_error", public_state)
-        self.assertEqual(state["event_status"], "sent")
-        self.assertEqual(state["event_attempts"], 1)
-        self.assertEqual(len(sent), 1)
-        self.assertEqual(sent[0][1]["session_id"], sid)
+        self.assertEqual(state["event_status"], "queued")
+        self.assertEqual(state["event_attempts"], 0)
+        self.assertEqual(appmod.SESSIONS.count_completion_outbox(), 1)
+        queued = appmod.SESSIONS.get_completion_outbox(
+            f"trainer-completed:{sid}"
+        )
+        self.assertEqual(queued["payload"]["session_id"], sid)
         self.assertEqual(
-            sent[0][1]["idempotency_key"],
+            queued["payload"]["idempotency_key"],
             f"trainer-completed:{sid}",
         )
 
-    def test_failed_post_is_not_retried_by_a8(self):
+    def test_request_does_not_call_network(self):
         with mock.patch.object(
-            appmod, "TRAINER_EVENT_WEBHOOK",
-            "https://hooks.example.test/a8",
-        ), mock.patch.object(
             appmod, "final_report", return_value=sample_report()
         ), mock.patch.object(
-            appmod,
-            "post_completion_json",
-            side_effect=RuntimeError("receiver unavailable"),
+            completionmod, "post_completion_json"
         ) as post:
             sid = self.start()
             first = self.finish(sid)
             second = self.finish(sid)
 
         state = appmod.SESSIONS.get(sid)
-        self.assertEqual(state["event_status"], "failed")
-        self.assertEqual(state["event_attempts"], 1)
+        self.assertEqual(state["event_status"], "queued")
+        self.assertEqual(state["event_attempts"], 0)
         self.assertNotIn("event_status", first.get_json())
         self.assertNotIn("event_status", second.get_json())
-        self.assertEqual(post.call_count, 1)
+        post.assert_not_called()
 
-    def test_missing_webhook_is_explicit(self):
+    def test_missing_webhook_does_not_lose_event(self):
         with mock.patch.object(
             appmod, "TRAINER_EVENT_WEBHOOK", ""
         ), mock.patch.object(
@@ -313,13 +301,13 @@ class CompletionEmissionTests(unittest.TestCase):
             response = self.finish(sid)
 
         state = appmod.SESSIONS.get(sid)
-        self.assertEqual(state["event_status"], "not_configured")
+        self.assertEqual(state["event_status"], "queued")
         self.assertEqual(state["event_attempts"], 0)
+        self.assertEqual(appmod.SESSIONS.count_completion_outbox(), 1)
         self.assertNotIn("event_status", response.get_json())
 
-    def test_parallel_completion_posts_once(self):
+    def test_parallel_completion_enqueues_once(self):
         barrier = threading.Barrier(2)
-        sent = []
 
         def report(session):
             barrier.wait(timeout=5)
@@ -333,16 +321,7 @@ class CompletionEmissionTests(unittest.TestCase):
                 ).status_code
 
         with mock.patch.object(
-            appmod, "TRAINER_EVENT_WEBHOOK",
-            "https://hooks.example.test/a8",
-        ), mock.patch.object(
             appmod, "final_report", side_effect=report
-        ), mock.patch.object(
-            appmod,
-            "post_completion_json",
-            side_effect=lambda url, payload, timeout_seconds: (
-                sent.append(payload) or 202
-            ),
         ):
             sid = self.start()
             with ThreadPoolExecutor(max_workers=2) as pool:
@@ -352,10 +331,10 @@ class CompletionEmissionTests(unittest.TestCase):
                 ))
 
         self.assertEqual(statuses, [200, 200])
-        self.assertEqual(len(sent), 1)
+        self.assertEqual(appmod.SESSIONS.count_completion_outbox(), 1)
         state = appmod.SESSIONS.get(sid)
-        self.assertEqual(state["event_status"], "sent")
-        self.assertEqual(state["event_attempts"], 1)
+        self.assertEqual(state["event_status"], "queued")
+        self.assertEqual(state["event_attempts"], 0)
 
     def test_payload_build_failure_is_persisted(self):
         with mock.patch.object(
@@ -367,9 +346,7 @@ class CompletionEmissionTests(unittest.TestCase):
             appmod,
             "build_completion_payload",
             side_effect=ValueError("invalid payload"),
-        ), mock.patch.object(
-            appmod, "post_completion_json"
-        ) as post:
+        ):
             sid = self.start()
             response = self.finish(sid)
 
@@ -377,32 +354,22 @@ class CompletionEmissionTests(unittest.TestCase):
         state = appmod.SESSIONS.get(sid)
         self.assertEqual(state["event_status"], "failed")
         self.assertIn("invalid payload", state["event_error"])
-        post.assert_not_called()
+        self.assertEqual(appmod.SESSIONS.count_completion_outbox(), 0)
 
-    def test_emitting_is_persisted_before_network_call(self):
-        observed = {}
-
-        def post(url, payload, timeout_seconds):
-            stored = appmod.SESSIONS.get(payload["session_id"])
-            observed["status"] = stored["event_status"]
-            observed["event_id"] = stored["event_id"]
-            return 202
-
+    def test_queued_state_and_payload_are_persisted_together(self):
         with mock.patch.object(
-            appmod, "TRAINER_EVENT_WEBHOOK",
-            "https://hooks.example.test/a8",
-        ), mock.patch.object(
             appmod, "final_report", return_value=sample_report()
-        ), mock.patch.object(
-            appmod, "post_completion_json", side_effect=post
         ):
             sid = self.start()
             self.finish(sid)
 
-        self.assertEqual(observed["status"], "emitting")
+        state = appmod.SESSIONS.get(sid)
+        queued = appmod.SESSIONS.get_completion_outbox(
+            f"trainer-completed:{sid}"
+        )
+        self.assertEqual(state["event_status"], "queued")
         self.assertEqual(
-            observed["event_id"],
-            appmod.SESSIONS.get(sid)["event_id"],
+            queued["event_id"], state["event_id"],
         )
 
 

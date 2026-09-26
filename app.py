@@ -13,7 +13,7 @@ from question_engine_v2 import (
     coverage_summary, explicit_no_data,
 )
 from session_store import DurableSessionStore
-from completion_event import build_completion_payload, post_completion_json
+from completion_event import build_completion_payload
 
 app = Flask(__name__)
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
@@ -210,11 +210,12 @@ QA history:
 
 
 def emit_completion_event(s):
-    """Claim and attempt the A8 event once; delivery recovery belongs to A9."""
+    """Atomically enqueue one sanitized completion event for A9 delivery."""
     if s.get("event_status") != "not_emitted":
         return s
 
-    s["completed_at"] = s.get("completed_at") or now()
+    queued_at = now()
+    s["completed_at"] = s.get("completed_at") or queued_at
     s["event_id"] = s.get("event_id") or str(
         uuid.uuid5(uuid.NAMESPACE_URL, f"trainer-completed:{s['id']}")
     )
@@ -222,20 +223,7 @@ def emit_completion_event(s):
         s.get("idempotency_key")
         or f"trainer-completed:{s['id']}"
     )
-    s["updated_at"] = now()
-
-    if not TRAINER_EVENT_WEBHOOK:
-        claimed = SESSIONS.claim_completion_event(
-            s, target_status="not_configured"
-        )
-        return s if claimed else (SESSIONS.get(s["id"]) or s)
-
-    s["event_attempts"] = int(s.get("event_attempts") or 0) + 1
-    claimed = SESSIONS.claim_completion_event(
-        s, target_status="emitting"
-    )
-    if not claimed:
-        return SESSIONS.get(s["id"]) or s
+    s["updated_at"] = queued_at
 
     try:
         payload = build_completion_payload(
@@ -243,24 +231,17 @@ def emit_completion_event(s):
             trainer_version=TRAINER_VERSION,
             completed_at=s["completed_at"],
         )
-        status = post_completion_json(
-            TRAINER_EVENT_WEBHOOK,
-            payload,
-            timeout_seconds=WEBHOOK_TIMEOUT_SECONDS,
-        )
     except Exception as exc:
         s["event_status"] = "failed"
         s["event_error"] = f"{type(exc).__name__}: {exc}"[:500]
-        s["event_failed_at"] = now()
-    else:
-        s["event_status"] = "sent"
-        s["event_http_status"] = status
-        s["event_sent_at"] = now()
-        s.pop("event_error", None)
+        s["event_failed_at"] = queued_at
+        SESSIONS[s["id"]] = s
+        return s
 
-    s["updated_at"] = now()
-    SESSIONS[s["id"]] = s
-    return s
+    claimed = SESSIONS.enqueue_completion_event(
+        s, payload, queued_at=queued_at
+    )
+    return s if claimed else (SESSIONS.get(s["id"]) or s)
 
 
 @app.get("/")

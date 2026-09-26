@@ -78,9 +78,30 @@ class DurableSessionStore:
             received_at TEXT NOT NULL
         )
         """
+        outbox_sql = """
+        CREATE TABLE IF NOT EXISTS completion_outbox (
+            idempotency_key TEXT PRIMARY KEY,
+            event_id TEXT NOT NULL,
+            session_id TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            status TEXT NOT NULL,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            available_at TEXT NOT NULL,
+            claimed_at TEXT,
+            delivered_at TEXT,
+            last_error TEXT,
+            http_status INTEGER,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
         index_sql = """
         CREATE INDEX IF NOT EXISTS trainer_sessions_expires_idx
         ON trainer_sessions (expires_at)
+        """
+        outbox_index_sql = """
+        CREATE INDEX IF NOT EXISTS completion_outbox_ready_idx
+        ON completion_outbox (status, available_at)
         """
         with self._lock:
             with self._connection() as conn:
@@ -91,7 +112,9 @@ class DurableSessionStore:
                     )
                 conn.execute(sql)
                 conn.execute(receipt_sql)
+                conn.execute(outbox_sql)
                 conn.execute(index_sql)
+                conn.execute(outbox_index_sql)
                 conn.commit()
 
     def _expiry(self, session):
@@ -132,8 +155,8 @@ class DurableSessionStore:
                 expires_at=excluded.expires_at,
                 event_status=excluded.event_status,
                 data_json=excluded.data_json
-            WHERE trainer_sessions.event_status='not_emitted'
-               OR excluded.event_status<>'not_emitted'
+            WHERE trainer_sessions.event_status=excluded.event_status
+               OR trainer_sessions.event_status='not_emitted'
             """
         else:
             sql = """
@@ -146,8 +169,8 @@ class DurableSessionStore:
                 expires_at=EXCLUDED.expires_at,
                 event_status=EXCLUDED.event_status,
                 data_json=EXCLUDED.data_json
-            WHERE trainer_sessions.event_status='not_emitted'
-               OR EXCLUDED.event_status<>'not_emitted'
+            WHERE trainer_sessions.event_status=EXCLUDED.event_status
+               OR trainer_sessions.event_status='not_emitted'
             """
         with self._lock:
             with self._connection() as conn:
@@ -194,6 +217,360 @@ class DurableSessionStore:
             session["expires_at"] = data["expires_at"]
             session["event_status"] = target_status
         return claimed
+
+    def enqueue_completion_event(self, session, payload, queued_at=None):
+        """Atomically persist completion state and one durable outbox row."""
+        queued_at = str(queued_at or iso_z(utc_now()))
+        data = dict(session)
+        data["expires_at"] = self._expiry(data)
+        data["event_status"] = "queued"
+        data["event_attempts"] = int(data.get("event_attempts") or 0)
+        data["event_queued_at"] = queued_at
+        data["updated_at"] = queued_at
+        session_json = json.dumps(
+            data, ensure_ascii=False, separators=(",", ":")
+        )
+        payload_json = json.dumps(
+            payload, ensure_ascii=False, separators=(",", ":")
+        )
+        placeholder = "?" if self.backend == "sqlite" else "%s"
+        update_sql = f"""
+        UPDATE trainer_sessions SET
+            project_id={placeholder},
+            updated_at={placeholder},
+            expires_at={placeholder},
+            event_status={placeholder},
+            data_json={placeholder}
+        WHERE id={placeholder} AND event_status={placeholder}
+        """
+        insert_placeholders = (
+            "?, ?, ?, ?, ?, ?, ?, ?, ?"
+            if self.backend == "sqlite"
+            else "%s, %s, %s, %s, %s, %s, %s, %s, %s"
+        )
+        insert_sql = f"""
+        INSERT INTO completion_outbox
+        (idempotency_key, event_id, session_id, payload_json, status,
+         attempts, available_at, created_at, updated_at)
+        VALUES ({insert_placeholders})
+        ON CONFLICT(idempotency_key) DO NOTHING
+        """
+        update_values = (
+            str(data.get("project_id") or ""),
+            queued_at,
+            str(data["expires_at"]),
+            "queued",
+            session_json,
+            str(data["id"]),
+            "not_emitted",
+        )
+        insert_values = (
+            str(payload["idempotency_key"]),
+            str(payload["event_id"]),
+            str(payload["session_id"]),
+            payload_json,
+            "pending",
+            0,
+            queued_at,
+            queued_at,
+            queued_at,
+        )
+        with self._lock:
+            with self._connection() as conn:
+                try:
+                    if self.backend == "sqlite":
+                        conn.execute("BEGIN IMMEDIATE")
+                    updated = conn.execute(update_sql, update_values)
+                    if updated.rowcount != 1:
+                        conn.rollback()
+                        return False
+                    inserted = conn.execute(insert_sql, insert_values)
+                    if inserted.rowcount != 1:
+                        conn.rollback()
+                        return False
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+                    raise
+        session.update({
+            "expires_at": data["expires_at"],
+            "event_status": "queued",
+            "event_attempts": data["event_attempts"],
+            "event_queued_at": queued_at,
+            "updated_at": queued_at,
+        })
+        return True
+
+    @staticmethod
+    def _outbox_row(row):
+        if not row:
+            return None
+        return {
+            "idempotency_key": row[0],
+            "event_id": row[1],
+            "session_id": row[2],
+            "payload": json.loads(row[3]),
+            "status": row[4],
+            "attempts": int(row[5]),
+            "available_at": row[6],
+            "claimed_at": row[7],
+            "delivered_at": row[8],
+            "last_error": row[9],
+            "http_status": row[10],
+            "created_at": row[11],
+            "updated_at": row[12],
+        }
+
+    def claim_next_completion_delivery(
+        self, claimed_at=None, stale_before=None
+    ):
+        """Claim one ready or stale outbox row across processes."""
+        claimed_at = str(claimed_at or iso_z(utc_now()))
+        stale_before = str(stale_before or claimed_at)
+        if self.backend == "sqlite":
+            select_sql = """
+            SELECT idempotency_key
+            FROM completion_outbox
+            WHERE (
+                status IN ('pending', 'retry') AND available_at <= ?
+            ) OR (
+                status='delivering' AND claimed_at <= ?
+            )
+            ORDER BY created_at, idempotency_key
+            LIMIT 1
+            """
+            update_sql = """
+            UPDATE completion_outbox SET
+                status='delivering',
+                attempts=attempts+1,
+                claimed_at=?,
+                updated_at=?,
+                last_error=NULL
+            WHERE idempotency_key=? AND (
+                (status IN ('pending', 'retry') AND available_at <= ?)
+                OR (status='delivering' AND claimed_at <= ?)
+            )
+            """
+        else:
+            select_sql = """
+            SELECT idempotency_key
+            FROM completion_outbox
+            WHERE (
+                status IN ('pending', 'retry') AND available_at <= %s
+            ) OR (
+                status='delivering' AND claimed_at <= %s
+            )
+            ORDER BY created_at, idempotency_key
+            FOR UPDATE SKIP LOCKED
+            LIMIT 1
+            """
+            update_sql = """
+            UPDATE completion_outbox SET
+                status='delivering',
+                attempts=attempts+1,
+                claimed_at=%s,
+                updated_at=%s,
+                last_error=NULL
+            WHERE idempotency_key=%s AND (
+                (status IN ('pending', 'retry') AND available_at <= %s)
+                OR (status='delivering' AND claimed_at <= %s)
+            )
+            """
+        placeholder = "?" if self.backend == "sqlite" else "%s"
+        fetch_sql = f"""
+        SELECT idempotency_key, event_id, session_id, payload_json,
+               status, attempts, available_at, claimed_at, delivered_at,
+               last_error, http_status, created_at, updated_at
+        FROM completion_outbox WHERE idempotency_key={placeholder}
+        """
+        with self._lock:
+            with self._connection() as conn:
+                try:
+                    if self.backend == "sqlite":
+                        conn.execute("BEGIN IMMEDIATE")
+                    row = conn.execute(
+                        select_sql, (claimed_at, stale_before)
+                    ).fetchone()
+                    if not row:
+                        conn.commit()
+                        return None
+                    updated = conn.execute(
+                        update_sql,
+                        (
+                            claimed_at,
+                            claimed_at,
+                            str(row[0]),
+                            claimed_at,
+                            stale_before,
+                        ),
+                    )
+                    if updated.rowcount != 1:
+                        conn.rollback()
+                        return None
+                    claimed = conn.execute(
+                        fetch_sql, (str(row[0]),)
+                    ).fetchone()
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+                    raise
+        return self._outbox_row(claimed)
+
+    def _update_session_delivery_state(
+        self, conn, session_id, event_status, attempts, changed_at,
+        error=None, http_status=None
+    ):
+        placeholder = "?" if self.backend == "sqlite" else "%s"
+        row = conn.execute(
+            f"SELECT data_json FROM trainer_sessions WHERE id={placeholder}",
+            (str(session_id),),
+        ).fetchone()
+        if not row:
+            return
+        data = json.loads(row[0])
+        data["event_status"] = event_status
+        data["event_attempts"] = int(attempts)
+        data["updated_at"] = changed_at
+        if event_status == "sent":
+            data["event_sent_at"] = changed_at
+            data["event_http_status"] = int(http_status)
+            data.pop("event_error", None)
+            data.pop("event_failed_at", None)
+        else:
+            data["event_error"] = str(error or "")[:500]
+            data["event_failed_at"] = changed_at
+        payload = json.dumps(
+            data, ensure_ascii=False, separators=(",", ":")
+        )
+        conn.execute(
+            f"""
+            UPDATE trainer_sessions
+            SET event_status={placeholder}, updated_at={placeholder},
+                data_json={placeholder}
+            WHERE id={placeholder}
+            """,
+            (event_status, changed_at, payload, str(session_id)),
+        )
+
+    def mark_completion_delivery_succeeded(
+        self, idempotency_key, http_status, delivered_at=None
+    ):
+        delivered_at = str(delivered_at or iso_z(utc_now()))
+        placeholder = "?" if self.backend == "sqlite" else "%s"
+        select_sql = f"""
+        SELECT session_id, attempts FROM completion_outbox
+        WHERE idempotency_key={placeholder} AND status='delivering'
+        """
+        update_sql = f"""
+        UPDATE completion_outbox SET
+            status='delivered', delivered_at={placeholder},
+            http_status={placeholder}, updated_at={placeholder},
+            last_error=NULL
+        WHERE idempotency_key={placeholder} AND status='delivering'
+        """
+        with self._lock:
+            with self._connection() as conn:
+                row = conn.execute(
+                    select_sql, (str(idempotency_key),)
+                ).fetchone()
+                if not row:
+                    return False
+                cursor = conn.execute(
+                    update_sql,
+                    (
+                        delivered_at,
+                        int(http_status),
+                        delivered_at,
+                        str(idempotency_key),
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    conn.rollback()
+                    return False
+                self._update_session_delivery_state(
+                    conn, row[0], "sent", row[1], delivered_at,
+                    http_status=http_status,
+                )
+                conn.commit()
+        return True
+
+    def mark_completion_delivery_failed(
+        self, idempotency_key, error, available_at, failed_at=None,
+        terminal=False
+    ):
+        failed_at = str(failed_at or iso_z(utc_now()))
+        status = "dead" if terminal else "retry"
+        session_status = "dead" if terminal else "retrying"
+        placeholder = "?" if self.backend == "sqlite" else "%s"
+        select_sql = f"""
+        SELECT session_id, attempts FROM completion_outbox
+        WHERE idempotency_key={placeholder} AND status='delivering'
+        """
+        update_sql = f"""
+        UPDATE completion_outbox SET
+            status={placeholder}, available_at={placeholder},
+            claimed_at=NULL, last_error={placeholder},
+            updated_at={placeholder}
+        WHERE idempotency_key={placeholder} AND status='delivering'
+        """
+        safe_error = str(error or "")[:500]
+        with self._lock:
+            with self._connection() as conn:
+                row = conn.execute(
+                    select_sql, (str(idempotency_key),)
+                ).fetchone()
+                if not row:
+                    return False
+                cursor = conn.execute(
+                    update_sql,
+                    (
+                        status,
+                        str(available_at),
+                        safe_error,
+                        failed_at,
+                        str(idempotency_key),
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    conn.rollback()
+                    return False
+                self._update_session_delivery_state(
+                    conn, row[0], session_status, row[1], failed_at,
+                    error=safe_error,
+                )
+                conn.commit()
+        return True
+
+    def get_completion_outbox(self, idempotency_key):
+        placeholder = "?" if self.backend == "sqlite" else "%s"
+        sql = f"""
+        SELECT idempotency_key, event_id, session_id, payload_json,
+               status, attempts, available_at, claimed_at, delivered_at,
+               last_error, http_status, created_at, updated_at
+        FROM completion_outbox WHERE idempotency_key={placeholder}
+        """
+        with self._lock:
+            with self._connection() as conn:
+                row = conn.execute(
+                    sql, (str(idempotency_key),)
+                ).fetchone()
+        return self._outbox_row(row)
+
+    def count_completion_outbox(self, status=None):
+        with self._lock:
+            with self._connection() as conn:
+                if status is None:
+                    row = conn.execute(
+                        "SELECT COUNT(*) FROM completion_outbox"
+                    ).fetchone()
+                else:
+                    placeholder = "?" if self.backend == "sqlite" else "%s"
+                    row = conn.execute(
+                        f"SELECT COUNT(*) FROM completion_outbox "
+                        f"WHERE status={placeholder}",
+                        (str(status),),
+                    ).fetchone()
+        return int(row[0])
 
     def accept_completion_delivery(
         self, idempotency_key, event_id, session_id, received_at=None
@@ -289,6 +666,7 @@ class DurableSessionStore:
             with self._connection() as conn:
                 conn.execute("DELETE FROM trainer_sessions")
                 conn.execute("DELETE FROM completion_receipts")
+                conn.execute("DELETE FROM completion_outbox")
                 conn.commit()
 
     def __setitem__(self, session_id, session):
