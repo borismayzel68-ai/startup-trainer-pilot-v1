@@ -2,6 +2,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from session_store import DurableSessionStore
@@ -83,6 +84,30 @@ class DurableSessionStoreTests(unittest.TestCase):
         store.save(session)
         self.assertIsNone(store.get("session-1"))
         self.assertEqual(store.values(), [])
+
+    def test_completion_event_claim_is_atomic(self):
+        store = DurableSessionStore(self.url)
+        session = sample_session("claim-1")
+        store.save(session)
+        first = dict(session)
+        second = dict(session)
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(
+                store.claim_completion_event,
+                (first, second),
+            ))
+
+        self.assertEqual(sorted(results), [False, True])
+        loaded = store.get("claim-1")
+        self.assertEqual(loaded["event_status"], "emitting")
+
+        stale = sample_session("claim-1")
+        store.save(stale)
+        self.assertEqual(
+            store.get("claim-1")["event_status"],
+            "emitting",
+        )
 
     def test_upsert_preserves_single_row(self):
         store = DurableSessionStore(self.url)

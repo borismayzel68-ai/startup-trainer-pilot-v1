@@ -43,7 +43,7 @@ class StartApiTests(unittest.TestCase):
         self.assertFalse(j["classification_check_required"])
         self.assertEqual(j["current_question"]["profile_field"],"stage")
         self.assertFalse(j["input_manifest"]["deck"]["present"])
-        self.assertEqual(j["event_status"],"not_emitted")
+        self.assertNotIn("event_status",j)
         self.assertTrue(j["expires_at"])
 
     def test_project_id_trim_and_suffix(self):

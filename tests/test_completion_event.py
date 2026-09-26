@@ -1,6 +1,8 @@
 import json
 import os
+import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from unittest import mock
 
 os.environ.setdefault("OPENAI_API_KEY", "test-key")
@@ -45,11 +47,18 @@ class CompletionPayloadTests(unittest.TestCase):
             "report": {
                 **sample_report(),
                 "note": "OpenAI key sk-proj-abcdefghijklmnop",
+                "patient_note": "ФИО Иванов, дата рождения 01.01.1980",
             },
             "coverage": {"patient_id": "must-not-leak"},
             "selected_modules": ["regulatory"],
             "routing_steps": ["jurisdiction"],
-            "input_manifest": {"deck": {"present": True}, "deck_text": "raw"},
+            "input_manifest": {
+                "deck": {
+                    "present": True,
+                    "raw_text": "alternate raw deck text",
+                },
+                "deck_text": "raw",
+            },
             "model": "test-model",
         }
         payload = build_completion_payload(
@@ -64,10 +73,19 @@ class CompletionPayloadTests(unittest.TestCase):
             payload["idempotency_key"],
             "trainer-completed:session-1",
         )
+        self.assertEqual(
+            payload["event_id"],
+            str(completionmod.uuid.uuid5(
+                completionmod.uuid.NAMESPACE_URL,
+                "trainer-completed:session-1",
+            )),
+        )
         serialized = json.dumps(payload, ensure_ascii=False)
         self.assertNotIn("must-not-leak", serialized)
         self.assertNotIn("MRN 12345", serialized)
         self.assertNotIn("sk-proj-abcdefghijklmnop", serialized)
+        self.assertNotIn("alternate raw deck text", serialized)
+        self.assertNotIn("Иванов", serialized)
         self.assertIn("REDACTED_PATIENT_LEVEL_DATA", serialized)
         self.assertIn("REDACTED_SECRET", serialized)
         self.assertFalse(
@@ -96,16 +114,17 @@ class CompletionPayloadTests(unittest.TestCase):
             def __exit__(self, *args):
                 return False
 
-        def fake_open(request, timeout):
-            captured["body"] = json.loads(request.data)
-            captured["key"] = request.get_header("Idempotency-key")
-            captured["timeout"] = timeout
-            return Response()
+        class Opener:
+            def open(self, request, timeout):
+                captured["body"] = json.loads(request.data)
+                captured["key"] = request.get_header("Idempotency-key")
+                captured["timeout"] = timeout
+                return Response()
 
         payload = {"idempotency_key": "key-1", "event_type": "TRAINER_COMPLETED"}
         with mock.patch.object(
-            completionmod, "urlopen", side_effect=fake_open
-        ):
+            completionmod, "build_opener", return_value=Opener()
+        ) as build:
             status = post_completion_json(
                 "https://example.test/hook", payload, timeout_seconds=3
             )
@@ -114,6 +133,30 @@ class CompletionPayloadTests(unittest.TestCase):
         self.assertEqual(captured["body"], payload)
         self.assertEqual(captured["key"], "key-1")
         self.assertEqual(captured["timeout"], 3)
+        self.assertIsInstance(
+            build.call_args.args[0],
+            completionmod._NoRedirect,
+        )
+
+    def test_redirect_response_is_not_accepted(self):
+        class Response:
+            status = 302
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        opener = mock.Mock()
+        opener.open.return_value = Response()
+        with mock.patch.object(
+            completionmod, "build_opener", return_value=opener
+        ), self.assertRaises(RuntimeError):
+            post_completion_json(
+                "https://example.test/hook",
+                {"idempotency_key": "key-1"},
+            )
 
 
 class CompletionEmissionTests(unittest.TestCase):
@@ -164,7 +207,12 @@ class CompletionEmissionTests(unittest.TestCase):
 
         self.assertEqual(first.status_code, 200)
         self.assertEqual(second.status_code, 200)
-        state = second.get_json()
+        public_state = second.get_json()
+        state = appmod.SESSIONS.get(sid)
+        self.assertNotIn("event_status", public_state)
+        self.assertNotIn("event_id", public_state)
+        self.assertNotIn("idempotency_key", public_state)
+        self.assertNotIn("event_error", public_state)
         self.assertEqual(state["event_status"], "sent")
         self.assertEqual(state["event_attempts"], 1)
         self.assertEqual(len(sent), 1)
@@ -189,9 +237,11 @@ class CompletionEmissionTests(unittest.TestCase):
             first = self.finish(sid)
             second = self.finish(sid)
 
-        self.assertEqual(first.get_json()["event_status"], "failed")
-        self.assertEqual(second.get_json()["event_status"], "failed")
-        self.assertEqual(second.get_json()["event_attempts"], 1)
+        state = appmod.SESSIONS.get(sid)
+        self.assertEqual(state["event_status"], "failed")
+        self.assertEqual(state["event_attempts"], 1)
+        self.assertNotIn("event_status", first.get_json())
+        self.assertNotIn("event_status", second.get_json())
         self.assertEqual(post.call_count, 1)
 
     def test_missing_webhook_is_explicit(self):
@@ -203,11 +253,98 @@ class CompletionEmissionTests(unittest.TestCase):
             sid = self.start()
             response = self.finish(sid)
 
+        state = appmod.SESSIONS.get(sid)
+        self.assertEqual(state["event_status"], "not_configured")
+        self.assertEqual(state["event_attempts"], 0)
+        self.assertNotIn("event_status", response.get_json())
+
+    def test_parallel_completion_posts_once(self):
+        barrier = threading.Barrier(2)
+        sent = []
+
+        def report(session):
+            barrier.wait(timeout=5)
+            return sample_report()
+
+        def finish_in_thread(sid):
+            with appmod.app.test_client() as client:
+                return client.post(
+                    f"/api/session/{sid}/answer",
+                    json={"answer": "стоп"},
+                ).status_code
+
+        with mock.patch.object(
+            appmod, "TRAINER_EVENT_WEBHOOK",
+            "https://hooks.example.test/a8",
+        ), mock.patch.object(
+            appmod, "final_report", side_effect=report
+        ), mock.patch.object(
+            appmod,
+            "post_completion_json",
+            side_effect=lambda url, payload, timeout_seconds: (
+                sent.append(payload) or 202
+            ),
+        ):
+            sid = self.start()
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                statuses = list(pool.map(
+                    lambda _: finish_in_thread(sid),
+                    range(2),
+                ))
+
+        self.assertEqual(statuses, [200, 200])
+        self.assertEqual(len(sent), 1)
+        state = appmod.SESSIONS.get(sid)
+        self.assertEqual(state["event_status"], "sent")
+        self.assertEqual(state["event_attempts"], 1)
+
+    def test_payload_build_failure_is_persisted(self):
+        with mock.patch.object(
+            appmod, "TRAINER_EVENT_WEBHOOK",
+            "https://hooks.example.test/a8",
+        ), mock.patch.object(
+            appmod, "final_report", return_value=sample_report()
+        ), mock.patch.object(
+            appmod,
+            "build_completion_payload",
+            side_effect=ValueError("invalid payload"),
+        ), mock.patch.object(
+            appmod, "post_completion_json"
+        ) as post:
+            sid = self.start()
+            response = self.finish(sid)
+
+        self.assertEqual(response.status_code, 200)
+        state = appmod.SESSIONS.get(sid)
+        self.assertEqual(state["event_status"], "failed")
+        self.assertIn("invalid payload", state["event_error"])
+        post.assert_not_called()
+
+    def test_emitting_is_persisted_before_network_call(self):
+        observed = {}
+
+        def post(url, payload, timeout_seconds):
+            stored = appmod.SESSIONS.get(payload["session_id"])
+            observed["status"] = stored["event_status"]
+            observed["event_id"] = stored["event_id"]
+            return 202
+
+        with mock.patch.object(
+            appmod, "TRAINER_EVENT_WEBHOOK",
+            "https://hooks.example.test/a8",
+        ), mock.patch.object(
+            appmod, "final_report", return_value=sample_report()
+        ), mock.patch.object(
+            appmod, "post_completion_json", side_effect=post
+        ):
+            sid = self.start()
+            self.finish(sid)
+
+        self.assertEqual(observed["status"], "emitting")
         self.assertEqual(
-            response.get_json()["event_status"],
-            "not_configured",
+            observed["event_id"],
+            appmod.SESSIONS.get(sid)["event_id"],
         )
-        self.assertEqual(response.get_json()["event_attempts"], 0)
 
 
 if __name__ == "__main__":

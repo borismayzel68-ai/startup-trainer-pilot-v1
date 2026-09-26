@@ -19,10 +19,12 @@ report, feedback, and event status. Local development and tests can use
 service restarts. `DELETE /api/session/<id>` removes the persisted session.
 
 ## Completion event
-A8 sends one `TRAINER_COMPLETED` JSON event when a session first becomes
-complete. The attempt is recorded before the network call. A8 does not retry a
-failed call; retry, receiver-side deduplication, and dead-letter handling belong
-to A9. API keys, raw deck text, and patient identifiers are excluded.
+A8 atomically claims a completed session and makes at most one
+`TRAINER_COMPLETED` delivery attempt. The `emitting` state is persisted before
+the network call and means the delivery outcome may be unknown after a crash.
+A8 does not guarantee exactly-once network delivery and does not retry; recovery,
+receiver-side deduplication, and dead-letter handling belong to A9. API keys,
+raw deck text, and patient identifiers are excluded.
 
 ## Run
 `pip install -r requirements.txt`

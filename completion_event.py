@@ -1,7 +1,7 @@
 import json
 import re
 import uuid
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 from urllib.parse import urlparse
 
 EVENT_TYPE = "TRAINER_COMPLETED"
@@ -38,7 +38,9 @@ _BLOCKED_KEYS = re.compile(
 )
 _PATIENT_TEXT = re.compile(
     r"\b(mrn|patient\s*id|date\s*of\s*birth|dob|ssn)\b|"
-    r"(фио|идентификатор|дата рождения|снилс)\s+пациент",
+    r"фио|дата рождения|снилс|полис\s+омс|истори[яи]\s+болезни|"
+    r"медицинск(?:ая|ой)\s+карт(?:а|ы)|диагноз\s+пациент|"
+    r"\b\d{3}-\d{3}-\d{3}\s?\d{2}\b",
     re.IGNORECASE,
 )
 _SECRET_TEXT = re.compile(
@@ -83,7 +85,12 @@ def _evidence_delta(questions_answers):
 
 
 def build_completion_payload(session, trainer_version, completed_at):
-    event_id = session.get("event_id") or str(uuid.uuid4())
+    event_id = session.get("event_id") or str(
+        uuid.uuid5(
+            uuid.NAMESPACE_URL,
+            f"trainer-completed:{session['id']}",
+        )
+    )
     idempotency_key = (
         session.get("idempotency_key")
         or f"trainer-completed:{session['id']}"
@@ -127,9 +134,20 @@ def build_completion_payload(session, trainer_version, completed_at):
             "raw_deck_included": False,
         },
         "run_manifest": {
-            "input_manifest": _safe_value(
-                session.get("input_manifest") or {}
-            ),
+            "input_manifest": {
+                "deck": {
+                    key: _safe_value(value)
+                    for key, value in (
+                        (session.get("input_manifest") or {})
+                        .get("deck", {})
+                        .items()
+                    )
+                    if key in {
+                        "present", "filename", "mime_type",
+                        "size_bytes", "sha256",
+                    }
+                }
+            },
             "routing_steps": list(session.get("routing_steps") or []),
             "selected_modules": list(
                 session.get("selected_modules") or []
@@ -142,6 +160,12 @@ def build_completion_payload(session, trainer_version, completed_at):
     if missing:
         raise ValueError(f"completion payload missing fields: {missing}")
     return payload
+
+
+
+class _NoRedirect(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
 
 
 def post_completion_json(webhook_url, payload, timeout_seconds=10):
@@ -161,8 +185,12 @@ def post_completion_json(webhook_url, payload, timeout_seconds=10):
             "User-Agent": "startup-trainer-completion/1",
         },
     )
-    with urlopen(request, timeout=timeout_seconds) as response:
-        status = int(getattr(response, "status", response.getcode()))
+    opener = build_opener(_NoRedirect())
+    with opener.open(request, timeout=timeout_seconds) as response:
+        status = getattr(response, "status", None)
+        if status is None:
+            status = response.getcode()
+        status = int(status)
     if status < 200 or status >= 300:
         raise RuntimeError(f"completion webhook returned HTTP {status}")
     return status

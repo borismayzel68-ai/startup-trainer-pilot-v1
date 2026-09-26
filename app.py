@@ -41,6 +41,13 @@ ALLOWED_REC = {"not_ready","iterate","ready_for_investor_conversation"}
 def now():
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
+def public_session(s):
+    return {
+        key:value for key,value in s.items()
+        if key not in {"deck_text", "idempotency_key"}
+        and not key.startswith("event_")
+    }
+
 def extract_pdf(file_storage):
     raw = file_storage.read()
     reader = PdfReader(io.BytesIO(raw))
@@ -198,29 +205,39 @@ QA history:
 
 
 def emit_completion_event(s):
-    """Emit the A8 completion event at most once per completed session."""
+    """Claim and attempt the A8 event once; delivery recovery belongs to A9."""
     if s.get("event_status") != "not_emitted":
-        return
+        return s
 
     s["completed_at"] = s.get("completed_at") or now()
+    s["event_id"] = s.get("event_id") or str(
+        uuid.uuid5(uuid.NAMESPACE_URL, f"trainer-completed:{s['id']}")
+    )
+    s["idempotency_key"] = (
+        s.get("idempotency_key")
+        or f"trainer-completed:{s['id']}"
+    )
+    s["updated_at"] = now()
 
     if not TRAINER_EVENT_WEBHOOK:
-        s["event_status"] = "not_configured"
-        s["updated_at"] = now()
-        SESSIONS[s["id"]] = s
-        return
+        claimed = SESSIONS.claim_completion_event(
+            s, target_status="not_configured"
+        )
+        return s if claimed else (SESSIONS.get(s["id"]) or s)
 
-    payload = build_completion_payload(
-        s,
-        trainer_version=TRAINER_VERSION,
-        completed_at=s["completed_at"],
-    )
-    s["event_status"] = "emitting"
     s["event_attempts"] = int(s.get("event_attempts") or 0) + 1
-    s["updated_at"] = now()
-    SESSIONS[s["id"]] = s
+    claimed = SESSIONS.claim_completion_event(
+        s, target_status="emitting"
+    )
+    if not claimed:
+        return SESSIONS.get(s["id"]) or s
 
     try:
+        payload = build_completion_payload(
+            s,
+            trainer_version=TRAINER_VERSION,
+            completed_at=s["completed_at"],
+        )
         status = post_completion_json(
             TRAINER_EVENT_WEBHOOK,
             payload,
@@ -238,6 +255,7 @@ def emit_completion_event(s):
 
     s["updated_at"] = now()
     SESSIONS[s["id"]] = s
+    return s
 
 
 @app.get("/")
@@ -356,14 +374,14 @@ def start():
     SESSIONS[sid]=s
     s["current_question"]=next_question(s)
     SESSIONS[sid]=s
-    return jsonify({k:v for k,v in s.items() if k!="deck_text"})
+    return jsonify(public_session(s))
 
 @app.post("/api/session/<sid>/answer")
 def answer(sid):
     s=SESSIONS.get(sid)
     if not s: return jsonify({"error":"\u0421\u0435\u0441\u0441\u0438\u044f \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d\u0430"}),404
     if s.get("done"):
-        return jsonify({k:v for k,v in s.items() if k!="deck_text"})
+        return jsonify(public_session(s))
     ans=str((request.json or {}).get("answer") or "").strip()
     if not ans: return jsonify({"error":"\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u043e\u0442\u0432\u0435\u0442"}),400
     founder_stop=bool(re.match(r"^(\u0441\u0442\u043e\u043f|stop|\u0445\u0432\u0430\u0442\u0438\u0442|\u0437\u0430\u043a\u043e\u043d\u0447\u0438\u0442\u044c|\u0433\u043e\u0442\u043e\u0432\u043e)$",ans,re.I))
@@ -385,7 +403,6 @@ def answer(sid):
     s["done"]=decision["done"]
     s["stop_reason"]=decision["stop_reason"]
     s["updated_at"]=now()
-    SESSIONS[sid]=s
     if s["done"]:
         s["current_question"]=None
         s["report"]=final_report(s)
@@ -396,16 +413,17 @@ def answer(sid):
             s["stop_reason"]="marginal_value_low"
             s["report"]=final_report(s)
     s["updated_at"]=now()
-    SESSIONS[sid]=s
-    if s["done"] and s.get("event_status") == "not_emitted":
-        emit_completion_event(s)
-    return jsonify({k:v for k,v in s.items() if k!="deck_text"})
+    if s["done"]:
+        s=emit_completion_event(s)
+    else:
+        SESSIONS[sid]=s
+    return jsonify(public_session(s))
 
 @app.get("/api/session/<sid>")
 def get_session(sid):
     s=SESSIONS.get(sid)
     if not s: return jsonify({"error":"\u0421\u0435\u0441\u0441\u0438\u044f \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d\u0430"}),404
-    return jsonify({k:v for k,v in s.items() if k!="deck_text"})
+    return jsonify(public_session(s))
 
 @app.delete("/api/session/<sid>")
 def delete_session(sid):
