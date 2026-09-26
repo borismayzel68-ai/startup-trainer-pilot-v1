@@ -1,4 +1,4 @@
-import os, io, json, uuid, time, re
+import os, io, json, uuid, time, re, hashlib
 from flask import Flask, request, jsonify, render_template
 from pypdf import PdfReader
 from openai import OpenAI
@@ -12,13 +12,23 @@ from question_engine_v2 import (
     next_question as engine_next_question, record_answer, decide_progress,
     coverage_summary, explicit_no_data,
 )
+from session_store import DurableSessionStore
 
 app = Flask(__name__)
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 MODEL = os.environ.get("OPENAI_MODEL", "gpt-5.6")
 INVITE_CODE = os.environ.get("INVITE_CODE", "PILOT-S1-EXT-001")
 ADMIN_KEY = os.environ.get("ADMIN_KEY", "change-me")
-SESSIONS = {}
+SESSION_RETENTION_DAYS = int(os.environ.get("SESSION_RETENTION_DAYS", "30"))
+SESSION_DATABASE_URL = (
+    os.environ.get("SESSION_DATABASE_URL")
+    or os.environ.get("DATABASE_URL")
+    or "sqlite:///trainer_sessions.db"
+)
+SESSIONS = DurableSessionStore(
+    SESSION_DATABASE_URL,
+    retention_days=SESSION_RETENTION_DAYS,
+)
 ALLOWED_STATUS = {"fact","hypothesis","missing","weak"}
 ALLOWED_REC = {"not_ready","iterate","ready_for_investor_conversation"}
 
@@ -29,7 +39,14 @@ def extract_pdf(file_storage):
     raw = file_storage.read()
     reader = PdfReader(io.BytesIO(raw))
     text = "\n".join((p.extract_text() or "") for p in reader.pages)
-    return text[:30000]
+    manifest = {
+        "present": True,
+        "filename": str(file_storage.filename or "")[:300],
+        "mime_type": str(file_storage.mimetype or ""),
+        "size_bytes": len(raw),
+        "sha256": hashlib.sha256(raw).hexdigest(),
+    }
+    return text[:30000], manifest
 
 def call_json(system, user):
     r = client.responses.create(
@@ -179,7 +196,12 @@ def home():
 
 @app.get("/health")
 def health():
-    return jsonify({"ok":True,"version":"s1-ext-pilot-v1.2-adaptive-readiness","model":MODEL})
+    return jsonify({
+        "ok":True,
+        "version":"s1-ext-pilot-v1.3-durable-state",
+        "model":MODEL,
+        "storage":SESSIONS.backend,
+    })
 
 @app.get("/robots.txt")
 def robots():
@@ -231,11 +253,12 @@ def start():
         return start_error("mode must be A, B or C","mode_invalid",400,["A","B","C"])
 
     deck_text=""
+    input_manifest={"deck":{"present":False}}
     f=request.files.get("deck")
     if f:
         if f.mimetype!="application/pdf":
             return start_error("\u0420\u0430\u0437\u0440\u0435\u0448\u0451\u043d \u0442\u043e\u043b\u044c\u043a\u043e PDF","deck_mime_invalid")
-        deck_text=extract_pdf(f)
+        deck_text,input_manifest["deck"]=extract_pdf(f)
 
     selected,reasons,classification_required,active_markets=route(jurisdiction,target_markets,intended_use,product_class)
     sid=str(uuid.uuid4())
@@ -264,18 +287,21 @@ def start():
         "hypothesis_b":request.form.get("hypothesis_b","")[:2500],
         "description":request.form.get("description","")[:12000],
         "deck_text":deck_text,
+        "input_manifest":input_manifest,
         "qa":[],
         "turn":0,
         "phase":"quick_triage",
         "coverage":{},
         "source_coverage_scanned":False,
         "stop_reason":None,
+        "event_status":"not_emitted",
         "done":False,
         "report":None,
         "created_at":now(),
         "updated_at":now()
     }
     ensure_coverage(s)
+    SESSIONS[sid]=s
     s["current_question"]=next_question(s)
     SESSIONS[sid]=s
     return jsonify({k:v for k,v in s.items() if k!="deck_text"})
@@ -304,6 +330,8 @@ def answer(sid):
         decision=decide_progress(s)
     s["done"]=decision["done"]
     s["stop_reason"]=decision["stop_reason"]
+    s["updated_at"]=now()
+    SESSIONS[sid]=s
     if s["done"]:
         s["current_question"]=None
         s["report"]=final_report(s)
@@ -314,6 +342,7 @@ def answer(sid):
             s["stop_reason"]="marginal_value_low"
             s["report"]=final_report(s)
     s["updated_at"]=now()
+    SESSIONS[sid]=s
     return jsonify({k:v for k,v in s.items() if k!="deck_text"})
 
 @app.get("/api/session/<sid>")
@@ -332,6 +361,8 @@ def feedback(sid):
     s=SESSIONS.get(sid)
     if not s: return jsonify({"error":"\u0421\u0435\u0441\u0441\u0438\u044f \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d\u0430"}),404
     s["feedback"]=request.json or {}
+    s["updated_at"]=now()
+    SESSIONS[sid]=s
     return jsonify({"ok":True})
 
 @app.get("/admin")

@@ -2,6 +2,7 @@ import os, unittest, io
 from unittest import mock
 os.environ.setdefault("OPENAI_API_KEY","test-key")
 os.environ.setdefault("INVITE_CODE","PILOT-S1-EXT-001")
+os.environ.setdefault("SESSION_DATABASE_URL","sqlite:///:memory:")
 import app as appmod
 
 class StartApiTests(unittest.TestCase):
@@ -41,6 +42,9 @@ class StartApiTests(unittest.TestCase):
         self.assertNotIn("diagnostics_validity",j["selected_modules"])
         self.assertFalse(j["classification_check_required"])
         self.assertEqual(j["current_question"]["profile_field"],"stage")
+        self.assertFalse(j["input_manifest"]["deck"]["present"])
+        self.assertEqual(j["event_status"],"not_emitted")
+        self.assertTrue(j["expires_at"])
 
     def test_project_id_trim_and_suffix(self):
         x=self.base(); x["project_id"]="VC-178 "
@@ -97,6 +101,25 @@ class StartApiTests(unittest.TestCase):
         r=self.c.post("/api/start",data=x,content_type="multipart/form-data")
         self.assertEqual(r.status_code,400)
         self.assertEqual(r.get_json()["code"],"deck_mime_invalid")
+
+    def test_feedback_persists_and_delete_removes_session(self):
+        started=self.post()
+        self.assertEqual(started.status_code,200,started.get_json())
+        sid=started.get_json()["id"]
+        response=self.c.post(
+            f"/api/session/{sid}/feedback",
+            json={"rating":5,"text":"ok"},
+        )
+        self.assertEqual(response.status_code,200)
+        stored=appmod.SESSIONS.get(sid)
+        self.assertEqual(stored["feedback"]["rating"],5)
+        response=self.c.delete(f"/api/session/{sid}")
+        self.assertEqual(response.status_code,200)
+        self.assertIsNone(appmod.SESSIONS.get(sid))
+        self.assertEqual(
+            self.c.get(f"/api/session/{sid}").status_code,
+            404,
+        )
 
     def test_ui_fields_and_report_header(self):
         html=(__import__("pathlib").Path(appmod.app.root_path)/"templates"/"index.html").read_text(encoding="utf-8")

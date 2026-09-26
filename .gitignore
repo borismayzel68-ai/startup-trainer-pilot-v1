@@ -4,3 +4,4 @@ node_modules/
 data/sessions.json
 npm-debug.log*
 .DS_Store
+trainer_sessions.db*
