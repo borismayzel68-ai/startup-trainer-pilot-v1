@@ -54,6 +54,26 @@ def seed(store, session_id="11111111-1111-4111-8111-111111111111"):
     return key, payload
 
 
+def complete_make_route(store, body, completed_at=T0):
+    """Model Make: gate, idempotent work, confirm, then 2xx."""
+    accepted = store.begin_completion_delivery(
+        body["idempotency_key"], body["event_id"], body["session_id"],
+        accepted_at=iso_z(completed_at),
+        lease_until=iso_z(completed_at + timedelta(seconds=60)),
+    )
+    if accepted["status"] == "accepted":
+        completed = store.complete_completion_delivery(
+            body["idempotency_key"], body["event_id"],
+            body["session_id"], accepted["attempt_token"],
+            completed_at=iso_z(completed_at),
+        )
+        if completed["status"] != "completed":
+            raise AssertionError(completed)
+    elif accepted["status"] != "duplicate":
+        raise RuntimeError(f"gate returned {accepted['status']}")
+    return 202
+
+
 class DeliveryWorkerTests(unittest.TestCase):
     def setUp(self):
         handle, self.path = tempfile.mkstemp(suffix=".sqlite3")
@@ -70,7 +90,7 @@ class DeliveryWorkerTests(unittest.TestCase):
 
         def post(url, body, timeout_seconds):
             sent.append((url, body, timeout_seconds))
-            return 202
+            return complete_make_route(self.store, body)
 
         self.assertTrue(deliver_one(
             self.store,
@@ -136,6 +156,38 @@ class DeliveryWorkerTests(unittest.TestCase):
         self.assertEqual(downstream, [payload["event_id"]])
         self.assertEqual(self.store.count_completion_receipts(), 1)
 
+    def test_early_make_2xx_without_completed_receipt_is_retried(self):
+        key, payload = seed(self.store)
+
+        def early_response(_url, body, timeout_seconds):
+            accepted = self.store.begin_completion_delivery(
+                body["idempotency_key"], body["event_id"],
+                body["session_id"], accepted_at=iso_z(T0),
+                lease_until=iso_z(T0 + timedelta(seconds=60)),
+            )
+            self.assertEqual(accepted["status"], "accepted")
+            return 200
+
+        self.assertTrue(deliver_one(
+            self.store,
+            "https://hook.eu1.make.com/test",
+            post_func=early_response,
+            now_value=T0,
+            retry_base_seconds=5,
+        ))
+        outbox = self.store.get_completion_outbox(key)
+        self.assertEqual(outbox["status"], "retry")
+        self.assertEqual(outbox["payload"], payload)
+        self.assertIn("before completion receipt", outbox["last_error"])
+        self.assertEqual(
+            self.store.get_completion_receipt(key)["state"],
+            "processing",
+        )
+        self.assertEqual(
+            self.store.get(payload["session_id"])["event_status"],
+            "retrying",
+        )
+
     def test_stale_claim_is_recovered_after_restart(self):
         key, _payload = seed(self.store)
         claimed = self.store.claim_next_completion_delivery(
@@ -149,7 +201,10 @@ class DeliveryWorkerTests(unittest.TestCase):
             restarted,
             "https://hook.eu1.make.com/test",
             post_func=lambda url, body, timeout_seconds: (
-                sent.append(body["event_id"]) or 202
+                sent.append(body["event_id"])
+                or complete_make_route(
+                    restarted, body, T0 + timedelta(seconds=61)
+                )
             ),
             now_value=T0 + timedelta(seconds=61),
             claim_timeout_seconds=60,
@@ -170,7 +225,7 @@ class DeliveryWorkerTests(unittest.TestCase):
             def post(url, body, timeout_seconds):
                 with sent_lock:
                     sent.append(body["event_id"])
-                return 202
+                return complete_make_route(local_store, body)
 
             return deliver_one(
                 local_store,
@@ -257,7 +312,9 @@ class DeliveryWorkerTests(unittest.TestCase):
         self.assertTrue(deliver_one(
             self.store,
             "https://hook.eu1.make.com/test",
-            post_func=lambda url, body, timeout_seconds: 202,
+            post_func=lambda url, body, timeout_seconds: (
+                complete_make_route(self.store, body)
+            ),
             now_value=T0,
         ))
         self.assertEqual(
@@ -275,7 +332,8 @@ class DeliveryWorkerTests(unittest.TestCase):
         self.assertEqual(final["feedback"], {"rating": 5})
 
     def test_late_worker_cannot_finish_newer_claim(self):
-        key, _payload = seed(self.store)
+        key, payload = seed(self.store)
+        complete_make_route(self.store, payload)
         first = self.store.claim_next_completion_delivery(
             claimed_at=iso_z(T0),
             stale_before=iso_z(T0 - timedelta(seconds=60)),
@@ -314,6 +372,31 @@ class DeliveryWorkerTests(unittest.TestCase):
         self.assertEqual(final["payload"], {})
         self.assertEqual(sent, [])
 
+    def test_lowered_attempt_limit_closes_existing_retry(self):
+        key, _payload = seed(self.store)
+        claimed = self.store.claim_next_completion_delivery(
+            claimed_at=iso_z(T0),
+            stale_before=iso_z(T0 - timedelta(seconds=60)),
+            max_attempts=8,
+        )
+        self.store.mark_completion_delivery_failed(
+            key, claimed["claim_token"], "temporary",
+            available_at=iso_z(T0 + timedelta(seconds=5)),
+            failed_at=iso_z(T0), terminal=False,
+        )
+        sent = []
+        self.assertFalse(deliver_one(
+            self.store,
+            "https://hook.eu1.make.com/test",
+            post_func=lambda *args, **kwargs: sent.append(True),
+            now_value=T0 + timedelta(seconds=5),
+            max_attempts=1,
+        ))
+        final = self.store.get_completion_outbox(key)
+        self.assertEqual(final["status"], "dead")
+        self.assertEqual(final["payload"], {})
+        self.assertEqual(sent, [])
+
     def test_worker_loop_survives_database_error(self):
         stop = threading.Event()
         calls = []
@@ -326,11 +409,14 @@ class DeliveryWorkerTests(unittest.TestCase):
             return False
 
         with mock.patch.object(workermod, "deliver_one", side_effect=attempt):
+            purge = mock.Mock(wraps=self.store.purge_expired)
+            self.store.purge_expired = purge
             workermod.run_forever(
                 self.store, "https://hook.example.test", stop,
                 poll_seconds=0,
             )
         self.assertEqual(len(calls), 2)
+        purge.assert_called_once_with()
 
 
 if __name__ == "__main__":

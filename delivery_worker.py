@@ -2,6 +2,7 @@ import logging
 import os
 import signal
 import threading
+import time
 from datetime import datetime, timedelta, timezone
 
 from completion_event import post_completion_json
@@ -13,6 +14,7 @@ DEFAULT_CLAIM_TIMEOUT_SECONDS = 60
 DEFAULT_MAX_ATTEMPTS = 8
 DEFAULT_RETRY_BASE_SECONDS = 5
 DEFAULT_RETRY_MAX_SECONDS = 300
+DEFAULT_PURGE_INTERVAL_SECONDS = 3600
 LOGGER = logging.getLogger(__name__)
 
 
@@ -68,6 +70,17 @@ def deliver_one(
             claimed["payload"],
             timeout_seconds=timeout_seconds,
         )
+        receipt = store.get_completion_receipt(
+            claimed["idempotency_key"]
+        )
+        if not receipt or (
+            receipt.get("state") != "completed"
+            or receipt.get("event_id") != claimed["event_id"]
+            or receipt.get("session_id") != claimed["session_id"]
+        ):
+            raise RuntimeError(
+                "Make returned success before completion receipt was confirmed"
+            )
     except Exception as exc:
         attempts = int(claimed["attempts"])
         terminal = attempts >= int(max_attempts)
@@ -99,7 +112,18 @@ def deliver_one(
 
 def run_forever(store, webhook_url, stop_event, **options):
     poll_seconds = float(options.pop("poll_seconds", DEFAULT_POLL_SECONDS))
+    purge_interval = max(1.0, float(options.pop(
+        "purge_interval_seconds", DEFAULT_PURGE_INTERVAL_SECONDS
+    )))
+    next_purge_at = 0.0
     while not stop_event.is_set():
+        current_tick = time.monotonic()
+        if current_tick >= next_purge_at:
+            try:
+                store.purge_expired()
+            except Exception:
+                LOGGER.exception("session retention cleanup failed; retrying")
+            next_purge_at = current_tick + purge_interval
         try:
             processed = deliver_one(store, webhook_url, **options)
         except Exception:
@@ -154,6 +178,10 @@ def main():
         retry_max_seconds=int(os.environ.get(
             "DELIVERY_RETRY_MAX_SECONDS",
             str(DEFAULT_RETRY_MAX_SECONDS),
+        )),
+        purge_interval_seconds=float(os.environ.get(
+            "DELIVERY_PURGE_INTERVAL_SECONDS",
+            str(DEFAULT_PURGE_INTERVAL_SECONDS),
         )),
     )
 

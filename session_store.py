@@ -114,6 +114,14 @@ class DurableSessionStore:
         CREATE INDEX IF NOT EXISTS completion_receipts_state_idx
         ON completion_receipts (state, lease_until)
         """
+        outbox_retention_index_sql = """
+        CREATE INDEX IF NOT EXISTS completion_outbox_retention_idx
+        ON completion_outbox (status, updated_at)
+        """
+        receipt_retention_index_sql = """
+        CREATE INDEX IF NOT EXISTS completion_receipts_retention_idx
+        ON completion_receipts (updated_at)
+        """
         with self._lock:
             with self._connection() as conn:
                 if self.backend == "postgres":
@@ -127,6 +135,8 @@ class DurableSessionStore:
                 conn.execute(index_sql)
                 conn.execute(outbox_index_sql)
                 conn.execute(receipt_index_sql)
+                conn.execute(outbox_retention_index_sql)
+                conn.execute(receipt_retention_index_sql)
                 conn.commit()
 
     def _expiry(self, session):
@@ -469,8 +479,10 @@ class DurableSessionStore:
         error=None, http_status=None
     ):
         placeholder = "?" if self.backend == "sqlite" else "%s"
+        suffix = "" if self.backend == "sqlite" else " FOR UPDATE"
         row = conn.execute(
-            f"SELECT data_json FROM trainer_sessions WHERE id={placeholder}",
+            f"SELECT data_json FROM trainer_sessions "
+            f"WHERE id={placeholder}{suffix}",
             (str(session_id),),
         ).fetchone()
         if not row:
@@ -506,9 +518,21 @@ class DurableSessionStore:
         delivered_at = str(delivered_at or iso_z(utc_now()))
         placeholder = "?" if self.backend == "sqlite" else "%s"
         select_sql = f"""
-        SELECT session_id, attempts FROM completion_outbox
+        SELECT session_id, attempts, event_id FROM completion_outbox
         WHERE idempotency_key={placeholder} AND status='delivering'
           AND claim_token={placeholder}
+        """
+        session_lock_suffix = (
+            "" if self.backend == "sqlite" else " FOR UPDATE"
+        )
+        session_lock_sql = f"""
+        SELECT id FROM trainer_sessions
+        WHERE id={placeholder}{session_lock_suffix}
+        """
+        receipt_sql = f"""
+        SELECT state FROM completion_receipts
+        WHERE idempotency_key={placeholder} AND event_id={placeholder}
+          AND session_id={placeholder}
         """
         update_sql = f"""
         UPDATE completion_outbox SET
@@ -524,6 +548,19 @@ class DurableSessionStore:
                     select_sql, (str(idempotency_key), str(claim_token))
                 ).fetchone()
                 if not row:
+                    return False
+                session_row = conn.execute(
+                    session_lock_sql, (str(row[0]),)
+                ).fetchone()
+                if not session_row:
+                    conn.rollback()
+                    return False
+                receipt = conn.execute(
+                    receipt_sql,
+                    (str(idempotency_key), str(row[2]), str(row[0])),
+                ).fetchone()
+                if not receipt or receipt[0] != "completed":
+                    conn.rollback()
                     return False
                 cursor = conn.execute(
                     update_sql,
@@ -567,6 +604,13 @@ class DurableSessionStore:
           AND claim_token={placeholder}
         """
         safe_error = str(error or "")[:500]
+        session_lock_suffix = (
+            "" if self.backend == "sqlite" else " FOR UPDATE"
+        )
+        session_lock_sql = f"""
+        SELECT id FROM trainer_sessions
+        WHERE id={placeholder}{session_lock_suffix}
+        """
         with self._lock:
             with self._connection() as conn:
                 row = conn.execute(
@@ -575,6 +619,12 @@ class DurableSessionStore:
                     )
                 ).fetchone()
                 if not row:
+                    return False
+                session_row = conn.execute(
+                    session_lock_sql, (str(row[0]),)
+                ).fetchone()
+                if not session_row:
+                    conn.rollback()
                     return False
                 cursor = conn.execute(
                     update_sql,
@@ -601,30 +651,39 @@ class DurableSessionStore:
     def fail_exhausted_completion_deliveries(
         self, max_attempts, stale_before=None, failed_at=None
     ):
-        """Move crashed claims that exhausted their budget to dead."""
+        """Move stale or reconfigured exhausted work to dead."""
         failed_at = str(failed_at or iso_z(utc_now()))
         stale_before = str(stale_before or iso_z(
             utc_now() - timedelta(seconds=60)
         ))
         placeholder = "?" if self.backend == "sqlite" else "%s"
-        suffix = "" if self.backend == "sqlite" else (
-            " FOR UPDATE SKIP LOCKED"
-        )
         select_sql = f"""
         SELECT idempotency_key, session_id, attempts
         FROM completion_outbox
-        WHERE status='delivering' AND attempts >= {placeholder}
-          AND claimed_at <= {placeholder}{suffix}
+        WHERE (
+            status='delivering' AND attempts >= {placeholder}
+            AND claimed_at <= {placeholder}
+        ) OR (
+            status IN ('pending','retry') AND attempts >= {placeholder}
+        )
         """
         update_sql = f"""
         UPDATE completion_outbox SET
             status='dead', claim_token=NULL, claimed_at=NULL,
             payload_json='{{}}', last_error={placeholder},
             updated_at={placeholder}
-        WHERE idempotency_key={placeholder} AND status='delivering'
+        WHERE idempotency_key={placeholder}
+          AND status IN ('delivering','pending','retry')
           AND attempts >= {placeholder}
         """
         error = "delivery attempts exhausted after worker interruption"
+        session_lock_suffix = (
+            "" if self.backend == "sqlite" else " FOR UPDATE"
+        )
+        session_lock_sql = f"""
+        SELECT id FROM trainer_sessions
+        WHERE id={placeholder}{session_lock_suffix}
+        """
         changed = 0
         with self._lock:
             with self._connection() as conn:
@@ -632,15 +691,19 @@ class DurableSessionStore:
                     if self.backend == "sqlite":
                         conn.execute("BEGIN IMMEDIATE")
                     rows = conn.execute(
-                        select_sql, (int(max_attempts), stale_before)
+                        select_sql, (
+                            int(max_attempts), stale_before,
+                            int(max_attempts),
+                        )
                     ).fetchall()
                     for row in rows:
+                        conn.execute(
+                            session_lock_sql, (str(row[1]),)
+                        ).fetchone()
                         cursor = conn.execute(
                             update_sql,
                             (
-                                error,
-                                failed_at,
-                                str(row[0]),
+                                error, failed_at, str(row[0]),
                                 int(max_attempts),
                             ),
                         )
@@ -906,6 +969,13 @@ class DurableSessionStore:
                     if self.backend == "sqlite":
                         conn.execute("BEGIN IMMEDIATE")
                     values = (str(session_id),)
+                    suffix = (
+                        "" if self.backend == "sqlite" else " FOR UPDATE"
+                    )
+                    conn.execute(
+                        f"SELECT id FROM trainer_sessions "
+                        f"WHERE id={placeholder}{suffix}", values
+                    ).fetchone()
                     conn.execute(
                         f"DELETE FROM completion_outbox "
                         f"WHERE session_id={placeholder}", values
@@ -933,6 +1003,14 @@ class DurableSessionStore:
                 try:
                     if self.backend == "sqlite":
                         conn.execute("BEGIN IMMEDIATE")
+                    lock_suffix = (
+                        "" if self.backend == "sqlite" else " FOR UPDATE"
+                    )
+                    conn.execute(
+                        f"SELECT id FROM trainer_sessions "
+                        f"WHERE expires_at <= {placeholder}{lock_suffix}",
+                        (now_value,),
+                    ).fetchall()
                     expired_session_sql = (
                         f"SELECT id FROM trainer_sessions "
                         f"WHERE expires_at <= {placeholder}"

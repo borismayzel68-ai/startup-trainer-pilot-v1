@@ -17,6 +17,7 @@ Private founder-facing pilot. Not an investment decision.
 - `DELIVERY_MAX_ATTEMPTS` (default: `8`)
 - `DELIVERY_RETRY_BASE_SECONDS` (default: `5`)
 - `DELIVERY_RETRY_MAX_SECONDS` (default: `300`)
+- `DELIVERY_PURGE_INTERVAL_SECONDS` (default: `3600`)
 - `WEBHOOK_TIMEOUT_SECONDS` (default: `10`)
 
 ## Session storage
@@ -57,15 +58,19 @@ The real Make path must be ordered as follows:
 4. After the last downstream action succeeds, HTTP calls
    `/api/completion-events/complete` with the original identifiers and the
    `attempt_token`.
-5. `status=duplicate` ends the route successfully without downstream actions.
-6. Any other gate or completion response is an error, so Make returns an error
+5. Every changing downstream action creates or updates its record by the
+   deterministic `event_id`; it must never append an uncontrolled duplicate.
+6. `status=duplicate` ends the route successfully without downstream actions.
+7. Any other gate or completion response is an error, so Make returns an error
    to the worker and the event remains eligible for retry.
-7. Make sends a successful webhook response only after step 4 succeeds.
+8. Make sends a successful webhook response only after step 4 succeeds.
 
 This gives at-least-once transport without silent loss: a failed downstream route
 is retried after its lease expires, while a completed route returns `duplicate`.
 Downstream actions must also use the deterministic event ID as their idempotency
-key when the target supports it. Literal network exactly-once is not claimed. A9 is not
+key. The worker accepts a 2xx Make response only when the same database receipt
+is already `completed`; an early default `200 Accepted` remains retryable.
+Literal network exactly-once is not claimed. A9 is not
 complete and this branch must not be merged or deployed until that Make route and
 the Render worker are wired and the end-to-end restart/retry test passes.
 
