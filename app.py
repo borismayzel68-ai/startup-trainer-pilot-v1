@@ -13,10 +13,16 @@ from question_engine_v2 import (
     coverage_summary, explicit_no_data,
 )
 from session_store import DurableSessionStore
+from completion_event import build_completion_payload, post_completion_json
 
 app = Flask(__name__)
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 MODEL = os.environ.get("OPENAI_MODEL", "gpt-5.6")
+TRAINER_VERSION = "s1-ext-pilot-v1.4-completion-event"
+TRAINER_EVENT_WEBHOOK = os.environ.get("TRAINER_EVENT_WEBHOOK", "").strip()
+WEBHOOK_TIMEOUT_SECONDS = float(
+    os.environ.get("WEBHOOK_TIMEOUT_SECONDS", "10")
+)
 INVITE_CODE = os.environ.get("INVITE_CODE", "PILOT-S1-EXT-001")
 ADMIN_KEY = os.environ.get("ADMIN_KEY", "change-me")
 SESSION_RETENTION_DAYS = int(os.environ.get("SESSION_RETENTION_DAYS", "30"))
@@ -190,6 +196,50 @@ QA history:
         "disclaimer":"\u042d\u0442\u043e \u043e\u0446\u0435\u043d\u043a\u0430 \u0433\u043e\u0442\u043e\u0432\u043d\u043e\u0441\u0442\u0438 \u043f\u0430\u043a\u0435\u0442\u0430 \u043a \u0440\u0430\u0437\u0433\u043e\u0432\u043e\u0440\u0443 \u0441 \u0438\u043d\u0432\u0435\u0441\u0442\u043e\u0440\u043e\u043c, \u0430 \u043d\u0435 \u0438\u043d\u0432\u0435\u0441\u0442\u0438\u0446\u0438\u043e\u043d\u043d\u0430\u044f \u0440\u0435\u043a\u043e\u043c\u0435\u043d\u0434\u0430\u0446\u0438\u044f Artgen \u0438 \u043d\u0435 \u043e\u0431\u0435\u0449\u0430\u043d\u0438\u0435 \u0438\u043d\u0432\u0435\u0441\u0442\u0438\u0446\u0438\u0439."
     }
 
+
+def emit_completion_event(s):
+    """Emit the A8 completion event at most once per completed session."""
+    if s.get("event_status") != "not_emitted":
+        return
+
+    s["completed_at"] = s.get("completed_at") or now()
+
+    if not TRAINER_EVENT_WEBHOOK:
+        s["event_status"] = "not_configured"
+        s["updated_at"] = now()
+        SESSIONS[s["id"]] = s
+        return
+
+    payload = build_completion_payload(
+        s,
+        trainer_version=TRAINER_VERSION,
+        completed_at=s["completed_at"],
+    )
+    s["event_status"] = "emitting"
+    s["event_attempts"] = int(s.get("event_attempts") or 0) + 1
+    s["updated_at"] = now()
+    SESSIONS[s["id"]] = s
+
+    try:
+        status = post_completion_json(
+            TRAINER_EVENT_WEBHOOK,
+            payload,
+            timeout_seconds=WEBHOOK_TIMEOUT_SECONDS,
+        )
+    except Exception as exc:
+        s["event_status"] = "failed"
+        s["event_error"] = f"{type(exc).__name__}: {exc}"[:500]
+        s["event_failed_at"] = now()
+    else:
+        s["event_status"] = "sent"
+        s["event_http_status"] = status
+        s["event_sent_at"] = now()
+        s.pop("event_error", None)
+
+    s["updated_at"] = now()
+    SESSIONS[s["id"]] = s
+
+
 @app.get("/")
 def home():
     return render_template("index.html")
@@ -198,7 +248,7 @@ def home():
 def health():
     return jsonify({
         "ok":True,
-        "version":"s1-ext-pilot-v1.3-durable-state",
+        "version":TRAINER_VERSION,
         "model":MODEL,
         "storage":SESSIONS.backend,
     })
@@ -272,6 +322,7 @@ def start():
         "target_markets":target_markets,
         "intended_use":intended_use[:4000],
         "product_class":product_class,
+        "model":MODEL,
         "stage":str(request.form.get("stage") or "").strip()[:300],
         "user":str(request.form.get("user") or "").strip()[:500],
         "buyer":str(request.form.get("buyer") or "").strip()[:500],
@@ -295,6 +346,7 @@ def start():
         "source_coverage_scanned":False,
         "stop_reason":None,
         "event_status":"not_emitted",
+        "event_attempts":0,
         "done":False,
         "report":None,
         "created_at":now(),
@@ -310,6 +362,8 @@ def start():
 def answer(sid):
     s=SESSIONS.get(sid)
     if not s: return jsonify({"error":"\u0421\u0435\u0441\u0441\u0438\u044f \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d\u0430"}),404
+    if s.get("done"):
+        return jsonify({k:v for k,v in s.items() if k!="deck_text"})
     ans=str((request.json or {}).get("answer") or "").strip()
     if not ans: return jsonify({"error":"\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u043e\u0442\u0432\u0435\u0442"}),400
     founder_stop=bool(re.match(r"^(\u0441\u0442\u043e\u043f|stop|\u0445\u0432\u0430\u0442\u0438\u0442|\u0437\u0430\u043a\u043e\u043d\u0447\u0438\u0442\u044c|\u0433\u043e\u0442\u043e\u0432\u043e)$",ans,re.I))
@@ -343,6 +397,8 @@ def answer(sid):
             s["report"]=final_report(s)
     s["updated_at"]=now()
     SESSIONS[sid]=s
+    if s["done"] and s.get("event_status") == "not_emitted":
+        emit_completion_event(s)
     return jsonify({k:v for k,v in s.items() if k!="deck_text"})
 
 @app.get("/api/session/<sid>")
