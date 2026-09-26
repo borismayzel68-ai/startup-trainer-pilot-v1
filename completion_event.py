@@ -41,6 +41,11 @@ _PATIENT_TEXT = re.compile(
     r"(фио|идентификатор|дата рождения|снилс)\s+пациент",
     re.IGNORECASE,
 )
+_SECRET_TEXT = re.compile(
+    r"\bsk-(?:proj-)?[A-Za-z0-9_-]{12,}\b|"
+    r"\bBearer\s+[A-Za-z0-9._~+/=-]{12,}",
+    re.IGNORECASE,
+)
 
 
 def _safe_value(value):
@@ -54,6 +59,8 @@ def _safe_value(value):
         return [_safe_value(item) for item in value]
     if isinstance(value, str) and _PATIENT_TEXT.search(value):
         return "[REDACTED_PATIENT_LEVEL_DATA]"
+    if isinstance(value, str) and _SECRET_TEXT.search(value):
+        return "[REDACTED_SECRET]"
     return value
 
 

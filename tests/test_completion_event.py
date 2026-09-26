@@ -42,7 +42,10 @@ class CompletionPayloadTests(unittest.TestCase):
                 "api_key": "must-not-leak",
                 "analysis": {"status": "fact", "quote": "MRN 12345"},
             }],
-            "report": sample_report(),
+            "report": {
+                **sample_report(),
+                "note": "OpenAI key sk-proj-abcdefghijklmnop",
+            },
             "coverage": {"patient_id": "must-not-leak"},
             "selected_modules": ["regulatory"],
             "routing_steps": ["jurisdiction"],
@@ -64,7 +67,9 @@ class CompletionPayloadTests(unittest.TestCase):
         serialized = json.dumps(payload, ensure_ascii=False)
         self.assertNotIn("must-not-leak", serialized)
         self.assertNotIn("MRN 12345", serialized)
+        self.assertNotIn("sk-proj-abcdefghijklmnop", serialized)
         self.assertIn("REDACTED_PATIENT_LEVEL_DATA", serialized)
+        self.assertIn("REDACTED_SECRET", serialized)
         self.assertFalse(
             payload["privacy_flags"]["patient_level_data_included"]
         )
