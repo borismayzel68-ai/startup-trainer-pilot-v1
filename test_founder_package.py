@@ -1,6 +1,7 @@
 import unittest, uuid, copy
 from founder_package import build_package, render_markdown, plan_ledger_write, verify_ledger, LEDGER_TABS
 from question_engine_v2 import seed_source_coverage, record_answer
+from session_store import DurableSessionStore
 
 class FounderPackageRegression(unittest.TestCase):
     def setUp(self):
@@ -39,5 +40,21 @@ class FounderPackageRegression(unittest.TestCase):
         self.assertEqual(self.s['coverage']['traction.traction_metrics']['status'],'weak')
         record_answer(self.s,{'module':'traction','slot':'retention'},'Есть продления',{'status':'fact'})
         self.assertEqual(self.s['coverage']['traction.retention']['status'],'weak')
+
+    def test_terminal_delivery_requires_verified_completed_receipt(self):
+        db=DurableSessionStore('sqlite:///:memory:')
+        self.s['event_status']='not_emitted'
+        db.save(self.s)
+        db.enqueue_completion_event(self.s,{'idempotency_key':self.s['idempotency_key'],'event_id':self.s['event_id'],'session_id':self.s['id']})
+        with db._connection() as conn:
+            conn.execute("UPDATE completion_outbox SET status='dead'")
+            conn.execute("INSERT INTO completion_receipts (idempotency_key,event_id,session_id,state,accepted_at,completed_at,updated_at) VALUES (?,?,?,'completed',?,?,?)",(self.s['idempotency_key'],self.s['event_id'],self.s['id'],self.s['completed_at'],self.s['completed_at'],self.s['completed_at']))
+            conn.commit()
+        self.assertFalse(db.reconcile_verified_terminal_delivery(self.s['idempotency_key'],self.s['event_id'],self.s['id']))
+        current=db.get(self.s['id']);current['package_ledger_verified_event']=self.s['event_id'];db.save(current)
+        self.assertTrue(db.reconcile_verified_terminal_delivery(self.s['idempotency_key'],self.s['event_id'],self.s['id']))
+        self.assertEqual(db.get_completion_outbox(self.s['idempotency_key'])['status'],'delivered')
+        self.assertEqual(db.get(self.s['id'])['event_status'],'sent')
+        self.assertFalse(db.reconcile_verified_terminal_delivery(self.s['idempotency_key'],self.s['event_id'],self.s['id']))
 
 if __name__=='__main__':unittest.main()
