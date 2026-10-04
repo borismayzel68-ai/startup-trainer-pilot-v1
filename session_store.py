@@ -915,6 +915,27 @@ class DurableSessionStore:
                     conn.rollback()
                     raise
 
+    def reconcile_verified_terminal_delivery(self, idempotency_key, event_id, session_id):
+        """Recover an exhausted transport only after verified downstream completion."""
+        p = "?" if self.backend == "sqlite" else "%s"
+        with self._lock:
+            with self._connection() as conn:
+                if self.backend == "sqlite":
+                    conn.execute("BEGIN IMMEDIATE")
+                receipt = conn.execute(f"SELECT state, completed_at FROM completion_receipts WHERE idempotency_key={p} AND event_id={p} AND session_id={p}", (idempotency_key, event_id, session_id)).fetchone()
+                session = conn.execute(f"SELECT data_json FROM trainer_sessions WHERE id={p}", (session_id,)).fetchone()
+                outbox = conn.execute(f"SELECT status, attempts FROM completion_outbox WHERE idempotency_key={p} AND event_id={p} AND session_id={p}", (idempotency_key, event_id, session_id)).fetchone()
+                if not receipt or receipt[0] != "completed" or not session or json.loads(session[0]).get("package_ledger_verified_event") != event_id or not outbox or outbox[0] != "dead":
+                    conn.rollback()
+                    return False
+                cursor = conn.execute(f"UPDATE completion_outbox SET status='delivered', delivered_at={p}, updated_at={p}, http_status=200, last_error=NULL, claim_token=NULL, payload_json='{{}}' WHERE idempotency_key={p} AND status='dead'", (receipt[1], receipt[1], idempotency_key))
+                if cursor.rowcount != 1:
+                    conn.rollback()
+                    return False
+                self._update_session_delivery_state(conn, session_id, "sent", outbox[1], receipt[1], http_status=200)
+                conn.commit()
+                return True
+
     def get_completion_receipt(self, idempotency_key):
         placeholder = "?" if self.backend == "sqlite" else "%s"
         sql = f"""
