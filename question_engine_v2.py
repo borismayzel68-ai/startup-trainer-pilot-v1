@@ -134,6 +134,8 @@ def seed_source_coverage(session, items, corpus):
             continue
         if quote.lower() not in corpus_lower:
             continue
+        if status == "fact":
+            status = "weak"
         row = coverage[key]
         row.update({
             "assessed": True,
@@ -169,6 +171,8 @@ def record_answer(session, question, answer, analysis):
         return
     status = str((analysis or {}).get("status") or "weak")
     if status not in ALLOWED_STATUS:
+        status = "weak"
+    if status == "fact":
         status = "weak"
     na_reason = explicit_not_applicable(answer)
     row["assessed"] = True
