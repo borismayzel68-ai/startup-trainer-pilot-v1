@@ -134,7 +134,7 @@ function list(title,arr){return '<h3>'+title+'</h3><ul>'+(arr||[]).map(x=>'<li>'
 function showReport(){
  document.getElementById('chat').classList.add('hidden'); document.getElementById('report').classList.remove('hidden');
  const r=state.report||{}; let h='<p><b>'+esc(r.project_id||state.project_id)+' · '+esc(r.jurisdiction||state.jurisdiction)+' · '+esc(r.product_class||state.product_class)+'</b></p><h3>Тезис</h3><p>'+esc(r.thesis)+'</p>';
- h+=list('Подтверждено',r.facts)+list('Гипотезы',r.hypotheses)+list('Слабые доказательства',r.weak)+list('Недостающие доказательства',r.missing);
+ h+=list('Подтверждено документами — E3',[])+ '<p>Первичные документы не проверены; подтверждённых фактов нет.</p>'+list('Заявления основателя — E1, не проверено',(r.claims||[]).concat(r.facts||[]))+list('Гипотезы',r.hypotheses)+list('Слабые доказательства',r.weak)+list('Недостающие доказательства',r.missing);
  h+=list('Главные пробелы',r.gaps)+list('Следующие проверки',r.next_tests);
  h+='<h3>Итог</h3><p><b>'+esc(r.recommendation)+'</b></p>';
  if(r.comparison) h+='<h3>Сравнение гипотез</h3><pre>'+esc(JSON.stringify(r.comparison,null,2))+'</pre>';
