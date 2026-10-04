@@ -427,6 +427,7 @@ def complete_completion_event():
         completed_at=now(),
     )
     if result["status"] == "completed":
+        SESSIONS.reconcile_verified_terminal_delivery(identity["idempotency_key"], identity["event_id"], identity["session_id"])
         return jsonify({"ok":True, **result}),200
     if result["status"] == "missing":
         return jsonify({
