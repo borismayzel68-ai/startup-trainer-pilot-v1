@@ -138,6 +138,9 @@ def build_completion_payload(session, trainer_version, completed_at):
         "questions_answers": questions_answers,
         "evidence_delta": _evidence_delta(questions_answers),
         "founder_report": founder_report,
+        "package_version": (session.get("founder_package") or {}).get("package_version"),
+        "report_url": (session.get("founder_package") or {}).get("report_url"),
+        "raw_json_url": (session.get("founder_package") or {}).get("raw_json_url"),
         "internal_delta": {
             "coverage_slot_count": (
                 len(coverage) if isinstance(coverage, dict) else 0
