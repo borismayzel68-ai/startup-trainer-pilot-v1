@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><title>Internal Analyst Brief — {{ r.submission.project_name }}</title>
+<style>{% include "_base.css" %}
+{% include "_internal.css" %}</style></head>
+<body>
+{% set c = r.classification %}{% set s = r.scores %}{% set y = r.synthesis %}
+<div class="head">
+  <div><div class="brand">{{ fund_name }} · INTERNAL · CONFIDENTIAL</div>
+    <h1>Internal Analyst Brief</h1>
+    <div class="muted">{{ r.submission.project_name }}{% if r.submission.project_id %} · {{ r.submission.project_id }}{% endif %} · {{ c.sector }} · {{ c.stage }} · {{ r.submission.founder_email }}</div>
+    <div class="muted small">Маршрут: {{ r.routing.jurisdiction or "юрисдикция не распознана" }}{% if r.routing.active_markets %} ({{ r.routing.active_markets|join(", ") }}){% endif %} · {{ r.routing.product_class or "класс продукта не распознан" }} · модулей {{ r.routing.modules|length }}</div></div>
+  <div class="muted small">job {{ r.job_id }}<br>{{ r.created_at.strftime("%d.%m.%Y %H:%M") }} UTC<br>model {{ r.model }} · method {{ r.methodology_version }}</div>
+</div>
+
+<div class="kpi">
+  <div><div class="l">Машинный вердикт</div><span class="verdict v-{{ s.verdict }}">{{ s.verdict }}</span>
+    <div class="small muted" style="margin-top:1.5mm">рекомендация; финал — аналитик</div></div>
+  <div><div class="l">Readiness</div><div class="v">{{ s.readiness }}/100</div></div>
+  <div><div class="l">Данные</div><div class="small">
+    <span class="cat cat-FACT">FACT {{ counts.FACT }}</span> ·
+    <span class="cat cat-FOUNDER_CLAIM">CLAIM {{ counts.FOUNDER_CLAIM }}</span><br>
+    <span class="cat cat-CONFLICT">CONFLICT {{ counts.CONFLICT }}</span> ·
+    <span class="cat cat-UNKNOWN">UNKNOWN {{ counts.UNKNOWN }} + пробелов {{ s.critical_gaps|length }} крит.</span></div></div>
+</div>
+
+<h2>Экспресс-выжимка</h2>
+<p>{{ y.executive_summary }}</p>
+<p class="small"><b>Компания:</b> {{ c.company_summary }}</p>
+<p class="small"><b>Тезис фонда:</b> {% if c.thesis_fit.fit %}соответствует{% else %}<span class="cat-CONFLICT">НЕ соответствует</span>{% endif %} — {{ c.thesis_fit.reason }}</p>
+
+<h3>Основания вердикта (детерминированные)</h3>
+<ul class="small">{% for g in s.verdict_gates %}<li>{{ g }}</li>{% endfor %}</ul>
+<p class="small"><b>Комментарий модели:</b> {{ y.verdict_rationale }}</p>
+<div class="card small"><b>Ключевое условие переоценки:</b> {{ y.revaluation_condition }}</div>
+<div class="card warn small"><b>До NEXT вручную:</b> KYC/санкционный скрининг фаундеров, бенефициаров и юрисдикции холдинга; подлинность документов уровня E3; звонок минимум одному клиенту из заявленных. Машина этого не делает.</div>
+
+<h2>Скоринг по блокам Deal Genome</h2>
+<table>
+  <tr><th>Блок</th><th>Вес</th><th>Балл</th><th>Пункты</th></tr>
+  {% for b in s.blocks %}
+  <tr><td><b>{{ b.label }}</b></td><td>{{ (b.weight*100)|int }}%</td><td>{{ (b.score*100)|int }}%</td>
+    <td class="small">{% for it in b["items"] %}{{ it.label }}: <span class="cat cat-{{ it.status.value }}">{{ level_code[it.best_level] if it.status.value != "UNKNOWN" else "пробел" }}{% if it.status.value == "CONFLICT" %} конфликт{% endif %}</span>{% if it.critical %}*{% endif %}{% if not loop.last %}; {% endif %}{% endfor %}</td></tr>
+  {% endfor %}
+</table>
+<p class="small muted">* критичный пункт. Критичные пробелы: {{ s.critical_gaps|join(", ") or "нет" }}. Критичные конфликты: {{ s.critical_conflicts|join(", ") or "нет" }}.</p>
+
+<h2>Data Audit Table</h2>
+<table class="small">
+  <tr><th>ID</th><th style="width:33%">Утверждение</th><th>Кат.</th><th>E</th><th>Источник</th><th style="width:25%">Проверка</th></tr>
+  {% for cl in c.claims %}
+  <tr>
+    <td>{{ cl.id }}</td>
+    <td>{{ cl.statement }}{% if cl.conflicts_with %}<br><span class="cat-CONFLICT">↔ {{ cl.conflicts_with|join(", ") }}</span>{% endif %}
+      {% if cl.machine_adjusted %}<br><span class="muted">правила: {{ cl.machine_adjusted|join("; ") }}</span>{% endif %}</td>
+    <td><span class="cat cat-{{ cl.category.value }}">{{ cl.category.value }}</span></td>
+    <td><span class="lvl l{{ cl.evidence_level }}">E{{ cl.evidence_level }}</span></td>
+    <td>{{ cl.sources|join(", ") }}<br><span class="muted">{{ cl.source_ref }}</span></td>
+    <td>{{ cl.verification_step }}</td>
+  </tr>
+  {% endfor %}
+</table>
+
+<h2>Дебат: Марк (Bull) vs Анна (Bear)</h2>
+<div class="cols">
+  <div>
+    <h3>Марк — Bull Case</h3>
+    <p class="small"><i>{{ r.bull.thesis }}</i></p>
+    <ul class="small">{% for a in r.bull.arguments %}<li>{{ a.point }} <span class="muted">[{{ a.claim_ids|join(", ") }}]</span>{% if a.unsupported %} <span class="unsupported">без валидных ссылок</span>{% endif %}</li>{% endfor %}</ul>
+    <b class="small">Что должно быть правдой:</b>
+    <ul class="small">{% for w in r.bull.what_must_be_true %}<li>{{ w }}</li>{% endfor %}</ul>
+  </div>
+  <div>
+    <h3>Анна — Bear Case</h3>
+    <p class="small"><i>{{ r.bear.thesis }}</i></p>
+    <ul class="small">{% for a in r.bear.arguments %}<li><b>[{{ a.severity or "—" }}]</b> {{ a.point }} <span class="muted">[{{ a.claim_ids|join(", ") }}]</span>{% if a.unsupported %} <span class="unsupported">без валидных ссылок</span>{% endif %}</li>{% endfor %}</ul>
+    <b class="small">Kill-вопросы фаундеру:</b>
+    <ul class="small">{% for q in r.bear.kill_questions %}<li>{{ q }}</li>{% endfor %}</ul>
+  </div>
+</div>
+
+<h2>Критические барьеры и Proof Points</h2>
+{% for b in y.critical_barriers %}<div class="card warn small"><b>{{ b.barrier }}</b> <span class="tag">{{ b.block }}</span><br>{{ b.why_it_matters }}</div>{% endfor %}
+<table class="small">
+  <tr><th>Proof Point</th><th>E</th><th>Как получить</th><th>Влияние на оценку</th></tr>
+  {% for p in y.proof_points %}
+  <tr><td>{{ p.proof_point }}<br><span class="muted">{{ p.claim_ids|join(", ") }}</span></td>
+      <td>E{{ p.current_level }}→E{{ p.target_level }}</td><td>{{ p.how_to_obtain }}</td><td>{{ p.valuation_impact }}</td></tr>
+  {% endfor %}
+</table>
+
+{% set warns = [] %}{% for d in r.docs %}{% for w in d.warnings %}{% set _ = warns.append(d.name ~ ": " ~ w) %}{% endfor %}{% endfor %}
+<h2>Качество входных данных</h2>
+<ul class="small">
+  {% for d in r.docs %}<li>{{ d.kind }} · {{ d.name }} · {% if d.ok %}обработан{% if d.pages %}, {{ d.pages }} стр.{% endif %}{% if d.metrics %}, метрики: {{ d.metrics.keys()|join(", ") }}{% endif %}{% else %}<span class="cat-CONFLICT">НЕ обработан</span>{% endif %}</li>{% else %}<li>Файлы не загружены</li>{% endfor %}
+  {% for w in warns %}<li class="muted">{{ w }}</li>{% endfor %}
+</ul>
+
+<div class="footer-note">Внутренний документ {{ fund_name }}. Не пересылать фаундеру. Машинный вердикт — рекомендация, решение принимает аналитик.</div>
+</body></html>

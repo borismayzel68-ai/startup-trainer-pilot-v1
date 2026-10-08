@@ -14,6 +14,7 @@ from question_engine_v2 import (
 )
 from session_store import DurableSessionStore
 from completion_event import build_completion_payload, post_completion_json
+from s1_intake.main import init_s1
 
 app = Flask(__name__)
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
@@ -35,6 +36,9 @@ SESSIONS = DurableSessionStore(
     SESSION_DATABASE_URL,
     retention_days=SESSION_RETENTION_DAYS,
 )
+# S1 · БП-01: приём заявок с Tilda → Readiness Pack (/s1/*). Без S1_* переменных вебхук отвечает 503,
+# тренажёр работает как раньше.
+init_s1(app)
 ALLOWED_STATUS = {"fact","hypothesis","missing","weak"}
 ALLOWED_REC = {"not_ready","iterate","ready_for_investor_conversation"}
 

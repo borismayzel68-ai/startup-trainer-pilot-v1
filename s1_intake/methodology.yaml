@@ -1,0 +1,184 @@
+# =============================================================================
+# S1 · БП-01 «Стартап до раунда» — методология Readiness Pack
+#
+# Чек-лист НЕ задаётся здесь: он строится из канона репозитория —
+# routing_v2.route() выбирает модули по юрисдикции и классу продукта,
+# question_engine_v2.SLOT_CATALOG даёт слоты модулей. Здесь только:
+#   - группировка модулей в 7 блоков Deal Genome и их веса;
+#   - короткие подписи слотов для отчётов;
+#   - доп. слоты «готовности к раунду», которых нет в тренажёре;
+#   - критичные слоты (гейт вердикта), шкала E0–E4, пороги, поля формы Tilda.
+#
+# ДОПУЩЕНИЯ, требующие утверждения: названия/веса 7 блоков, маппинг модулей в
+# блоки, список критичных слотов, пороги вердикта.
+# =============================================================================
+
+version: "0.2-draft"
+output_language: "ru"
+
+thesis:
+  description: >
+    Технологические стартапы ранних стадий (Seed / Round A): Biotech, MedTech, IT.
+  out_of_thesis_is_pass: true
+
+# --- Шкала доказательности (канон PROJECT CONTEXT, раздел 2) -----------------
+evidence_scale:
+  0: {code: E0, label: "Founder claim", description: "Заявление основателя без документального подтверждения: слова в анкете, невалидированные метрики."}
+  1: {code: E1, label: "Unverified", description: "Прогнозы и расчёты без явных формул и источников (питч-дек, захардкоженная модель)."}
+  2: {code: E2, label: "Self-reported", description: "Данные управленческого учёта, скрины кабинетов, фактические цифры в финмодели с формулами."}
+  3: {code: E3, label: "Fact (verified)", description: "Подтверждённые договоры, первичные акты, банковские выписки — загружены как доказательство."}
+  4: {code: E4, label: "Audited fact", description: "Аудированная отчётность, записи в госреестрах (ЕГРЮЛ, ФИПС). Машина не присваивает: только после проверки аналитиком в самом реестре."}
+
+evidence_value: {0: 0.10, 1: 0.25, 2: 0.50, 3: 0.85, 4: 1.00}
+
+# Потолок уровня по источнику — главный предохранитель от «щедрой» модели и
+# prompt-injection: самоотчёт фаундера не может стать фактом.
+source_level_cap:
+  form: 0
+  deck: 1
+  model: 2      # финмодель без формул -> E1 (см. model_min_formulas)
+  evidence: 3   # документ третьей стороны; подлинность машина не проверяет
+model_min_formulas: 10
+fact_min_level: 3
+
+# --- 7 блоков Deal Genome: группировка модулей канона -------------------------
+blocks:
+  - key: team
+    label: "Команда и управление"
+    weight: 0.15
+    modules: [team_governance]
+  - key: problem_market
+    label: "Проблема, клиент и рынок"
+    weight: 0.15
+    modules: [problem_unmet_need, customer_buyer_payer, market]
+  - key: product
+    label: "Продукт, технология и защита"
+    weight: 0.15
+    modules: [product_intended_use, competition_moat, science_mechanism, clinical,
+              diagnostics_validity, cmc_manufacturing, ai_data_cybersecurity]
+  - key: traction
+    label: "Тракшн и пилоты"
+    weight: 0.20
+    modules: [traction, pilots_workflow]
+  - key: business_model
+    label: "Бизнес-модель и доступ к рынку"
+    weight: 0.10
+    modules: [business_model, market_access_procurement_reimbursement]
+  - key: finance_round
+    label: "Финансы и раунд"
+    weight: 0.15
+    modules: [financing_milestone, round_readiness]
+  - key: risks_legal
+    label: "Регуляторика, IP и юрструктура"
+    weight: 0.10
+    modules: [regulatory, ip_fto, legal_readiness]
+
+# Слоты готовности к раунду, которых нет в тренажёре (добавляются всегда).
+extra_modules:
+  round_readiness:
+    - {slot: burn_runway, why: "Burn rate, остаток денег и runway в месяцах."}
+    - {slot: round_terms, why: "Размер чека/раунда, оценка, инструмент; сверка анкета ↔ финмодель."}
+  legal_readiness:
+    - {slot: legal_entity, why: "Юрлицо (ЕГРЮЛ), холдинг, кэп-тейбл, бенефициары."}
+
+# Короткие подписи для отчётов (fallback — поле why из SLOT_CATALOG).
+slot_labels:
+  team_governance.critical_roles: "Ключевые компетенции и пробелы в команде"
+  team_governance.ownership: "Доли, права на разработки, управление"
+  problem_unmet_need.target_problem: "Проблема, пользователь, контекст"
+  problem_unmet_need.pain_evidence: "Первичные данные о боли клиента"
+  customer_buyer_payer.roles: "Пользователь / покупатель / плательщик"
+  customer_buyer_payer.purchase_process: "Процесс и критерии закупки"
+  market.beachhead: "Первый сегмент (beachhead)"
+  market.market_method: "Расчёт рынка снизу вверх"
+  product_intended_use.intended_use: "Назначение продукта"
+  product_intended_use.workflow_boundary: "Границы функций продукта"
+  competition_moat.alternatives: "Альтернативы и причины переключения"
+  competition_moat.defensibility: "Трудновоспроизводимое преимущество (moat)"
+  science_mechanism.mechanism: "Механизм действия"
+  science_mechanism.translational_evidence: "Трансляционные данные"
+  clinical.clinical_plan: "Клинический план"
+  clinical.endpoints: "Конечные точки и критерии успеха"
+  diagnostics_validity.analytical_validity: "Аналитическая валидность"
+  diagnostics_validity.clinical_validity: "Клиническая валидность"
+  cmc_manufacturing.process_control: "Контроль производства и качества"
+  cmc_manufacturing.scale_quality: "Масштабирование производства"
+  ai_data_cybersecurity.data_provenance: "Происхождение и права на данные"
+  ai_data_cybersecurity.validation_monitoring: "Валидация модели и мониторинг"
+  ai_data_cybersecurity.privacy_security: "Приватность и безопасность данных"
+  traction.traction_metrics: "Измеримые результаты у клиентов"
+  traction.retention: "Удержание и повторное использование"
+  pilots_workflow.pilot_design: "Дизайн пилота и критерии успеха"
+  pilots_workflow.workflow_integration: "Встраивание в процесс клиента"
+  business_model.pricing: "Модель монетизации и цена"
+  business_model.unit_economics: "Юнит-экономика (выручка, маржа, CAC, churn)"
+  market_access_procurement_reimbursement.procurement: "Путь закупки"
+  market_access_procurement_reimbursement.reimbursement: "Кто оплачивает / возмещение"
+  financing_milestone.funding_need: "Объём и срок финансирования"
+  financing_milestone.milestone_plan: "Проверяемая веха на эти деньги"
+  round_readiness.burn_runway: "Burn rate и runway"
+  round_readiness.round_terms: "Размер чека, оценка, инструмент"
+  regulatory.classification_route: "Регуляторный статус и маршрут"
+  regulatory.submission_evidence: "Пакет доказательств для регулятора"
+  ip_fto.ip_position: "Права на IP (патенты, ФИПС)"
+  ip_fto.fto: "Анализ свободы действий (FTO)"
+  legal_readiness.legal_entity: "Юрлицо (ЕГРЮЛ), холдинг, кэп-тейбл"
+
+# Критичные слоты: пробел/конфликт блокирует NEXT. Учитываются, только если
+# модуль выбран маршрутизацией (ip_fto, regulatory — не у всех).
+critical_slots:
+  - problem_unmet_need.pain_evidence
+  - team_governance.critical_roles
+  - team_governance.ownership
+  - traction.traction_metrics
+  - business_model.unit_economics
+  - financing_milestone.funding_need
+  - financing_milestone.milestone_plan
+  - round_readiness.burn_runway
+  - round_readiness.round_terms
+  - legal_readiness.legal_entity
+  - ip_fto.ip_position
+  - regulatory.classification_route
+
+# --- Скоринг и вердикт --------------------------------------------------------
+scoring:
+  critical_item_weight: 2.0
+  # PASS = вне тезиса ИЛИ пустая заявка. Порог по readiness НЕ используется:
+  # readiness зависит от размера чек-листа (маршрут MEDICAL_DEVICE даёт 36 слотов,
+  # и нормальная seed-заявка набирает ~10). Низкая доказательность до раунда — HOLD.
+  pass_min_substantive_claims: 3
+  next_min: 45
+  max_critical_gaps_for_next: 1
+
+# --- Поля формы Tilda («Имя переменной» в настройках поля) --------------------
+form:
+  contact_fields:
+    project_name: company
+    founder_name: name
+    founder_email: email
+    consent: consent
+    project_id: project_id        # опционально: VC-ID, если уже присвоен фондом
+  routing_fields:                 # те же значения, что в тренажёре (routing_v2)
+    jurisdiction: jurisdiction    # RF | EAEU | EU | US | GCC | MULTI (или РФ, ЕАЭС…)
+    target_markets: target_markets
+    product_class: product_class  # THERAPEUTIC | MEDICAL_DEVICE | SOFTWARE_POTENTIAL_MD | IVD | LAB_SERVICE | WELLNESS_INFORMATION | RESEARCH_ONLY
+    intended_use: intended_use
+  file_fields:
+    pitch_deck: pitch_deck        # PDF
+    fin_model: fin_model          # XLSX
+    evidence: evidence_files      # опц.: договоры, акты, выписки, LOI (можно несколько)
+  questions:
+    - {name: q_team, block: team, label: "Кто фаундеры, их релевантный опыт, кто работает full-time, как распределены доли?"}
+    - {name: q_hiring, block: team, label: "Каких ключевых людей не хватает и когда вы их наймёте?"}
+    - {name: q_problem, block: problem_market, label: "Какую проблему решаете и как подтвердили, что клиенты за неё платят?"}
+    - {name: q_market, block: problem_market, label: "Кто покупатель и какой объём рынка вы считаете реалистичным (bottom-up)?"}
+    - {name: q_product, block: product, label: "На какой стадии продукт и чем он технологически отличается от альтернатив?"}
+    - {name: q_ip, block: risks_legal, label: "Кому принадлежат IP, код и данные? Есть ли патенты/заявки?"}
+    - {name: q_traction, block: traction, label: "Текущая выручка / пользователи и динамика за 6 месяцев?"}
+    - {name: q_customers, block: traction, label: "Какие пилоты, LOI, договоры есть? С кем, на какую сумму?"}
+    - {name: q_model, block: business_model, label: "Как зарабатываете, сколько стоит привлечь клиента, какова маржа и отток?"}
+    - {name: q_burn, block: finance_round, label: "Ежемесячный burn и runway на сегодня?"}
+    - {name: q_round, block: finance_round, label: "Сколько привлекаете, на каких условиях (оценка, инструмент), кто уже в раунде?"}
+    - {name: q_use_of_funds, block: finance_round, label: "На что пойдут деньги и какой проверяемой вехи достигнете?"}
+    - {name: q_legal, block: risks_legal, label: "Юрлицо, холдинг, структура владения?"}
+    - {name: q_risks, block: risks_legal, label: "Регуляторный путь и три главных риска, как вы их видите?"}

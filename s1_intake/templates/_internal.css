@@ -1,0 +1,5 @@
+.verdict { display: inline-block; font-size: 15pt; font-weight: bold; padding: 1.5mm 5mm; border-radius: 1.5mm; color: #fff; }
+.v-NEXT { background: #1d6145; } .v-HOLD { background: #9a6700; } .v-PASS { background: #8a1c1c; }
+.cat { font-size: 7.5pt; font-weight: bold; }
+.cat-FACT { color: #1d6145; } .cat-FOUNDER_CLAIM { color: #6b5800; } .cat-UNKNOWN { color: #6a7280; } .cat-CONFLICT { color: #b42318; }
+.unsupported { color: #b42318; font-size: 7.5pt; }
