@@ -1,7 +1,7 @@
 # Кабинет MVP — индекс P0
 
 Слой: канон-карточки. Не корпус книг и не пакеты стартапов.  
-Заморозка S0.5: 2026-08-23. Меняет набор только штаб.
+Собрано штабом: 2026-08-23. Меняет набор только штаб.
 
 Retrieve MVP: keyword по этим файлам. Drive и эмбеддинги — фаза 2.
 
@@ -12,6 +12,11 @@ Retrieve MVP: keyword по этим файлам. Drive и эмбеддинги 
 - coach → next_artifact + jurisdiction
 
 Каждая карточка несёт поля §7.1. Источник historical/superseded — не в горячий retrieve без предупреждения.
+
+Статусы профиля только четыре: `fact` | `hypothesis` | `missing` | `weak`.  
+Семантика «unverified» хранится как `weak` (NORM-02).
+
+## Набор
 
 | id | файл | узлы | фильтр §7.3 | доп. tags |
 |---|---|---|---|---|
@@ -27,3 +32,28 @@ Retrieve MVP: keyword по этим файлам. Drive и эмбеддинги 
 | NORM-10 | 10_cards/10_team_deal_selection.md | plan, score-5 | questions + domain + stage | team; вес Team = 0.12, не менять |
 | NORM-11 | 10_cards/11_discovery_not_tam.md | plan, coach, extract | questions + next_artifact | discovery |
 | NORM-12 | 10_cards/12_reg_path_map.md | plan, analyze | questions + domain + stage | regulatory |
+| NORM-13 | 10_cards/13_economic_argument.md | plan, analyze, coach | next_artifact + jurisdiction | heor, bia, payer |
+| NORM-14 | 10_cards/14_evidence_reporting.md | analyze, coach | evidence_standard + study_design | consort, spirit, stard, tripod |
+| NORM-15 | 10_cards/15_grade_evidence_level.md | analyze, score-2 | evidence_standard + study_design | grade |
+| NORM-16 | 10_cards/16_ru_otz_kea.md | plan, analyze, coach | next_artifact + jurisdiction | otz, kea, oms |
+
+## Как вызывать в узле
+
+- plan: NORM-03, 05, 06, 10, 11, 12, 13, 16
+- analyze: NORM-01, 02, 05, 06, 12, 13, 14, 15, 16
+- coach: NORM-04, 05, 08, 11, 13, 14, 16
+- decide / route: NORM-09
+- score / report: NORM-07, 01, 15
+
+## Digests (слой корпуса, не канон)
+
+| файл | содержание |
+|---|---|
+| 20_digests/P0_SOURCE_DIGESTS.md | Выжимки P0-источников: идея, правила, вопросы, метрика. При конфликте с NORM-карточкой побеждает карточка. |
+
+## Вне этого набора
+
+Книги и ГОСТ полным текстом — корпус фазы 2. Клиентские 165 пакетов в кабинет не класть.
+
+Полка процесса фонда: `30_fund_ops/00_INGEST_QUEUE.md` (FUND-01…12, очередь).  
+В retrieve тренажёра **не** входит. Не смешивать с NORM.

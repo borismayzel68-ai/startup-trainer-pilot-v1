@@ -1,8 +1,8 @@
 """
 retrieve канона: карточки из knowledge/10_cards/ подтягиваются по
 каноническим фильтрам §7.3 из 00_INDEX.md (index_boost), а не только по тексту.
-Фикстура — ТЕСТОВАЯ карточка во временном каталоге, не канон NORM-03.
-Канонические карточки NORM-01…16 в репозитории пока отсутствуют.
+KnowledgeRetrieveTest — тестовая фикстура во временном каталоге (не канон).
+CanonCardsTest — реальные NORM-01…16 в knowledge/10_cards/ (GAP-03 закрыт).
 """
 
 import os
@@ -48,9 +48,44 @@ class KnowledgeRetrieveTest(unittest.TestCase):
         snippets = _common.retrieve_snippets("questions biotech seed")
         self.assertEqual(snippets[0]["id"], "NORM-03")
 
-    def test_repo_without_cards_returns_empty_not_error(self):
+
+
+REPO_KB = Path(__file__).resolve().parents[1] / "knowledge"
+
+
+class CanonCardsTest(unittest.TestCase):
+    """Канонические NORM-01…16 из HANDOFF_CARDS_AND_INDEX (штаб, 2026-10-09)."""
+
+    def setUp(self):
+        os.environ.pop("TRAINER_KNOWLEDGE_DIR", None)
         _common.get_kb.cache_clear()
-        self.assertEqual(_common.retrieve_snippets("questions biotech seed"), [])
+        self.kb = KnowledgeBase(str(REPO_KB))
+
+    def test_all_16_canonical_cards_loaded(self):
+        ids = sorted(c.card_id for c in self.kb._cards)
+        self.assertEqual(ids, [f"NORM-{i:02d}" for i in range(1, 17)])
+        self.assertTrue(all(c.status == "canonical" for c in self.kb._cards))
+
+    def test_canonical_node_queries_not_empty(self):
+        # канонические фильтры §7.3 по узлам (00_INDEX.md)
+        expected = {
+            "questions biotech medtech unknown": "NORM-03",          # plan_next_question
+            "evidence_standard study_design Трекшн": "NORM-14",      # analyze_answer
+            "next_artifact unknown": "NORM-04",                      # coach
+            "stop max_turns": "NORM-09",                             # decide / route
+        }
+        for query, card in expected.items():
+            hits = [c.card_id for c in self.kb.retrieve(query, k=3)]
+            self.assertTrue(hits, query)
+            self.assertIn(card, hits, query)
+
+    def test_retrieve_by_tag(self):
+        self.assertEqual([c.card_id for c in self.kb.retrieve("grade", k=3)], ["NORM-15"])
+
+    def test_nodes_use_repo_cards_by_default(self):
+        snippets = _common.retrieve_snippets("next_artifact unknown")
+        self.assertTrue(snippets)
+        self.assertEqual(snippets[0]["id"], "NORM-04")
 
 
 if __name__ == "__main__":
