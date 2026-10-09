@@ -1,51 +1,42 @@
 """
-trainer/nodes/ask.py
+Node: ask — короткий вопрос по-русски основателю.
 
-Node: ask
-Delivers state["current_question"] to the user (appends to messages).
-In S0.5 this is a terminal output node — the graph returns here and
-the next user reply re-enters via ingest.
+Пишет: current_question (добавляет ключ display — готовый текст для
+показа), last_coach (только в ветке ask_help).
 
-In S1 there will be a LangGraph interrupt() after this node so the
-graph suspends and waits for real user input. The edge is already
-reserved in graph.py — do NOT hide or remove it.
+После ask граф ОБЯЗАН ждать человека (решение штаба 2026-08-23 п.4):
+это обеспечивает compile(interrupt_after=["ask"]) в trainer/runtime.py,
+ребро ask -> route_intent в graph.py не меняется.
 
-ask_help → ask routing (frozen contract):
-  - route_after_intent("ask_help") returns "ask" DIRECTLY.
-    coach is NOT a route target for ask_help; it is called as an
-    internal helper inside ask when user_intent == "ask_help".
-  - ask does NOT increment turn (plan_next_question owns turn++).
-  - If coaching_note is already set (coach was called internally),
-    ask prepends it to the question text before delivery.
-
-TrainerState field names (frozen contract):
-  state["user_intent"]   — check for "ask_help" to trigger coaching path
-                           (was: intent)
-  state["founder_message"] is not written here; ask writes to output only.
-
-Constraints:
-  - do NOT increment state["turn"]
-  - do NOT add new fields to state
-  - output is appended as assistant message to conversation history
+ask_help: coach вызывается как помощник (не маршрут), подсказка ставится
+перед тем же вопросом. turn не меняется.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
+from trainer.nodes.coach import build_coach
+
+NO_QUESTION = "Вопросов с ценностью для пакета больше нет. Напишите «готово», чтобы получить отчёт."
+
 
 def ask(state: dict[str, Any]) -> dict[str, Any]:
-    """
-    Output current_question to the conversation.
+    question = dict(state.get("current_question") or {})
+    if not question.get("text"):
+        question["display"] = NO_QUESTION
+        return {"current_question": question}
 
-    When state["user_intent"] == "ask_help":
-      - call coach() as a helper (NOT via graph routing) to generate
-        coaching_note, then prepend it to the question.
-    Clears state["coaching_note"] after use.
-
-    In S1: LangGraph interrupt() fires here; in S0.5 the graph ends.
-
-    Returns partial state patch with updated conversation output
-    and {"coaching_note": None}.
-    """
-    raise NotImplementedError
+    patch: dict[str, Any] = {}
+    display = question["text"]
+    if state.get("user_intent") == "ask_help":
+        advice = build_coach(state, question.get("id"))
+        if advice:
+            display = (
+                f"Подсказка: чтобы ответ засчитался, опирайтесь на «{advice['artifact']}». "
+                f"Если документа нет — так и напишите «нет данных», это тоже ответ.\n\n{display}"
+            )
+            patch["last_coach"] = advice
+    question["display"] = display
+    patch["current_question"] = question
+    return patch

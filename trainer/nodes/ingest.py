@@ -1,50 +1,45 @@
 """
-trainer/nodes/ingest.py
+Node: ingest — принять материалы и сообщение, нормализовать.
 
-Node: ingest
-Entry point. Receives raw user message, populates messages list,
-initialises domain/stage/turn if first call.
+Пишет: materials.
+Вход сессии: вызывающий код передаёт materials=[{name, type, text_excerpt, source}].
+Ветка upload_note: текст founder_message добавляется как материал type="note".
 
-TrainerState contract — frozen field names (do NOT add fields):
-  state["founder_message"]   str  — raw user input (was: messages[-1].content)
-  state["user_intent"]       str | None  — answer|ask_help|stop|upload_note
-                                           (was: intent; "off_topic" → "stop")
-  state["company_profile"]   dict — field statuses: fact|hypothesis|missing|weak
-                                    (was: profile)
-  state["turn"]              int, initialised to 0
-  state["domain"]            str, e.g. "oncology"
-  state["stage"]             str, e.g. "pre_seed"
-  state["current_question"]  str | None
-  state["current_answer"]    str | None
-  state["readiness_scores"]  dict
-  state["kb_results"]        list
-  state["jurisdiction"]      str | None
-  state["study_design"]      str | None
-  state["coaching_note"]     str | None
-  state["session_summary"]   str | None
-
-Constraints:
-  - turn += 1 happens ONLY in plan_next_question on new current_question
-  - ask_help → ask does NOT consume a turn
-  - profile statuses: fact | hypothesis | missing | weak (never "unverified")
-  - do NOT add fields to state
+S0.5-докстринг ссылался на поля _raw_input/messages/current_answer — их нет
+в замороженном TrainerState; реализация следует trainer/state.py.
+Не трогает turn (turn++ только в plan_next_question).
 """
 
 from __future__ import annotations
 
 from typing import Any
 
+from trainer.slots import MATERIAL_TYPES
+
+MAX_EXCERPT = 20000
+
+
+def _normalize(m: dict, idx: int) -> dict:
+    mtype = str(m.get("type") or "other").lower()
+    return {
+        "name": str(m.get("name") or f"material_{idx}")[:200],
+        "type": mtype if mtype in MATERIAL_TYPES else "other",
+        "text_excerpt": str(m.get("text_excerpt") or "")[:MAX_EXCERPT],
+        "source": str(m.get("source") or "upload")[:200],
+    }
+
 
 def ingest(state: dict[str, Any]) -> dict[str, Any]:
-    """
-    Ingest raw user input into the state.
+    materials = [_normalize(m, i) for i, m in enumerate(state.get("materials") or [], 1)]
 
-    Expected caller contract:
-      - caller sets state["_raw_input"] (str) before invoking the graph
-      - ingest appends it as a user message to state["messages"]
-      - initialises current_answer from _raw_input
-      - does NOT increment turn (plan_next_question owns that)
+    if state.get("user_intent") == "upload_note":
+        text = (state.get("founder_message") or "").strip()
+        if text:
+            materials.append(_normalize({
+                "name": f"note_turn_{state.get('turn', 0)}",
+                "type": "note",
+                "text_excerpt": text,
+                "source": "founder_message",
+            }, len(materials) + 1))
 
-    Returns partial state patch (LangGraph merges).
-    """
-    raise NotImplementedError
+    return {"materials": materials}

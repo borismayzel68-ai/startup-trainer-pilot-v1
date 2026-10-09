@@ -1,67 +1,59 @@
 """
-trainer/nodes/route_intent.py
+Node: route_intent + условное ребро route_after_intent.
 
-Node: route_intent  +  conditional-edge function: route_after_intent
+Пишет: user_intent; при stop — также should_continue=False, stop_reason="founder".
 
-Classifies the intent of the founder's message and sets
-state["user_intent"] to one of:
+Классификация детерминированная (без модели): правило NORM-09 «founder
+stop безусловен» не должно зависеть от того, как модель поняла фразу.
 
-  "answer"       — founder is answering the current question
-  "ask_help"     — founder is asking for clarification / coaching
-  "stop"         — founder wants to end the session (was: off_topic)
-  "upload_note"  — founder is attaching a document / note
-
-TrainerState field names (frozen contract):
-  state["founder_message"]   — raw user input   (was: messages[-1])
-  state["user_intent"]       — classified intent (was: intent)
-  state["company_profile"]   — startup profile   (was: profile)
-
-route_after_intent() is the LangGraph conditional edge that reads
-state["user_intent"] and returns the name of the next node:
-
-  "answer"       → "analyze_answer"
-  "ask_help"     → "ask"          ← DIRECT: no intermediate coach node
-                                    (ask reads coaching_note set by coach
-                                     if coach was called earlier; here it
-                                     goes straight to ask which calls coach
-                                     internally as a helper, NOT as a route)
-  "stop"         → "summarize"    (was: off_topic → ask)
-  "upload_note"  → "extract_profile"
-
-turn is NOT incremented on ask_help path (plan_next_question owns turn++).
-
-Constraints:
-  - do NOT increment state["turn"] here
-  - do NOT add new fields to state
-  - user_intent values: answer | ask_help | stop | upload_note
+Маршруты (ключи совпадают с картой рёбер в graph.py):
+  answer      -> analyze_answer
+  stop        -> summarize
+  upload_note -> ingest          (так в graph.py; S0.5-докстринг ошибочно
+                                  писал extract_profile — канон рёбер в graph.py)
+  ask_help    -> ask             (напрямую, coach — помощник внутри ask)
 """
 
 from __future__ import annotations
 
+import re
 from typing import Any
+
+INTENTS = ("answer", "stop", "upload_note", "ask_help")
+
+_STOP_RE = re.compile(
+    r"^\s*(хватит|готово|заканчиваем|закончим|стоп|stop|всё|все|достаточно|завершить|заверш(аем|ить) сессию)\s*[.!]*\s*$",
+    re.IGNORECASE,
+)
+_HELP_RE = re.compile(
+    r"(не понимаю|не понял[аи]?|поясните|объясните|что (вы )?имеете в виду|что значит|"
+    r"в каком смысле|приведите пример|помогите|подскажите)",
+    re.IGNORECASE,
+)
+_UPLOAD_RE = re.compile(r"^\s*(загружаю|прикладываю|добавляю (документ|материал)|вот (документ|файл|выдержка))",
+                        re.IGNORECASE)
+UPLOAD_MIN_CHARS = 1500  # длинная вставка текста документа = материал, а не ответ
+
+
+def classify(message: str) -> str:
+    text = (message or "").strip()
+    if not text or _STOP_RE.match(text):
+        return "stop" if text else "ask_help"
+    if _UPLOAD_RE.match(text) or len(text) >= UPLOAD_MIN_CHARS:
+        return "upload_note"
+    if len(text) < 200 and _HELP_RE.search(text):
+        return "ask_help"
+    return "answer"
 
 
 def route_intent(state: dict[str, Any]) -> dict[str, Any]:
-    """
-    Classify state["founder_message"] and write state["user_intent"].
-
-    Intent vocabulary: answer | ask_help | stop | upload_note
-
-    Returns partial state patch: {"user_intent": str}.
-    """
-    raise NotImplementedError
+    intent = classify(state.get("founder_message") or "")
+    patch: dict[str, Any] = {"user_intent": intent}
+    if intent == "stop":
+        patch.update(should_continue=False, stop_reason="founder")
+    return patch
 
 
 def route_after_intent(state: dict[str, Any]) -> str:
-    """
-    LangGraph conditional edge function.
-
-    Reads state["user_intent"] and returns the next node name:
-      "answer"       → "analyze_answer"
-      "ask_help"     → "ask"             (NOT "coach" — see module docstring)
-      "stop"         → "summarize"
-      "upload_note"  → "extract_profile"
-
-    Must return a string matching a node name registered in graph.py.
-    """
-    raise NotImplementedError
+    intent = state.get("user_intent")
+    return intent if intent in INTENTS else "answer"
