@@ -1,61 +1,33 @@
 """
-trainer/nodes/decide.py
+Node: decide + условное ребро route_after_decide.
 
-Node: decide  +  conditional-edge function: route_after_decide
+Пишет: should_continue, stop_reason. Детерминированно, без модели.
 
-Evaluates whether the session should continue (ask another question)
-or terminate (produce summary).
-
-TrainerState field names (frozen contract):
-  state["company_profile"]   — startup profile with field statuses
-                               (was: profile)
-  state["user_intent"]       — current intent; "stop" triggers termination
-                               (was: intent)
-
-Termination conditions (any one sufficient):
-  - state["user_intent"] == "stop"  (founder requested end)
-  - All company_profile fields have status fact or hypothesis (coverage complete)
-  - turn >= max_turns threshold (defined in graph.py or config, not here)
-  - readiness_scores indicate sufficient or terminal low confidence
-
-route_after_decide() is the LangGraph conditional edge:
-  continue → "plan_next_question"
-  stop     → "summarize"          ← literal return value is "stop"
-                                    (was incorrectly documented as "end")
-
-Constraints:
-  - do NOT increment state["turn"]
-  - do NOT add new fields to state
-  - do NOT hardcode max_turns (read from state or graph config)
-  - terminal branch returns the string "stop", not "end"
+Стоп (NORM-09), по порядку:
+  1. founder: user_intent == "stop" (безусловно);
+  2. max_turns: turn >= max_turns (из стейта, дефолт 12 в initial_state);
+  3. agent_low_value: среди ещё не заданных пробелов нет missing/weak —
+     критические пробелы закрыты или помечены, остались только hypothesis.
+Иначе — continue.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
+from trainer.nodes.plan_next_question import candidate_gaps
+
 
 def decide(state: dict[str, Any]) -> dict[str, Any]:
-    """
-    Evaluate session continuation vs termination.
-
-    Writes an internal decision signal consumed by route_after_decide.
-    Implementation may use a "_decision" key on state or derive purely
-    from existing fields — do NOT add permanent new state fields.
-
-    Returns partial state patch (minimal; routing logic in route_after_decide).
-    """
-    raise NotImplementedError
+    if state.get("user_intent") == "stop":
+        return {"should_continue": False, "stop_reason": "founder"}
+    if int(state.get("turn") or 0) >= int(state.get("max_turns") or 12):
+        return {"should_continue": False, "stop_reason": "max_turns"}
+    valuable = [g for g in candidate_gaps(state) if g["status"] in ("missing", "weak")]
+    if not valuable:
+        return {"should_continue": False, "stop_reason": "agent_low_value"}
+    return {"should_continue": True, "stop_reason": ""}
 
 
 def route_after_decide(state: dict[str, Any]) -> str:
-    """
-    LangGraph conditional edge function.
-
-    Reads decide signal from state and returns next node name:
-      session continues → "plan_next_question"
-      session ends      → "stop"          ← "stop", NOT "end"
-
-    "stop" must match the node name (or END sentinel) registered in graph.py.
-    """
-    raise NotImplementedError
+    return "continue" if state.get("should_continue") else "stop"

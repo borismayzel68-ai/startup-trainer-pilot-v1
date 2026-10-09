@@ -35,6 +35,43 @@ SCALE_LABELS: dict[int, str] = {
 }
 
 
+RECOMMENDATIONS: tuple[str, ...] = ("not_ready", "iterate", "ready_for_investor_conversation")
+
+# GAP-01 (решение штаба 2026-10-09): в каноне нет сопоставления слотов
+# профиля с 8 измерениями. Пока его нет, ни один слот не даёт балла
+# измерению — все баллы 0 «не подтверждено». Не заполнять без решения штаба.
+DIMENSION_EVIDENCE_SOURCES: dict[str, list[str]] = {d: [] for d in DIMENSION_WEIGHTS}
+
+# GAP-02: пороги recommendation штабом не утверждены. До решения —
+# заглушка not_ready + проверка, что значение из трёх допустимых.
+RECOMMENDATION_PLACEHOLDER: Recommendation = "not_ready"
+
+
+def validate_recommendation(value: str) -> str:
+    if value not in RECOMMENDATIONS:
+        raise ValueError(f"recommendation вне канона: {value!r}")
+    return value
+
+
+def weighted_overall(scores: dict[str, float]) -> float:
+    """Взвешенная сумма по замороженным весам, шкала 0..5. Требует все 8 измерений."""
+    if set(scores) != set(DIMENSION_WEIGHTS):
+        raise ValueError("scores должны покрывать ровно 8 измерений rubric v1")
+    for dim, val in scores.items():
+        if not 0 <= val <= 5:
+            raise ValueError(f"балл {dim}={val} вне шкалы 0..5")
+    return round(sum(DIMENSION_WEIGHTS[d] * scores[d] for d in DIMENSION_WEIGHTS), 4)
+
+
+def _quotes_for(dimension: str, company_profile: dict) -> list[str]:
+    quotes = []
+    for slot_id in DIMENSION_EVIDENCE_SOURCES[dimension]:
+        span = (company_profile.get(slot_id) or {}).get("evidence_span")
+        if span:
+            quotes.append(span)
+    return quotes[:2]
+
+
 def compute_readiness(company_profile: dict, qa_log: list) -> dict:
     """
     Вход: company_profile, qa_log.
@@ -43,5 +80,22 @@ def compute_readiness(company_profile: dict, qa_log: list) -> dict:
         - каждый балл требует 1-2 цитаты из materials/qa_log;
         - нет цитаты -> балл не может быть > 0 ("не подтверждено");
         - recommendation только из трёх значений выше, не текст произвольной формы.
+
+    Реализация до закрытия GAP-01/GAP-02: балл > 0 возможен только при
+    наличии цитат из источников измерения; источников пока нет -> 0.
     """
-    raise NotImplementedError("compute_readiness: тело реализуется в S1")
+    scores: dict[str, float] = {}
+    quotes: dict[str, list[str]] = {}
+    for dim in DIMENSION_WEIGHTS:
+        q = _quotes_for(dim, company_profile)
+        quotes[dim] = q or ["не подтверждено"]
+        scores[dim] = 0  # балл по цитатам не считается, пока нет утверждённого маппинга
+    return {
+        "scores": scores,
+        "overall": weighted_overall(scores),
+        "recommendation": validate_recommendation(RECOMMENDATION_PLACEHOLDER),
+        "quotes": quotes,
+        "weights": dict(DIMENSION_WEIGHTS),
+        "open_gaps": ["GAP-01: нет маппинга слот->измерение", "GAP-02: нет порогов recommendation"],
+        "answered_turns": sum(1 for e in qa_log or [] if (e.get("analysis") or {}).get("status") != "missing"),
+    }
