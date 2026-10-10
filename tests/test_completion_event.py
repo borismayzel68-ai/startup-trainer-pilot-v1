@@ -315,7 +315,11 @@ class CompletionEmissionTests(unittest.TestCase):
             return sample_report()
 
         def finish_in_thread(sid):
+            # Тот же браузер (cookie сессии владельца), но отдельный клиент на поток:
+            # с 31b85af /answer требует, чтобы sid был в browser session.
+            cookie = self.client.get_cookie("session")
             with appmod.app.test_client() as client:
+                client.set_cookie("session", cookie.value)
                 return client.post(
                     f"/api/session/{sid}/answer",
                     json={"answer": "стоп"},
