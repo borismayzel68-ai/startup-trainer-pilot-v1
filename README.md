@@ -80,7 +80,8 @@ Webhook: `https://<render-домен>/s1/webhooks/tilda`, API-ключ в заг
 | `GET /s1/jobs` | список заявок: статус, вердикт, readiness |
 | `GET /s1/jobs/<id>` | сводка: вердикт, гейты, критичные пробелы, условие переоценки |
 | `GET /s1/jobs/<id>/{analyst-brief,founder-report}.{html,pdf}`, `readiness-pack.json` | артефакты |
-| `POST /s1/jobs/<id>/approve` | отправить Founder Readiness Report фаундеру |
+| `POST /s1/jobs/<id>/approve` | отправить Founder Readiness Report фаундеру — только персональный токен из `S1_APPROVERS` (общий admin-токен не подходит); подпись пишется в журнал `s1_approvals`; повторная отправка того же отчёта блокируется (409) |
+| `GET /s1/jobs/<id>/approvals` | журнал подписей: кто, когда, sha256 отчёта, результат |
 | `POST /s1/jobs/<id>/rerun` | пересчитать (после правки промптов/методологии; файлы из кэша) |
 
 Статусы: `received → processing → ready_for_review → sent`; `failed` (с причиной), `rejected` (нет согласия).
