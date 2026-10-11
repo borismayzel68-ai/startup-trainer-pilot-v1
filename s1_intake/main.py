@@ -10,6 +10,7 @@ POST /s1/jobs/<id>/approve → Founder Readiness Report фаундеру.
 """
 from __future__ import annotations
 
+import hashlib
 import hmac
 import json
 import logging
@@ -95,8 +96,10 @@ def _process_job(app: Flask, job_id: str, stale_before: str | None = None) -> No
                 docs = [fetch_and_parse(f, s, st.http_client) for f in sub.files]
                 store.update(job_id, data_patch={"parsed_docs": [d.model_dump() for d in docs]})
 
-            res = evaluate(job_id, sub, docs, st.llm_factory(), s, m)
+            llm = st.llm_factory()
+            res = evaluate(job_id, sub, docs, llm, s, m)
             pack = generate_pack(res, m, s.fund_name)
+            pack["llm_calls"] = list(getattr(llm, "calls", []))  # TG-1: модель, temperature, хеш промпта
             store.update(job_id, data_patch=pack, status="ready_for_review",
                          verdict=res.scores.verdict, readiness=res.scores.readiness)
             log.info("S1 job %s ready: %s %s/100", job_id, res.scores.verdict, res.scores.readiness)
@@ -104,8 +107,7 @@ def _process_job(app: Flask, job_id: str, stale_before: str | None = None) -> No
             ping_webhook(s, {"event": "s1.ready_for_review", "job_id": job_id,
                              "verdict": res.scores.verdict, "readiness": res.scores.readiness})
             _email_analysts(s, job_id, sub, res.scores, pack)
-            if s.auto_send_founder_report:
-                _deliver_founder_report(job_id)
+            # TG-1: автоотправки фаундеру нет. Только POST /s1/jobs/<id>/approve с персональной подписью.
         except Exception as e:  # noqa: BLE001
             log.exception("S1 job %s failed", job_id)
             store.update(job_id, status="failed", error=f"{e.__class__.__name__}: {str(e)[:500]}")
@@ -127,19 +129,56 @@ def _email_analysts(s: Settings, job_id: str, sub: Submission, scores, pack: dic
         log.exception("S1 analyst email failed for %s", job_id)
 
 
-def _deliver_founder_report(job_id: str) -> tuple[bool, str]:
+def _report_sha256(job: dict) -> str:
+    return hashlib.sha256(job["data"].get("founder_report_html", "").encode()).hexdigest()
+
+
+def _deliver_founder_report(job_id: str, approver: str) -> tuple[bool, str, int]:
+    """Только из approve. Пишет журнал подписи. Повторная отправка того же отчёта блокируется."""
     st = _state()
-    s, job = st.settings, st.store.get(job_id)
-    if not job or not job["founder_email"]:
-        return False, "no founder email"
+    s, store, job = st.settings, st.store, st.store.get(job_id)
+    if not job:
+        return False, "not found", 404
+    digest = _report_sha256(job)
+    if job["status"] == "sent" or store.was_sent(job_id, digest):
+        store.log_approval(job_id, approver, digest, "blocked_duplicate")
+        return False, "report already sent", 409
+    if job["status"] != "ready_for_review":
+        return False, f"job status is {job['status']}", 409
+    if not job["founder_email"]:
+        store.log_approval(job_id, approver, digest, "failed", "no founder email")
+        return False, "no founder email", 409
     if not smtp_configured(s):
-        return False, "SMTP not configured"
+        store.log_approval(job_id, approver, digest, "failed", "SMTP not configured")
+        return False, "SMTP not configured", 409
+    if not store.begin_send(job_id):  # параллельный approve уже отправляет
+        store.log_approval(job_id, approver, digest, "blocked_duplicate", "concurrent approve")
+        return False, "report already being sent", 409
+    try:
+        store.log_approval(job_id, approver, digest, "sent")  # UNIQUE (job, sha256) WHERE sent
+    except Exception:  # noqa: BLE001
+        store.update(job_id, status="ready_for_review")
+        return False, "report already sent", 409
     html = job["data"]["founder_report_html"]
     pdf = html_to_pdf(html)
-    send_email(s, [job["founder_email"]], f"{s.fund_name}: ваш Founder Readiness Report", html,
-               [("founder_readiness_report.pdf", pdf)] if pdf else [])
-    st.store.update(job_id, status="sent")
-    return True, "sent"
+    try:
+        send_email(s, [job["founder_email"]], f"{s.fund_name}: ваш Founder Readiness Report", html,
+                   [("founder_readiness_report.pdf", pdf)] if pdf else [])
+    except Exception as e:  # noqa: BLE001 — запись «sent» остаётся: лучше не отправить, чем отправить дважды
+        store.update(job_id, status="failed", error=f"send failed: {e.__class__.__name__}")
+        store.log_approval(job_id, approver, digest, "send_error", e.__class__.__name__)
+        return False, "send failed", 502
+    store.update(job_id, status="sent")
+    return True, "sent", 200
+
+
+def _approver() -> str | None:
+    """Персональная подпись: Bearer-токен конкретного человека из S1_APPROVERS."""
+    token = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+    for who, tok in _state().settings.approvers.items():
+        if token and hmac.compare_digest(token, tok):
+            return who
+    return None
 
 
 # ------------------------------------------------------------------ auth ----
@@ -256,15 +295,18 @@ def get_artifact(job_id, artifact):
 
 @bp.post("/jobs/<job_id>/approve")
 def approve(job_id):
-    if not _admin_ok():
+    who = _approver()
+    if not who:  # общий admin-токен подписью не является
+        return _err("personal approver signature required", 403 if _admin_ok() else 401)
+    ok, msg, code = _deliver_founder_report(job_id, who)
+    return (jsonify({"ok": True, "status": "sent", "approved_by": who}) if ok else _err(msg, code))
+
+
+@bp.get("/jobs/<job_id>/approvals")
+def approvals(job_id):
+    if not (_admin_ok() or _approver()):
         return _err("unauthorized", 401)
-    job = _state().store.get(job_id)
-    if not job:
-        return _err("not found", 404)
-    if job["status"] not in ("ready_for_review", "sent"):
-        return _err(f"job status is {job['status']}", 409)
-    ok, msg = _deliver_founder_report(job_id)
-    return (jsonify({"ok": True, "status": "sent"}) if ok else _err(msg, 409))
+    return jsonify(_state().store.approvals(job_id))
 
 
 @bp.post("/jobs/<job_id>/rerun")

@@ -13,7 +13,7 @@ import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
-STATUSES = ("received", "processing", "ready_for_review", "sent", "failed", "rejected")
+STATUSES = ("received", "processing", "ready_for_review", "sending", "sent", "failed", "rejected")
 _COLUMNS = ("status", "project_name", "founder_email", "verdict", "readiness", "error", "data_json")
 
 
@@ -70,6 +70,15 @@ class ReadinessJobStore:
                 data_json TEXT NOT NULL
             )""")
         self._exec("CREATE INDEX IF NOT EXISTS s1_readiness_jobs_status_idx ON s1_readiness_jobs (status)")
+        # TG-1: журнал подписей (append-only): кто, когда, что (sha256 отчёта), чем кончилось.
+        self._exec("""
+            CREATE TABLE IF NOT EXISTS s1_approvals (
+                job_id TEXT NOT NULL, approver TEXT NOT NULL, approved_at TEXT NOT NULL,
+                report_sha256 TEXT NOT NULL, outcome TEXT NOT NULL, detail TEXT
+            )""")
+        # один и тот же отчёт (job + sha256) может быть отправлен только один раз
+        self._exec("CREATE UNIQUE INDEX IF NOT EXISTS s1_approvals_sent_once ON s1_approvals "
+                   "(job_id, report_sha256) WHERE outcome='sent'")
 
     @staticmethod
     def _row(r) -> dict | None:
@@ -115,6 +124,26 @@ class ReadinessJobStore:
             sql += f" OR (status='processing' AND updated_at < {p})"
             params.append(stale_before)
         return self._exec(sql + ")", tuple(params)) == 1
+
+    # ------------------------------------------------------------- TG-1 --
+    def begin_send(self, job_id: str) -> bool:
+        """Атомарно ready_for_review → sending. Второй параллельный approve получает False."""
+        return self._exec(f"UPDATE s1_readiness_jobs SET status='sending', updated_at={self.ph} "
+                          f"WHERE id={self.ph} AND status='ready_for_review'", (_now(), job_id)) == 1
+
+    def was_sent(self, job_id: str, report_sha256: str) -> bool:
+        return bool(self._exec(f"SELECT 1 FROM s1_approvals WHERE job_id={self.ph} AND report_sha256={self.ph} "
+                               f"AND outcome='sent'", (job_id, report_sha256), "one"))
+
+    def log_approval(self, job_id: str, approver: str, report_sha256: str, outcome: str, detail: str = "") -> None:
+        p = self.ph
+        self._exec(f"INSERT INTO s1_approvals (job_id, approver, approved_at, report_sha256, outcome, detail) "
+                   f"VALUES ({p},{p},{p},{p},{p},{p})", (job_id, approver, _now(), report_sha256, outcome, detail[:500]))
+
+    def approvals(self, job_id: str) -> list[dict]:
+        rows = self._exec(f"SELECT approver, approved_at, report_sha256, outcome, detail FROM s1_approvals "
+                          f"WHERE job_id={self.ph} ORDER BY approved_at", (job_id,), "all")
+        return [dict(zip(("approver", "approved_at", "report_sha256", "outcome", "detail"), r)) for r in rows]
 
     def reset_for_rerun(self, job_id: str) -> bool:
         return self._exec(
