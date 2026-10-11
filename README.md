@@ -33,6 +33,11 @@ project/founder identity fields are sent.
 `pip install -r requirements.txt`
 `python app.py`
 
+## Как запустить тесты
+Тесты лежат в каталоге `tests/`. Из корня репозитория:
+`pip install -r requirements.txt pytest`
+`pytest`
+
 ## Render
 Build: `pip install -r requirements.txt`
 Start: `gunicorn app:app`
