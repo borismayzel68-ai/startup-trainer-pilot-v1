@@ -76,6 +76,18 @@ class ReadinessJobStore:
                 job_id TEXT NOT NULL, approver TEXT NOT NULL, approved_at TEXT NOT NULL,
                 report_sha256 TEXT NOT NULL, outcome TEXT NOT NULL, detail TEXT
             )""")
+        # HQ-028: журнал согласий (кто, что, кому, когда, отзыв) и журнал передач (G-4)
+        self._exec("""
+            CREATE TABLE IF NOT EXISTS s1_consents (
+                id TEXT PRIMARY KEY, job_id TEXT NOT NULL, granted_by TEXT NOT NULL, scope TEXT NOT NULL,
+                recipient TEXT NOT NULL, granted_at TEXT NOT NULL, revoked_at TEXT, revoked_by TEXT
+            )""")
+        self._exec("""
+            CREATE TABLE IF NOT EXISTS s1_transfers (
+                id TEXT PRIMARY KEY, job_id TEXT NOT NULL, kind TEXT NOT NULL, recipient TEXT NOT NULL,
+                status TEXT NOT NULL, requested_by TEXT, requested_at TEXT NOT NULL,
+                g4_by TEXT, g4_at TEXT, detail TEXT
+            )""")
         # один и тот же отчёт (job + sha256) может быть отправлен только один раз
         self._exec("CREATE UNIQUE INDEX IF NOT EXISTS s1_approvals_sent_once ON s1_approvals "
                    "(job_id, report_sha256) WHERE outcome='sent'")
@@ -144,6 +156,50 @@ class ReadinessJobStore:
         rows = self._exec(f"SELECT approver, approved_at, report_sha256, outcome, detail FROM s1_approvals "
                           f"WHERE job_id={self.ph} ORDER BY approved_at", (job_id,), "all")
         return [dict(zip(("approver", "approved_at", "report_sha256", "outcome", "detail"), r)) for r in rows]
+
+    # ---------------------------------------------------------- HQ-028 ----
+    def grant_consent(self, job_id: str, by: str, scope: str, recipient: str) -> str:
+        import uuid
+        cid, p = uuid.uuid4().hex, self.ph
+        self._exec(f"INSERT INTO s1_consents (id, job_id, granted_by, scope, recipient, granted_at) "
+                   f"VALUES ({p},{p},{p},{p},{p},{p})", (cid, job_id, by, scope, recipient, _now()))
+        return cid
+
+    def revoke_consents(self, job_id: str, by: str, recipient: str | None = None) -> int:
+        p = self.ph
+        sql = f"UPDATE s1_consents SET revoked_at={p}, revoked_by={p} WHERE job_id={p} AND revoked_at IS NULL"
+        args = [_now(), by, job_id]
+        if recipient:
+            sql += f" AND recipient={p}"
+            args.append(recipient)
+        return self._exec(sql, tuple(args))
+
+    def consents(self, job_id: str) -> list[dict]:
+        keys = ("id", "granted_by", "scope", "recipient", "granted_at", "revoked_at", "revoked_by")
+        rows = self._exec(f"SELECT {', '.join(keys)} FROM s1_consents WHERE job_id={self.ph} ORDER BY granted_at",
+                          (job_id,), "all")
+        return [dict(zip(keys, r)) for r in rows]
+
+    def consent_active(self, job_id: str, scope: str, recipient: str) -> bool:
+        return any(c["scope"] == scope and c["recipient"] == recipient and not c["revoked_at"]
+                   for c in self.consents(job_id))
+
+    def add_transfer(self, job_id: str, kind: str, recipient: str, status: str, by: str, detail: str = "") -> str:
+        import uuid
+        tid, p = uuid.uuid4().hex, self.ph
+        self._exec(f"INSERT INTO s1_transfers (id, job_id, kind, recipient, status, requested_by, requested_at, detail) "
+                   f"VALUES ({p},{p},{p},{p},{p},{p},{p},{p})", (tid, job_id, kind, recipient, status, by, _now(), detail[:500]))
+        return tid
+
+    def set_transfer(self, tid: str, status: str, g4_by: str | None = None, detail: str = "") -> None:
+        p = self.ph
+        self._exec(f"UPDATE s1_transfers SET status={p}, g4_by=COALESCE({p}, g4_by), g4_at={p}, detail={p} "
+                   f"WHERE id={p}", (status, g4_by, _now(), detail[:500], tid))
+
+    def transfer(self, tid: str) -> dict | None:
+        keys = ("id", "job_id", "kind", "recipient", "status", "requested_by", "requested_at", "g4_by", "g4_at", "detail")
+        r = self._exec(f"SELECT {', '.join(keys)} FROM s1_transfers WHERE id={self.ph}", (tid,), "one")
+        return dict(zip(keys, r)) if r else None
 
     def reset_for_rerun(self, job_id: str) -> bool:
         return self._exec(

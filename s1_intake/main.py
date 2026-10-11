@@ -23,6 +23,7 @@ from flask import Blueprint, Flask, Response, current_app, jsonify, request
 from .config import Settings, get_settings, load_methodology
 from .dialogue import (DialogueError, add_r2_item, attach_file, build_session, expire_overdue, r2_candidates,
                        ready_for_gate, resume_r2)
+from . import exit_intro, links
 from .vertical import classify_vertical
 from .dialogue import answer as dialogue_answer
 from .evaluator import evaluate
@@ -535,31 +536,21 @@ def vertical_decision(job_id):
 
 
 def _free_token(job_id: str, exp: int, purpose: str = "free") -> str:
-    key = _state().settings.free_link_secret.encode()
-    msg = f"{job_id}.{exp}" if purpose == "free" else f"{purpose}.{job_id}.{exp}"
-    return hmac.new(key, msg.encode(), hashlib.sha256).hexdigest()
+    return links.sign(_state().settings.free_link_secret, purpose, job_id, exp)
 
 
-def _link_check(job_id: str, purpose: str):
-    """Проверка подписанной ссылки: подделка → 403, просрочка → 410."""
-    s = _state().settings
-    try:
-        exp = int(request.args.get("exp", "0"))
-    except ValueError:
-        return _err("bad link", 400)
-    if not s.free_link_secret or not hmac.compare_digest(request.args.get("sig", ""), _free_token(job_id, exp, purpose)):
-        return _err("forbidden", 403)
-    if exp < int(datetime.now(timezone.utc).timestamp()):
-        return _err("link expired", 410)
-    return None
+def _link_check(ident: str, purpose: str):
+    """HQ-028: единая проверка ссылки (подделка 403, просрочка 410)."""
+    code, why = links.verify(_state().settings.free_link_secret, purpose, ident,
+                             request.args.get("exp", "0"), request.args.get("sig", ""))
+    return None if code == 200 else _err(why, code)
 
 
-def _issue_link(job_id: str, purpose: str, prefix: str):
+def _issue_link(ident: str, purpose: str, prefix: str):
     s = _state().settings
     if not s.free_link_secret or len(s.free_link_secret) < 24:
         return _err("link secret not configured (S1_FREE_LINK_SECRET)", 503)
-    exp = int(datetime.now(timezone.utc).timestamp()) + s.free_link_ttl_s
-    return jsonify({"path": f"{prefix}/{job_id}?exp={exp}&sig={_free_token(job_id, exp, purpose)}", "expires": exp})
+    return jsonify(links.make(s.free_link_secret, purpose, ident, s.free_link_ttl_s, prefix))
 
 
 @bp.post("/jobs/<job_id>/dialogue-link")
@@ -616,6 +607,202 @@ def free_public(job_id):
         return _err("not found", 404)
     fp = job["data"]["free_part"]
     return jsonify({k: fp[k] for k in ("label", "score", "scale", "stage", "gaps")})
+
+
+# ================================================================ HQ-028 ====
+def _hq028() -> dict:
+    return _state().methodology["working"]["hq028"]
+
+
+def _job_or_404(job_id: str):
+    job = _state().store.get(job_id)
+    return job
+
+
+@bp.post("/cabinet/<job_id>/consent")
+def cabinet_consent(job_id):
+    """Кабинет основателя (та же ссылка со сроком, что страница диалога): дать согласие на передачу."""
+    bad = _link_check(job_id, "dialogue")
+    if bad:
+        return bad
+    body = request.get_json(silent=True) or {}
+    scope, recipient = body.get("scope"), str(body.get("recipient") or "").strip()
+    if scope not in ("teaser", "report") or not recipient:
+        return _err("scope teaser|report and recipient required", 400)
+    if not _job_or_404(job_id):
+        return _err("not found", 404)
+    cid = _state().store.grant_consent(job_id, "founder", scope, recipient)
+    return jsonify({"ok": True, "consent_id": cid})
+
+
+@bp.post("/cabinet/<job_id>/revoke")
+def cabinet_revoke(job_id):
+    """Кнопка «отозвать»: все (или для одного получателя) согласия отзываются; ссылки инвесторам
+    перестают открываться сразу — проверка журнала идёт при каждом открытии."""
+    bad = _link_check(job_id, "dialogue")
+    if bad:
+        return bad
+    recipient = (request.get_json(silent=True) or {}).get("recipient")
+    n = _state().store.revoke_consents(job_id, "founder", recipient)
+    return jsonify({"ok": True, "revoked": n})
+
+
+@bp.get("/cabinet/<job_id>/consents")
+def cabinet_consents(job_id):
+    bad = _link_check(job_id, "dialogue")
+    if bad:
+        return bad
+    return jsonify(_state().store.consents(job_id))
+
+
+@bp.get("/jobs/<job_id>/consents")
+def admin_consents(job_id):
+    if not _admin_ok():
+        return _err("unauthorized", 401)
+    return jsonify(_state().store.consents(job_id))
+
+
+@bp.post("/jobs/<job_id>/fund-timer/start")
+def fund_timer_start(job_id):
+    """Старт окна фонда 21 день — явное действие человека (момент старта бриф не задаёт)."""
+    if not _admin_ok():
+        return _err("unauthorized", 401)
+    job = _job_or_404(job_id)
+    if not job:
+        return _err("not found", 404)
+    if job["data"].get("fund_timer"):
+        return _err("fund timer already started", 409)
+    t = exit_intro.start_fund_window(_hq028(), "admin")
+    _state().store.update(job_id, data_patch={"fund_timer": t})
+    return jsonify(t)
+
+
+@bp.get("/jobs/<job_id>/fund-timer")
+def fund_timer_status(job_id):
+    """Срабатывание таймера = только смена статуса (fund_window: expired). Ничего не отправляется."""
+    if not _admin_ok():
+        return _err("unauthorized", 401)
+    job = _job_or_404(job_id)
+    if not job:
+        return _err("not found", 404)
+    w = exit_intro.fund_window(job["data"], _hq028())
+    if w["state"] == "expired" and job["data"]["fund_timer"].get("state") != "expired":
+        _state().store.update(job_id, data_patch={"fund_timer": {**job["data"]["fund_timer"], "state": "expired"}})
+    return jsonify(w)
+
+
+@bp.post("/jobs/<job_id>/teaser")
+def teaser_build(job_id):
+    if not _admin_ok():
+        return _err("unauthorized", 401)
+    job = _job_or_404(job_id)
+    if not job or "readiness_pack" not in job["data"]:
+        return _err("not found", 404)
+    cfg = _hq028()
+    t = exit_intro.build_teaser(job, cfg)
+    overrides = (request.get_json(silent=True) or {}).get("edit") or {}
+    for k in ("area", "stage", "raise"):  # человек может поправить текст до подписи
+        if k in overrides:
+            t[k] = str(overrides[k])
+    for k in ("strengths", "risks"):
+        if k in overrides:
+            t[k] = [{"text": str(x.get("text", "")), "status": x.get("status") if x.get("status") in ("факт", "заявление")
+                     else "заявление"} for x in overrides[k]][:_hq028()["teaser_items"]]
+    t["deid_violations"] = exit_intro.deid_check(t, job, cfg)
+    _state().store.update(job_id, data_patch={"teaser": t})
+    return jsonify(t)
+
+
+@bp.post("/jobs/<job_id>/teaser/sign")
+def teaser_sign(job_id):
+    """Подпись человека перед любой передачей тизера; решение фонда вписывает человек."""
+    who = _approver()
+    if not who:
+        return _err("personal approver signature required", 403 if _admin_ok() else 401)
+    job = _job_or_404(job_id)
+    t = (job or {}).get("data", {}).get("teaser")
+    if not t:
+        return _err("teaser not built", 404)
+    decision = str((request.get_json(silent=True) or {}).get("fund_decision") or "").strip()
+    if not decision:
+        return _err("fund_decision required", 400)
+    t["fund_decision"] = decision
+    t["deid_violations"] = exit_intro.deid_check(t, job, _hq028())
+    if t["deid_violations"]:
+        _state().store.update(job_id, data_patch={"teaser": t})
+        return _err("teaser failed de-identification: " + "; ".join(t["deid_violations"]), 409)
+    t.update(signed_by=who, signed_at=_iso(datetime.now(timezone.utc)))
+    _state().store.update(job_id, data_patch={"teaser": t})
+    return jsonify({"ok": True, "signed_by": who})
+
+
+@bp.post("/jobs/<job_id>/transfers")
+def transfer_request(job_id):
+    """Заявка на передачу (тизер / отчёт) получателю, включая Rounds. Только запись; дальше — G-4 владельца."""
+    if not _admin_ok():
+        return _err("unauthorized", 401)
+    body = request.get_json(silent=True) or {}
+    kind, recipient = body.get("kind"), str(body.get("recipient") or "").strip()
+    if kind not in ("teaser", "report") or not recipient:
+        return _err("kind teaser|report and recipient required", 400)
+    job = _job_or_404(job_id)
+    if not job:
+        return _err("not found", 404)
+    st = _state()
+    blockers = exit_intro.transfer_blockers(job, st.store, kind, recipient, _hq028())
+    if blockers:
+        tid = st.store.add_transfer(job_id, kind, recipient, "blocked", "admin", "; ".join(blockers))
+        return jsonify({"ok": False, "transfer_id": tid, "blocked": blockers}), 409
+    tid = st.store.add_transfer(job_id, kind, recipient, "awaiting_g4", "admin")
+    return jsonify({"ok": True, "transfer_id": tid, "status": "awaiting_g4"})
+
+
+@bp.post("/transfers/<tid>/g4")
+def transfer_g4(tid):
+    """G-4: решение владельца (персональная подпись). Перед выпуском — повторная проверка журнала.
+    Выпуск = ссылка со сроком для владельца; сама система ничего не отправляет."""
+    who = _approver()
+    if not who:
+        return _err("personal approver signature required", 403 if _admin_ok() else 401)
+    st = _state()
+    tr = st.store.transfer(tid)
+    if not tr:
+        return _err("not found", 404)
+    if tr["status"] != "awaiting_g4":
+        return _err(f"transfer status is {tr['status']}", 409)
+    if (request.get_json(silent=True) or {}).get("decision") != "yes":
+        st.store.set_transfer(tid, "declined", who, "G-4: нет")
+        return jsonify({"ok": True, "status": "declined"})
+    job = st.store.get(tr["job_id"])
+    blockers = exit_intro.transfer_blockers(job, st.store, tr["kind"], tr["recipient"], _hq028())
+    if blockers:
+        st.store.set_transfer(tid, "blocked", who, "; ".join(blockers))
+        return _err("; ".join(blockers), 409)
+    st.store.set_transfer(tid, "released", who, "G-4: да")
+    link = _issue_link(tid, "shared", "/s1/shared")
+    return link
+
+
+@bp.get("/shared/<tid>")
+def shared_open(tid):
+    """Открытие ссылки получателем: срок, затем журнал согласий при КАЖДОМ открытии."""
+    bad = _link_check(tid, "shared")
+    if bad:
+        return bad
+    st = _state()
+    tr = st.store.transfer(tid)
+    if not tr or tr["status"] != "released":
+        return _err("not available", 404)
+    job = st.store.get(tr["job_id"])
+    blockers = exit_intro.transfer_blockers(job, st.store, tr["kind"], tr["recipient"], _hq028())
+    if blockers:
+        return _err("доступ закрыт: " + "; ".join(blockers), 403)
+    disc = _hq028()["disclaimer"]
+    if tr["kind"] == "teaser":
+        t = job["data"]["teaser"]
+        return jsonify({k: t[k] for k in ("area", "stage", "raise", "strengths", "risks", "fund_decision", "disclaimer")})
+    html = job["data"]["founder_report_html"]
+    return Response(f'<p class="disclaimer"><b>{disc}</b></p>' + html, mimetype="text/html")
 
 
 @bp.post("/jobs/<job_id>/rerun")
