@@ -92,8 +92,10 @@ class PackBlocksTests(unittest.TestCase):
         blocks = pack["pack_blocks"]
         self.assertEqual([b["n"] for b in blocks], list(range(1, 12)))
         b = {x["n"]: x for x in blocks}
-        self.assertEqual(b[1]["status"], "STOP")  # пороги LS §2.3 не утверждены — не выдумываем
-        self.assertEqual(b[8]["status"], "STOP")
+        # PM 11.10: блок 1 — общие пороги yaml («рабочие»), блок 8 — 30/60/90, «не указано»
+        self.assertEqual(b[1]["status"], "рабочее")
+        self.assertIn(b[1]["value"], M["working"]["pack_block1"]["map"].values())
+        self.assertEqual(b[8]["status"], "рабочее")
         self.assertIn("не медицинский совет", b[9]["value"])
         self.assertEqual(len(b[6]["zones"]), 7)
         for c in b[3]["claims"]:
@@ -227,7 +229,7 @@ class EndToEndTests(Tg1Base):
         r = self.c.get(link["path"])  # без admin-токена — по подписанной ссылке
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r.get_json()["label"], "ИИ-оценка, не инвестиционная рекомендация")
-        self.assertEqual(self.c.get(link["path"][:-1] + "0").status_code, 403)
+        self.assertEqual(self.c.get(link["path"][:-1] + ("0" if link["path"][-1] != "0" else "1")).status_code, 403)
         with self.app.app_context():
             past = int(time.time()) - 10
             sig = s1main._free_token(jid, past)

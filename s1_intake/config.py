@@ -95,7 +95,8 @@ class Settings:
     # HQ-020: ограниченная по времени ссылка на бесплатную часть. Без секрета и срока ссылки не выдаются
     # (срок PM не задан — значения по умолчанию нет).
     free_link_secret: str = field(default_factory=lambda: _env("S1_FREE_LINK_SECRET"))
-    free_link_ttl_s: int = field(default_factory=lambda: int(_env("S1_FREE_LINK_TTL_S", "0") or 0))
+    # рабочее (PM 11.10): по умолчанию 14 дней; секрет — только из окружения
+    free_link_ttl_s: int = field(default_factory=lambda: int(_env("S1_FREE_LINK_TTL_S", str(14 * 86400)) or 0))
     # HQ-020 / A14: SHA кода в каждом отчёте (Render отдаёт RENDER_GIT_COMMIT)
     code_sha: str = field(default_factory=lambda: _env("S1_CODE_SHA") or _env("RENDER_GIT_COMMIT") or _git_sha())
 
@@ -122,6 +123,9 @@ def load_methodology(path: str | None = None) -> dict:
     with open(p, encoding="utf-8") as f:
         m = yaml.safe_load(f)
     _check(m)
+    with open(PKG / "working_values.yaml", encoding="utf-8") as f:  # HQ-020: рабочие значения отдельно
+        m["working"] = yaml.safe_load(f)
+    m["dialogue_s1"]["limits"].update(m["working"]["limits"])
     return m
 
 

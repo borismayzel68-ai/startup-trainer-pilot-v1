@@ -70,7 +70,7 @@ class DialogueTests(unittest.TestCase):
         r1 = [q["qid"] for q in s["queue"]["Р1"]]
         self.assertIn("Q0.7", r0)
         self.assertIn("Q1.Z6", r1)
-        self.assertIn("З2:hospital_drug", r1)
+        self.assertIn("Q1.Z2", r1)  # PM 11.10: З2 «лекарство в стационаре» — отдельный вопрос Р1 для ЛП
 
     def test_no_questions_on_na_slots(self):
         s = self.session()

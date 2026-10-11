@@ -76,6 +76,11 @@ def build_session(scores: dict, m: dict, previous: dict | None = None, product_c
             if q.get("ls_only"):
                 r1.append({"qid": q["id"], "id": q["id"], "question": q["text"], "source": "control", "zone": None})
                 covered.add(q.get("signal"))
+        zq = m["working"]["r1_drug_hospital_question"]  # PM 11.10: З2 «лекарство в стационаре», только ЛП
+        if br == "drug":
+            r1.append({"qid": zq["id"], "id": zq["id"], "question": m["ls_zone_signals"][zq["signal"]],
+                       "source": "control", "zone": "З2"})
+            covered.add(zq["signal"])
         for zid, text in bank["zones_now"].items():  # отдельный вопрос только по зоне «сейчас»
             if zones.get(zid, {}).get("status") == "сейчас":
                 r1.append({"qid": f"{zid}:now", "id": zid, "question": text, "source": "zone_now", "zone": zid})
@@ -91,13 +96,16 @@ def build_session(scores: dict, m: dict, previous: dict | None = None, product_c
                    "source": "zone", "zone": q.get("zone")})
     if ls.get("gate_request"):
         r0.append({"qid": "gate", "id": "gate", "question": ls["gate_request"], "source": "gate", "zone": None})
+    lim1 = cfg["limits"]["r1"]  # рабочий лимит Р1: хвост очереди не задаётся, записывается с причиной
+    r1, r1_over = r1[:lim1], [{"qid": q["qid"], "reason": "не задавался: лимит Р1"} for q in r1[lim1:]]
     return {
         "round": prev.get("round", "Р0"), "rounds_used": prev.get("rounds_used", 1),
         "limits": dict(cfg["limits"]), "queue": {"Р0": r0, "Р1": r1},
         "asked": prev.get("asked", {"Р0": [], "Р1": [], "Р2": []}),
         "answers": prev.get("answers", []), "r2_items": prev.get("r2_items", []),
         "r2_not_requested": prev.get("r2_not_requested", []), "human_decisions": prev.get("human_decisions", []),
-        "clarifications": prev.get("clarifications", 0), "path": "LS" if is_ls else "IT",
+        "clarifications": prev.get("clarifications", 0), "path": "LS" if is_ls else "IT", "r1_not_asked": r1_over,
+        "r2_deadline_days": m["working"]["r2_deadline_days"],
         "stage_pending": stage_pending, "gate_missing": bool(ls.get("gate_request")), "exit": prev.get("exit"),
         "question_count": sum(len(v) for v in prev.get("asked", {}).values()),
     }
@@ -166,12 +174,45 @@ def next_round(session: dict, human: str | None = None, reason: str | None = Non
     return session
 
 
+def _due(session: dict, now: datetime | None = None) -> str:
+    from datetime import timedelta
+    return ((now or datetime.now(timezone.utc)) + timedelta(days=session.get("r2_deadline_days", 14))).isoformat(
+        timespec="seconds")
+
+
 def add_r2_item(session: dict, item: str, reason: str) -> dict:
     if len(session["r2_items"]) >= session["limits"]["r2"]:
         session["r2_not_requested"].append({"item": item, "reason": "не запрашивалось: лимит досылки"})
         return session
-    session["r2_items"].append({"item": item, "reason": reason, "state": "дошлю позже", "files": []})
+    session["r2_items"].append({"item": item, "reason": reason, "state": "дошлю позже", "files": [],
+                                "due": _due(session)})
     return session
+
+
+def expire_overdue(session: dict, now: datetime | None = None) -> list[str]:
+    """Срок досылки (рабочее: 14 дней) прошёл → пункт «истёк» (MISSING/CLAIM с причиной)."""
+    now = now or datetime.now(timezone.utc)
+    done = []
+    for it in session["r2_items"]:
+        if it["state"] == "дошлю позже" and it.get("due") and datetime.fromisoformat(it["due"]) < now:
+            it.update(state="истёк", closed_as="MISSING/CLAIM", close_reason="не дослано к сроку")
+            done.append(it["item"])
+    return done
+
+
+def resume_r2(session: dict, item: str, now: datetime | None = None) -> dict:
+    """Возобновить истёкший пункт: снова «дошлю позже» с новым сроком."""
+    for it in session["r2_items"]:
+        if it["item"] == item:
+            if it["state"] != "истёк":
+                raise DialogueError("возобновить можно только истёкший пункт")
+            it.update(state="дошлю позже", due=_due(session, now))
+            it.pop("closed_as", None)
+            it.pop("close_reason", None)
+            it.setdefault("resumed", 0)
+            it["resumed"] += 1
+            return session
+    raise DialogueError(f"нет пункта Р2 {item}")
 
 
 def attach_file(session: dict, item: str, file_name: str) -> dict:

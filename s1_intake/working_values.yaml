@@ -1,0 +1,14 @@
+# HQ-020 · Рабочие значения до итогов пилота (решения PM 11.10). Всё здесь — «рабочее».
+# methodology.yaml (веса, пороги, потолки) НЕ меняется.
+status: рабочее
+pack_block1:            # статус LS = те же общие пороги yaml (scoring.next_min и др.), подписи — рабочие
+  label: "рабочие пороги (общие пороги yaml)"
+  map: {NEXT: "READY FOR INVESTOR CONVERSATION", HOLD: "ITERATE", PASS: "NOT READY"}
+pack_block8:
+  horizons: ["30 дней", "60 дней", "90 дней"]
+  not_specified: "не указано"
+limits: {r0: 7, r1: 12, r2: 5}          # рабочее
+r2_deadline_days: 14                    # рабочее; после срока — статус «истёк», можно возобновить
+r1_drug_hospital_question:              # З2, только ЛП, в пределах лимита Р1 (текст — ls_zone_signals.hospital_drug)
+  id: Q1.Z2
+  signal: hospital_drug

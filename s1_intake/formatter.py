@@ -144,13 +144,14 @@ def build_pack_blocks(res: EvaluationResult, m: dict) -> list[dict]:
     Блоки 10 (не дослано) и 11 («проверил, дата») заполняет main.py из сессии и журнала подписи.
     Где источник не даёт значения, блок помечен status=STOP с причиной — значения не выдумываются."""
     ls = res.scores.ls or {}
-    stop = lambda why: {"status": "STOP", "reason": why}  # noqa: E731
     claims = [{"id": c.id, "statement": c.statement, "class": c.category.value, "level": f"E{c.evidence_level}",
                "source": c.source_ref or ", ".join(c.sources) or "НЕ ПОДТВЕРЖДЕНО"} for c in res.classification.claims]
     k7 = ls.get("next_artifact")
+    w = m["working"]
+    na = w["pack_block8"]["not_specified"]
     blocks = [
-        {"n": 1, "title": "Статус", **stop("Пороги LS §2.3 — «предложение PM S1, ручной режим» (сценарий §5.2 п. 1, "
-                                           "открытый вопрос №9); внутренние метки вердикта основателю не показываются")},
+        {"n": 1, "title": "Статус", "value": w["pack_block1"]["map"][res.scores.verdict],
+         "basis": w["pack_block1"]["label"], "status": "рабочее"},
         {"n": 2, "title": "Строка итога", "value": ls.get("summary_line"),
          "note": "шкала 0–100 по решению PM; формат «X,X / 5» сценария §5.2 п. 2 считается в пилоте вручную"},
         {"n": 3, "title": "Что доказано", "claims": claims},
@@ -158,9 +159,11 @@ def build_pack_blocks(res: EvaluationResult, m: dict) -> list[dict]:
         {"n": 5, "title": "Слоты N_A_BY_STAGE", "na_slots": ls.get("na_slots")},
         {"n": 6, "title": "LS-барьеры З1–З7", "zones": ls.get("zones")},
         {"n": 7, "title": "Критичные барьеры (2–5)", "barriers": ls.get("barriers")},
-        {"n": 8, "title": "Следующие шаги", "first_step_k7": k7,
-         **stop("Горизонты «1–3 и 6–12 мес» vs «30/60/90» не утверждены (сценарий §7 вопрос №6); "
-                "владелец шага и процедура РФ в данных не заданы")},
+        {"n": 8, "title": "Следующие шаги", "first_step_k7": k7, "status": "рабочее",
+         "steps": [{"horizon": hz, "step": st, "owner": na, "procedure_rf": na}
+                   for hz, plan in zip(w["pack_block8"]["horizons"],
+                                       (res.synthesis.plan_30, res.synthesis.plan_60, res.synthesis.plan_90))
+                   for st in plan]},
         {"n": 9, "title": "Оговорки", "value": m["dialogue_questions_s1"]["pack_disclaimer"]},
         {"n": 10, "title": "Не дослано и почему", "items": []},
         {"n": 11, "title": "Проверил, дата", "signed": None},
