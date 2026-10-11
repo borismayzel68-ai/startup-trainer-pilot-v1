@@ -172,7 +172,8 @@ class S1GuardrailTests(unittest.TestCase):
     def test_deck_cannot_be_fact(self):
         c = self.claims()
         self.assertEqual((c["C02"].evidence_level, c["C02"].category), (1, Category.FOUNDER_CLAIM))
-        self.assertEqual(c["C03"].category, Category.FACT)
+        # HQ-035 / канон Р-5: документ третьей стороны без подписи — FACT_CANDIDATE, не FACT
+        self.assertEqual(c["C03"].category, Category.FACT_CANDIDATE)
 
     def test_phantom_evidence_removed(self):
         c = self.claims(sources=("deck", "model"))
@@ -259,8 +260,8 @@ class S1EndToEndTests(unittest.TestCase):
         self.assertIn(pdf.status_code, (200, 501))         # 501 — хост без pango
         if pdf.status_code == 200:
             self.assertEqual(pdf.data[:5], b"%PDF-")
-        # без SMTP отправка фаундеру не проходит
-        self.assertEqual(self.c.post(f"/s1/jobs/{jid}/approve", headers=ADMIN).status_code, 409)
+        # TG-1: общий admin-токен не является персональной подписью → 403 (раньше: 409 из-за SMTP)
+        self.assertEqual(self.c.post(f"/s1/jobs/{jid}/approve", headers=ADMIN).status_code, 403)
         # rerun использует кэш разбора файлов
         self.assertEqual(self.c.post(f"/s1/jobs/{jid}/rerun", headers=ADMIN).status_code, 200)
         self.assertEqual(self.wait(jid)["status"], "ready_for_review")

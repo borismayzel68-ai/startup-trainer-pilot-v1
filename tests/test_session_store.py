@@ -1,6 +1,7 @@
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -118,6 +119,43 @@ class DurableSessionStoreTests(unittest.TestCase):
         store.save(session)
         self.assertEqual(len(store.values()), 1)
         self.assertEqual(len(store.get("session-1")["qa"]), 2)
+
+    def test_postgres_schema_initialization_takes_advisory_lock_first(self):
+        class FakeCursor:
+            rowcount = 1
+
+        class FakeConnection:
+            def __init__(self):
+                self.calls = []
+
+            def execute(self, sql, params=None):
+                self.calls.append((" ".join(sql.split()), params))
+                return FakeCursor()
+
+            def commit(self):
+                self.calls.append(("COMMIT", None))
+
+            def close(self):
+                pass
+
+        conn = FakeConnection()
+        store = DurableSessionStore.__new__(DurableSessionStore)
+        store.database_url = "postgresql://example.invalid/test"
+        store.retention_days = 30
+        store.backend = "postgres"
+        store._lock = threading.RLock()
+        store._memory_connection = None
+        store._connect = lambda: conn
+
+        store.initialize()
+
+        self.assertEqual(
+            conn.calls[0][0],
+            "SELECT pg_advisory_xact_lock(%s)",
+        )
+        self.assertEqual(conn.calls[0][1], (8675309007,))
+        self.assertIn("CREATE TABLE IF NOT EXISTS trainer_sessions", conn.calls[1][0])
+        self.assertIn("CREATE TABLE IF NOT EXISTS completion_receipts", conn.calls[2][0])
 
 if __name__ == "__main__":
     unittest.main()

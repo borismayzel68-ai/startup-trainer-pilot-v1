@@ -3,13 +3,27 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Literal
+from typing import ClassVar, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_serializer
 
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+class _OmitEmpty(BaseModel):
+    """HQ-016: новые поля сериализуются, только если заполнены — вывод не-LS кейсов
+    остаётся побайтно прежним (golden, T3)."""
+    _omit_if_empty: ClassVar[tuple[str, ...]] = ()
+
+    @model_serializer(mode="wrap")
+    def _drop_empty(self, handler):
+        d = handler(self)
+        for k in self._omit_if_empty:
+            if k in d and not d[k]:
+                d.pop(k)
+        return d
 
 
 # ---------------------------------------------------------------- intake ----
@@ -28,7 +42,8 @@ class FileRef(BaseModel):
     url: str
 
 
-class Submission(BaseModel):
+class Submission(_OmitEmpty):
+    _omit_if_empty: ClassVar[tuple[str, ...]] = ("ls_stage",)
     submission_id: str               # Tilda tranid (идемпотентность)
     received_at: datetime = Field(default_factory=utcnow)
     project_id: str | None = None    # VC-ID, если уже присвоен фондом
@@ -41,6 +56,7 @@ class Submission(BaseModel):
     target_markets: str = ""
     product_class: str = ""
     intended_use: str = ""
+    ls_stage: str = ""               # HQ-016: стадия LS-актива (поле формы ls_stage), иначе пусто
     answers: list[Answer] = []
     files: list[FileRef] = []
 
@@ -64,7 +80,8 @@ class ParsedDoc(BaseModel):
 
 # ------------------------------------------------------------ evaluation ----
 class Category(str, Enum):
-    FACT = "FACT"
+    FACT = "FACT"                      # HQ-035: только после подписи человека (verified_by), канон Р-5
+    FACT_CANDIDATE = "FACT_CANDIDATE"  # код: документ ≥ fact_min_level без подписи — «заявление с документом»
     FOUNDER_CLAIM = "FOUNDER_CLAIM"
     UNKNOWN = "UNKNOWN"
     CONFLICT = "CONFLICT"
@@ -83,6 +100,7 @@ class Claim(BaseModel):
     conflicts_with: list[str] = []
     verification_step: str = ""
     machine_adjusted: list[str] = []    # что поменяли детерминированные правила (аудит-след)
+    verified_by: str | None = None      # HQ-035: роль подписанта факта (ставит только код по журналу подписей)
 
     @field_validator("sources", mode="before")
     @classmethod
@@ -152,13 +170,19 @@ class Synthesis(BaseModel):
 
 
 # ---------------------------------------------------------------- scores ----
-class ItemScore(BaseModel):
+SlotState = Literal["SCORED", "N_A_BY_STAGE", "MISSING"]
+
+
+class ItemScore(_OmitEmpty):
+    _omit_if_empty: ClassVar[tuple[str, ...]] = ("applicability", "na_reason")
     key: str
     label: str
     critical: bool
     best_level: int | None          # None = пробел
     status: Category
     claim_ids: list[str] = []
+    applicability: SlotState | None = None   # HQ-016: только когда применяется LS-правило
+    na_reason: str | None = None
 
 
 class BlockScore(BaseModel):
@@ -172,13 +196,15 @@ class BlockScore(BaseModel):
 Verdict = Literal["PASS", "HOLD", "NEXT"]
 
 
-class Scores(BaseModel):
+class Scores(_OmitEmpty):
+    _omit_if_empty: ClassVar[tuple[str, ...]] = ("ls",)
     readiness: int                  # 0..100
     blocks: list[BlockScore]
     critical_gaps: list[str]
     critical_conflicts: list[str]
     verdict: Verdict
     verdict_gates: list[str]        # почему именно такой вердикт (детерминированно)
+    ls: dict | None = None          # HQ-016: сводка LS-правила (знаменатель, N/A, К1–К6, барьеры, К7)
 
 
 class EvaluationResult(BaseModel):

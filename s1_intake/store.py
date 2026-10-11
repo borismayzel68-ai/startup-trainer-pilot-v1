@@ -13,7 +13,7 @@ import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
-STATUSES = ("received", "processing", "ready_for_review", "sent", "failed", "rejected")
+STATUSES = ("received", "processing", "awaiting_founder", "out_of_scope", "manual_review", "ready_for_review", "sending", "sent", "failed", "rejected")
 _COLUMNS = ("status", "project_name", "founder_email", "verdict", "readiness", "error", "data_json")
 
 
@@ -70,6 +70,40 @@ class ReadinessJobStore:
                 data_json TEXT NOT NULL
             )""")
         self._exec("CREATE INDEX IF NOT EXISTS s1_readiness_jobs_status_idx ON s1_readiness_jobs (status)")
+        # TG-1: журнал подписей (append-only): кто, когда, что (sha256 отчёта), чем кончилось.
+        self._exec("""
+            CREATE TABLE IF NOT EXISTS s1_approvals (
+                job_id TEXT NOT NULL, approver TEXT NOT NULL, approved_at TEXT NOT NULL,
+                report_sha256 TEXT NOT NULL, outcome TEXT NOT NULL, detail TEXT
+            )""")
+        # HQ-028: журнал согласий (кто, что, кому, когда, отзыв) и журнал передач (G-4)
+        self._exec("""
+            CREATE TABLE IF NOT EXISTS s1_consents (
+                id TEXT PRIMARY KEY, job_id TEXT NOT NULL, granted_by TEXT NOT NULL, scope TEXT NOT NULL,
+                recipient TEXT NOT NULL, granted_at TEXT NOT NULL, revoked_at TEXT, revoked_by TEXT
+            )""")
+        self._exec("""
+            CREATE TABLE IF NOT EXISTS s1_transfers (
+                id TEXT PRIMARY KEY, job_id TEXT NOT NULL, kind TEXT NOT NULL, recipient TEXT NOT NULL,
+                status TEXT NOT NULL, requested_by TEXT, requested_at TEXT NOT NULL,
+                g4_by TEXT, g4_at TEXT, detail TEXT
+            )""")
+        # HQ-028: внутренние задачи (очередь подписанта); наружу ничего не уходит
+        self._exec("""
+            CREATE TABLE IF NOT EXISTS s1_tasks (
+                id TEXT PRIMARY KEY, job_id TEXT NOT NULL, assignee TEXT NOT NULL, title TEXT NOT NULL,
+                status TEXT NOT NULL, created_at TEXT NOT NULL
+            )""")
+        self._exec("CREATE UNIQUE INDEX IF NOT EXISTS s1_tasks_once ON s1_tasks (job_id, title)")
+        # HQ-035: журнал подписей факта (кто, когда, роль, слот, основание) — append-only
+        self._exec("""
+            CREATE TABLE IF NOT EXISTS s1_fact_signoffs (
+                job_id TEXT NOT NULL, slot TEXT NOT NULL, signer TEXT NOT NULL, role TEXT NOT NULL,
+                signed_at TEXT NOT NULL, basis TEXT NOT NULL
+            )""")
+        # один и тот же отчёт (job + sha256) может быть отправлен только один раз
+        self._exec("CREATE UNIQUE INDEX IF NOT EXISTS s1_approvals_sent_once ON s1_approvals "
+                   "(job_id, report_sha256) WHERE outcome='sent'")
 
     @staticmethod
     def _row(r) -> dict | None:
@@ -116,10 +150,107 @@ class ReadinessJobStore:
             params.append(stale_before)
         return self._exec(sql + ")", tuple(params)) == 1
 
+    # ------------------------------------------------------------- TG-1 --
+    def begin_send(self, job_id: str) -> bool:
+        """Атомарно ready_for_review → sending. Второй параллельный approve получает False."""
+        return self._exec(f"UPDATE s1_readiness_jobs SET status='sending', updated_at={self.ph} "
+                          f"WHERE id={self.ph} AND status='ready_for_review'", (_now(), job_id)) == 1
+
+    def was_sent(self, job_id: str, report_sha256: str) -> bool:
+        return bool(self._exec(f"SELECT 1 FROM s1_approvals WHERE job_id={self.ph} AND report_sha256={self.ph} "
+                               f"AND outcome='sent'", (job_id, report_sha256), "one"))
+
+    def log_approval(self, job_id: str, approver: str, report_sha256: str, outcome: str, detail: str = "") -> None:
+        p = self.ph
+        self._exec(f"INSERT INTO s1_approvals (job_id, approver, approved_at, report_sha256, outcome, detail) "
+                   f"VALUES ({p},{p},{p},{p},{p},{p})", (job_id, approver, _now(), report_sha256, outcome, detail[:500]))
+
+    def approvals(self, job_id: str) -> list[dict]:
+        rows = self._exec(f"SELECT approver, approved_at, report_sha256, outcome, detail FROM s1_approvals "
+                          f"WHERE job_id={self.ph} ORDER BY approved_at", (job_id,), "all")
+        return [dict(zip(("approver", "approved_at", "report_sha256", "outcome", "detail"), r)) for r in rows]
+
+    # ---------------------------------------------------------- HQ-028 ----
+    def grant_consent(self, job_id: str, by: str, scope: str, recipient: str) -> str:
+        import uuid
+        cid, p = uuid.uuid4().hex, self.ph
+        self._exec(f"INSERT INTO s1_consents (id, job_id, granted_by, scope, recipient, granted_at) "
+                   f"VALUES ({p},{p},{p},{p},{p},{p})", (cid, job_id, by, scope, recipient, _now()))
+        return cid
+
+    def revoke_consents(self, job_id: str, by: str, recipient: str | None = None) -> int:
+        p = self.ph
+        sql = f"UPDATE s1_consents SET revoked_at={p}, revoked_by={p} WHERE job_id={p} AND revoked_at IS NULL"
+        args = [_now(), by, job_id]
+        if recipient:
+            sql += f" AND recipient={p}"
+            args.append(recipient)
+        return self._exec(sql, tuple(args))
+
+    def consents(self, job_id: str) -> list[dict]:
+        keys = ("id", "granted_by", "scope", "recipient", "granted_at", "revoked_at", "revoked_by")
+        rows = self._exec(f"SELECT {', '.join(keys)} FROM s1_consents WHERE job_id={self.ph} ORDER BY granted_at",
+                          (job_id,), "all")
+        return [dict(zip(keys, r)) for r in rows]
+
+    def consent_active(self, job_id: str, scope: str, recipient: str) -> bool:
+        return any(c["scope"] == scope and c["recipient"] == recipient and not c["revoked_at"]
+                   for c in self.consents(job_id))
+
+    def add_transfer(self, job_id: str, kind: str, recipient: str, status: str, by: str, detail: str = "") -> str:
+        import uuid
+        tid, p = uuid.uuid4().hex, self.ph
+        self._exec(f"INSERT INTO s1_transfers (id, job_id, kind, recipient, status, requested_by, requested_at, detail) "
+                   f"VALUES ({p},{p},{p},{p},{p},{p},{p},{p})", (tid, job_id, kind, recipient, status, by, _now(), detail[:500]))
+        return tid
+
+    def set_transfer(self, tid: str, status: str, g4_by: str | None = None, detail: str = "") -> None:
+        p = self.ph
+        self._exec(f"UPDATE s1_transfers SET status={p}, g4_by=COALESCE({p}, g4_by), g4_at={p}, detail={p} "
+                   f"WHERE id={p}", (status, g4_by, _now(), detail[:500], tid))
+
+    def transfer(self, tid: str) -> dict | None:
+        keys = ("id", "job_id", "kind", "recipient", "status", "requested_by", "requested_at", "g4_by", "g4_at", "detail")
+        r = self._exec(f"SELECT {', '.join(keys)} FROM s1_transfers WHERE id={self.ph}", (tid,), "one")
+        return dict(zip(keys, r)) if r else None
+
+    def add_task_once(self, job_id: str, assignee: str, title: str) -> bool:
+        import uuid
+        p = self.ph
+        try:
+            self._exec(f"INSERT INTO s1_tasks (id, job_id, assignee, title, status, created_at) "
+                       f"VALUES ({p},{p},{p},{p},'open',{p})", (uuid.uuid4().hex, job_id, assignee, title, _now()))
+            return True
+        except Exception:  # noqa: BLE001 — уже создана (UNIQUE)
+            return False
+
+    def tasks(self, assignee: str | None = None) -> list[dict]:
+        keys = ("id", "job_id", "assignee", "title", "status", "created_at")
+        sql, args = f"SELECT {', '.join(keys)} FROM s1_tasks", ()
+        if assignee:
+            sql, args = sql + f" WHERE assignee={self.ph}", (assignee,)
+        return [dict(zip(keys, r)) for r in self._exec(sql + " ORDER BY created_at", args, "all")]
+
+    def timer_jobs(self) -> list[str]:
+        rows = self._exec("SELECT id FROM s1_readiness_jobs WHERE data_json LIKE '%\"fund_timer\"%'", (), "all")
+        return [r[0] for r in rows]
+
+    def log_fact_signoff(self, job_id: str, slot: str, signer: str, role: str, basis: str) -> dict:
+        p, at = self.ph, _now()
+        self._exec(f"INSERT INTO s1_fact_signoffs (job_id, slot, signer, role, signed_at, basis) "
+                   f"VALUES ({p},{p},{p},{p},{p},{p})", (job_id, slot, signer, role, at, basis[:1000]))
+        return {"slot": slot, "signer": signer, "role": role, "at": at, "basis": basis}
+
+    def fact_signoffs(self, job_id: str) -> list[dict]:
+        keys = ("slot", "signer", "role", "at", "basis")
+        rows = self._exec(f"SELECT slot, signer, role, signed_at, basis FROM s1_fact_signoffs WHERE job_id={self.ph} "
+                          f"ORDER BY signed_at", (job_id,), "all")
+        return [dict(zip(keys, r)) for r in rows]
+
     def reset_for_rerun(self, job_id: str) -> bool:
         return self._exec(
             f"UPDATE s1_readiness_jobs SET status='received', updated_at={self.ph} "
-            f"WHERE id={self.ph} AND status IN ('ready_for_review','failed','sent')", (_now(), job_id)) == 1
+            f"WHERE id={self.ph} AND status IN ('ready_for_review','awaiting_founder','manual_review','failed','sent')", (_now(), job_id)) == 1
 
     def update(self, job_id: str, data_patch: dict | None = None, **fields) -> None:
         bad = set(fields) - set(_COLUMNS)

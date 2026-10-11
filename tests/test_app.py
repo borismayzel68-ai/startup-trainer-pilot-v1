@@ -130,7 +130,7 @@ class StartApiTests(unittest.TestCase):
         self.assertIn("до покрытия обязательных слотов",html)
 
     def test_a8_completion_webhook_is_configured(self):
-        self.assertEqual(appmod.TRAINER_VERSION,"s1-ext-pilot-v1.4-completion-event")
+        self.assertEqual(appmod.TRAINER_VERSION,"s1-ext-pilot-v1.6-founder-package")
         self.assertTrue(hasattr(appmod,"TRAINER_EVENT_WEBHOOK"))
 
     def test_full_readiness_continues_through_question_13(self):
