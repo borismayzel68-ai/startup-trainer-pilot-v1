@@ -101,7 +101,7 @@ LS = {
     "ls_md_prototype": {**_BASE, "tranid": "synthetic:ls-2", "jurisdiction": "РФ", "product_class": "MEDICAL_DEVICE",
                         "intended_use": "синтетическое МИ, прототип", "ls_stage": "poc"},
     "ls_registered": {**_BASE, "tranid": "synthetic:ls-3", "jurisdiction": "РФ", "product_class": "MEDICAL_DEVICE",
-                      "intended_use": "синтетическое МИ после РУ", "ls_stage": "registered"},
+                      "intended_use": "синтетическое МИ, РУ получено", "ls_stage": "registered"},
     "ls_no_gate": {**_BASE, "tranid": "synthetic:ls-5", "jurisdiction": "", "product_class": "",
                    "intended_use": "синтетика", "ls_stage": "preclinical"},
 }

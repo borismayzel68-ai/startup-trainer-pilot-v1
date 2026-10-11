@@ -66,9 +66,9 @@ def build_founder_view(res: EvaluationResult, m: dict, fund_name: str) -> dict:
         "file_warnings": [w for d in res.docs for w in d.warnings],
     }
     if ls:  # HQ-016 §4: только для LS-разметки; не-LS вывод не меняется
-        view["ls"] = {k: ls[k] for k in ("applied", "reason", "stage_label", "summary_line", "na_slots",
-                                         "milestones", "barriers", "next_artifact", "slots_scored",
-                                         "slots_applicable")}
+        view["ls"] = {k: ls.get(k) for k in ("applied", "reason", "stage_label", "summary_line", "na_slots",
+                                             "milestones", "barriers", "next_artifact", "slots_scored",
+                                             "slots_applicable", "zones", "gate_request", "stage_uncertain")}
     return view
 
 

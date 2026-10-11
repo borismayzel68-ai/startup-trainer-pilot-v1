@@ -7,6 +7,7 @@ from pathlib import Path
 
 from .config import Settings, build_checklist, routing_for
 from .llm import LLMClient
+from .ls_zones import build_zones, derive_stage
 from .models import (
     BearCase,
     BullCase,
@@ -21,6 +22,7 @@ from .scoring import (
     enforce_rules,
     gap_id,
     ls_stage_context,
+    cap_device_pilots,
     priority_gaps,
     score,
     validate_citations,
@@ -110,7 +112,7 @@ def model_cap_overrides(docs: list[ParsedDoc], m: dict) -> dict[str, int]:
 def evaluate(job_id: str, sub: Submission, docs: list[ParsedDoc], llm: LLMClient, settings: Settings, m: dict) -> EvaluationResult:
     pdir = settings.prompts_dir
     routing = routing_for(sub.jurisdiction, sub.target_markets, sub.product_class, sub.intended_use)
-    ls_ctx = ls_stage_context(routing, sub.ls_stage, m)          # HQ-016
+    ls_ctx = ls_stage_context(routing, derive_stage(sub, m), m)   # HQ-016 (+T6: стадия из анкеты)
     idx = build_checklist(m, routing["modules"], ls_milestones=ls_ctx["milestones"])
 
     # 1. Классификация FACT / FOUNDER_CLAIM / UNKNOWN / CONFLICT
@@ -127,8 +129,15 @@ def evaluate(job_id: str, sub: Submission, docs: list[ParsedDoc], llm: LLMClient
 
     # 2. Детерминированные предохранители и скоринг
     cls = enforce_rules(cls, m, idx, {d.source for d in docs if d.ok}, model_cap_overrides(docs, m))
+    cls = cap_device_pilots(ls_ctx, cls, m)
     ls_ctx = apply_revenue_claims(ls_ctx, cls, m)
     scores = score(cls, m, idx, ls_ctx)
+    if scores.ls is not None and (ls_ctx["asset_class"] in m["ls_stage_rule"]["asset_classes"] or not ls_ctx["gate"]):
+        z = build_zones(ls_ctx, scores, m)  # T6: зоны З1–З7 после скоринга — на балл не влияют
+        if ls_ctx.get("stage_uncertain"):
+            q = m["ls_stage_derivation"]["clarify_question"]
+            z["dialogue_questions"].insert(0, {"zone": None, "signal": "stage", "question": q, "round": "Р0"})
+        scores.ls.update(z)
     if not routing["routing_complete"]:
         scores.verdict_gates.append("Юрисдикция или класс продукта не распознаны — чек-лист только по общим модулям")
     audit, gaps = _audit_text(cls), _gaps_text(scores, idx)

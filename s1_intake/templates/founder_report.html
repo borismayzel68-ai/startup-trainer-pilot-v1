@@ -56,7 +56,20 @@
 {% endif %}
 {% if ls.next_artifact %}
 <h3>Один следующий артефакт (К7)</h3>
-<div class="card"><b>{{ ls.next_artifact.artifact }}</b></div>
+<div class="card"><b>{{ ls.next_artifact.artifact }}</b> <span class="tag">{{ ls.next_artifact.mark }}</span></div>
+{% endif %}
+{% if ls.stage_uncertain %}<p class="small"><b>Стадия:</b> уточнить в диалоге.</p>{% endif %}
+{% if ls.gate_request %}<p class="small"><b>{{ ls.gate_request }}</b></p>{% endif %}
+{% if ls.zones %}
+<h3>Зоны LS-барьеров З1–З7 (на балл не влияют)</h3>
+<table>
+  <tr><th>Зона</th><th>Статус</th><th>Критичный</th><th>Доказательство</th><th>Основание</th></tr>
+  {% for z in ls.zones %}
+  <tr><td>{{ z.id }} · {{ z.title }}</td><td>{{ z.status }}{% if z.status == "не применимо" %} ({{ z.reason }}){% endif %}</td>
+      <td>{% if z.critical %}да{% else %}нет{% endif %}</td><td>{{ z.evidence }}</td>
+      <td class="small">{{ z.basis|join("; ") }}{% if z.next_step %}<br><b>Следующий шаг:</b> {{ z.next_step }}{% endif %}</td></tr>
+  {% endfor %}
+</table>
 {% endif %}
 <p class="small muted">Подтвердить у эксперта / регулятора. Отчёт не является юридическим или регуляторным заключением.</p>
 {% endif -%}

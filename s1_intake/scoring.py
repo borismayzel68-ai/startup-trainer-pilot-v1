@@ -97,17 +97,22 @@ def enforce_rules(cls: ClassificationResult, m: dict, checklist: dict[str, dict]
 
 
 # ------------------------------------------------------ HQ-016: LS-стадия ----
-def ls_stage_context(routing: dict, ls_stage: str, m: dict) -> dict:
+def ls_stage_context(routing: dict, ls_stage, m: dict) -> dict:
     """Условия 1–3 HQ-016 §3 (условие 4 — заявленная выручка — проверяется после классификации).
     mark: размечать применимость слотов (SCORED / N_A_BY_STAGE / MISSING);
     eligible: IT-слоты можно ставить N_A_BY_STAGE; milestones: добавить К1–К6."""
     rule = m.get("ls_stage_rule") or {}
-    stage = (ls_stage or "").strip().lower()
+    derived = ls_stage if isinstance(ls_stage, dict) else {"stage": ls_stage or None, "uncertain": False}
+    stage = (derived.get("stage") or "").strip().lower()
+    uncertain = bool(derived.get("uncertain"))
     gate = bool(routing.get("routing_complete"))
     asset = routing.get("product_class")
     is_ls = gate and asset in rule.get("asset_classes", [])
     pre = rule.get("pre_registration_stages", {})
-    ctx = {"gate": gate, "asset_class": asset, "stage": stage or None, "stage_label": pre.get(stage, stage or None),
+    unc_label = (m.get("ls_stage_derivation") or {}).get("uncertain_label", "уточнить в диалоге")
+    ctx = {"gate": gate, "asset_class": asset, "stage": stage or None,
+           "stage_label": pre.get(stage, stage or None) if not uncertain else unc_label,
+           "stage_uncertain": uncertain, "stage_source": derived.get("source"), "phase": derived.get("phase"),
            # не-LS с гейтом не размечается вовсе (T3: вывод побайтно прежний)
            "mark": bool(rule) and (is_ls or (bool(stage) and not gate)), "eligible": False, "milestones": False, "reason": ""}
     if not rule:
@@ -118,11 +123,29 @@ def ls_stage_context(routing: dict, ls_stage: str, m: dict) -> dict:
         ctx["reason"] = "Тип актива не требует регистрации — правило не действует"
     elif stage in pre:
         ctx.update(eligible=True, milestones=True, reason="LS до РУ / пилота / продаж")
+    elif uncertain:  # T6(3): поле стадии отсутствует, ответы неоднозначны — правило работает, стадия «уточнить»
+        ctx.update(eligible=True, milestones=True,
+                   reason="Стадия из анкеты не определена однозначно — уточнить в диалоге; считается как до РУ")
     elif stage in rule.get("post_registration_stages", []):
         ctx["reason"] = "Есть РУ, пилот или продажи — IT-слоты оцениваются по обычным правилам"
     else:
         ctx["reason"] = "Стадия не указана — N/A по стадии не ставится"
     return ctx
+
+
+def cap_device_pilots(ctx: dict, cls: ClassificationResult, m: dict) -> ClassificationResult:
+    """T6(3): у МИ пилот до регистрации — веха со статусом «заявление» (не выше E1), не признак продаж."""
+    d = m.get("ls_stage_derivation") or {}
+    if not (ctx.get("eligible") and ctx.get("asset_class") in ("MEDICAL_DEVICE", "SOFTWARE_POTENTIAL_MD", "IVD")):
+        return cls
+    cap = int(d.get("device_pilot_max_level", 1))
+    for c in cls.claims:
+        if c.slot in d.get("device_pilot_slots", []) and c.evidence_level > cap:
+            c.machine_adjusted.append(f"E{c.evidence_level}→E{cap}: пилот МИ до регистрации — «заявление»")
+            c.evidence_level = cap
+            if c.category == Category.FACT:
+                c.category = Category.FOUNDER_CLAIM
+    return cls
 
 
 def apply_revenue_claims(ctx: dict, cls: ClassificationResult, m: dict) -> dict:
@@ -144,24 +167,25 @@ def _ls_summary(ctx: dict, m: dict, blocks_out: list[BlockScore], na: dict[str, 
                 "future_milestone": rule["future_milestone"], "risk": rule["it_slots"][it.key]["risk"]}
                for it in items if it.applicability == "N_A_BY_STAGE"]
     ms = sorted((it for it in items if checklist.get(it.key, {}).get("ls_k")), key=lambda it: checklist[it.key]["ls_k"])
+    order = rule.get("barrier_order", [])
     milestones = [{"k": checklist[it.key]["ls_k"], "key": it.key, "label": it.label, "level": it.best_level,
                    "status": it.status.value, "applicability": it.applicability} for it in ms]
     barriers, next_artifact = [], None
     if ms:
-        def weakness(it):
-            lvl = it.best_level if it.status not in (Category.UNKNOWN, Category.CONFLICT) else -1
-            return (it.status == Category.FACT, lvl)
-        ranked = sorted(ms, key=weakness)  # стабильная сортировка: при равенстве — порядок К
+        # порядок v0.2: регуляторный трек, клинические данные, IP, производство, возмещение
+        ranked = sorted(ms, key=lambda it: (it.status == Category.FACT, order.index(checklist[it.key]["ls_k"])))
         non_fact = [it for it in ranked if it.status != Category.FACT]
         n = min(max(len(non_fact), int(rule["barriers_min"])), int(rule["barriers_max"]), len(ranked))
         barriers = [{"k": checklist[it.key]["ls_k"], "key": it.key, "label": it.label,
                      "why": checklist[it.key]["why"], "next_step": checklist[it.key]["next_step"],
                      "status": it.status.value, "level": it.best_level} for it in ranked[:n]]
-        next_artifact = {"k7": "К7", "from": barriers[0]["k"], "artifact": barriers[0]["next_step"]}
+        next_artifact = {"k7": "К7", "from": barriers[0]["k"], "artifact": barriers[0]["next_step"],
+                         "mark": "рабочее, до пилота"}
     na_list = ", ".join(r["label"] for r in na_rows) or "—"
     return {
         "applied": bool(na), "reason": ctx["reason"], "gate": ctx["gate"], "asset_class": ctx["asset_class"],
         "stage": ctx["stage"], "stage_label": ctx["stage_label"],
+        "stage_uncertain": ctx.get("stage_uncertain", False), "stage_source": ctx.get("stage_source"),
         "applicable_weight": round(applicable_weight, 4), "excluded_blocks": excluded,
         "slots_scored": len(scored), "slots_applicable": len(applicable),
         "na_slots": na_rows, "milestones": milestones, "barriers": barriers, "next_artifact": next_artifact,
