@@ -11,10 +11,10 @@ HQ-035 — потолок FACT (Refs #21), ветка `fix/hq-035-fact-ceiling` 
 - Тесты: tests/test_hq035_fact_signoff.py (ловушка, подпись → FACT + журнал, отказы). Баллы не изменились.
 
 ## Дальше
-- Влить hq028/exit-intro после фикса основ фамилий (PR #14), только merge.
+- Влит hq028/exit-intro 42de16b (фикс основ имён, PR #14) — merge, без rebase.
 
 ## Сломано или не проверено
 - Кто подписывает (G-13) не решено: в конфиге только роль `analyst`, имена — через окружение.
 
 ## Последний коммит
-см. git log -1 (HQ-035: роль analyst по Issue #21, HANDOFF)
+см. git log -1 (merge hq028/exit-intro в fix/hq-035-fact-ceiling)

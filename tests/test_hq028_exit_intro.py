@@ -245,10 +245,28 @@ class Hq028V2Tests(Base28):
         job2 = {**job, "data": {**job["data"], "submission": sub}}
         v = exit_intro.deid_check({**CLEAN, "raise": "привлекаем с Соколовой", "fund_decision": None,
                                    "disclaimer": CFG["disclaimer"]}, job2, CFG)
-        self.assertFalse(v)  # другая словоформа не ловится — поэтому ручная проверка обязательна
+        self.assertTrue(any("соколова" in x for x in v), v)  # ловушка: другая словоформа ловится по основе
         v = exit_intro.deid_check({**CLEAN, "raise": "команда: Соколова", "fund_decision": None,
                                    "disclaimer": CFG["disclaimer"]}, job2, CFG)
         self.assertTrue(any("Соколова".lower() in x for x in v), v)
+
+    def test_short_names_exact_only(self):
+        jid = self.ready_job()
+        job = self.state.store.get(jid)
+        sub = dict(job["data"]["submission"])
+        sub["answers"] = [dict(a, value="CEO Анна Ким, CTO Олег Соколов") if a["field"] == "q_team" else a
+                          for a in sub["answers"]]
+        job2 = {**job, "data": {**job["data"], "submission": sub}}
+        base_t = {**CLEAN, "fund_decision": None, "disclaimer": CFG["disclaimer"]}
+        # короткие (< 5 букв): обычные слова с тем же началом не ловятся
+        v = exit_intro.deid_check({**base_t, "raise": "аннотация и кимоно, олеография"}, job2, CFG)
+        self.assertFalse([x for x in v if "имя в команде" in x], v)
+        # но точное совпадение — ловится
+        v = exit_intro.deid_check({**base_t, "raise": "с нами Ким"}, job2, CFG)
+        self.assertTrue(any("«ким»" in x for x in v), v)
+        # длинная фамилия — по основе в другом падеже
+        v = exit_intro.deid_check({**base_t, "raise": "встреча с Соколовым"}, job2, CFG)
+        self.assertTrue(any("соколов" in x for x in v), v)
 
     def test_no_free_deck_text_only_d5_fields(self):
         jid = self.ready_job()
