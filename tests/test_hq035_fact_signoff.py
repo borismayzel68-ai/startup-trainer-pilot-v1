@@ -25,7 +25,7 @@ class TrapTests(unittest.TestCase):
         """Ловушка: документ третьей стороны (E3), модель сама пишет FACT и verified_by — всё равно не FACT."""
         fx = base.cls_fixture()
         for c in fx.claims:
-            c.verified_by = "fact_signer"
+            c.verified_by = "analyst"
         out = {c.id: c for c in enforce_rules(fx, base.M, base.CHECKLIST, {"deck", "model", "evidence"}).claims}
         self.assertEqual(out["C03"].evidence_level, 3)
         self.assertEqual(out["C03"].category, Category.FACT_CANDIDATE)
@@ -38,13 +38,13 @@ class TrapTests(unittest.TestCase):
 
     def test_signer_list_has_roles_not_names(self):
         roles = base.M["working"]["fact_signoff"]["signer_roles"]
-        self.assertEqual(roles, ["fact_signer"])
+        self.assertEqual(roles, ["analyst"])
 
 
 class SignoffEndpointTests(tg1.Tg1Base):
     def setUp(self):
         super().setUp()
-        self.s = dataclasses.replace(self.s, approver_roles={"alice": "fact_signer", "bob": "operator"})
+        self.s = dataclasses.replace(self.s, approver_roles={"alice": "analyst", "bob": "operator"})
         self.state.settings = self.s
 
     def candidate(self, jid):
@@ -66,11 +66,11 @@ class SignoffEndpointTests(tg1.Tg1Base):
         brief = job["data"]["readiness_pack"]["internal_analyst_brief"]
         b3 = next(b for b in job["data"]["pack_blocks"] if b["n"] == 3)
         signed = [c for c in b3["claims"] if c["class"] == "FACT"]
-        self.assertTrue(signed and all(c["verified_by"] == "fact_signer" and c["label"] == "факт" for c in signed))
+        self.assertTrue(signed and all(c["verified_by"] == "analyst" and c["label"] == "факт" for c in signed))
         self.assertFalse([c for c in b3["claims"] if c["class"] == "FACT_CANDIDATE" and c["verified_by"]])
         self.assertEqual(brief["scores"]["readiness"], before)  # подпись меняет статус, не балл
         log = self.c.get(f"/s1/jobs/{jid}/fact-signoffs", headers=base.ADMIN).get_json()
-        self.assertEqual([(x["slot"], x["signer"], x["role"]) for x in log], [(slot, "alice", "fact_signer")])
+        self.assertEqual([(x["slot"], x["signer"], x["role"]) for x in log], [(slot, "alice", "analyst")])
         self.assertTrue(log[0]["at"] and log[0]["basis"])
 
     def test_wrong_role_admin_token_and_missing_basis_refused(self):

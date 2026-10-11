@@ -166,7 +166,7 @@ class T6Barriers(unittest.TestCase):
                 c.update(sources=["evidence"], evidence_level=3, category="FACT")
         cls["claims"].append(h._claim("C12", "ls_milestones_product.k5_manufacturing", 3, ["evidence"], "GMP CDMO"))
         # HQ-035: «сильный» К = FACT только с подписью человека на слот
-        signed = {c["slot"]: {"role": "fact_signer", "at": "synthetic"} for c in cls["claims"]
+        signed = {c["slot"]: {"role": "analyst", "at": "synthetic"} for c in cls["claims"]
                   if c["slot"].startswith("ls_milestones")}
         res, _, _ = h.run(h.LS["ls_preclinical_drug"], cls, verified_slots=signed)
         self.assertEqual(len(res.scores.ls["barriers"]), 2)
