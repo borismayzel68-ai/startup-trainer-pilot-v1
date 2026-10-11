@@ -24,3 +24,8 @@ HQ-036 — линия A9 (#6 head 83ab1f7 + #11 head 90e2d22) на линии ti
 ## Слияние в master (Claude, 11.10)
 - Цепочка #28 (+#9) влита в s1/tilda-readiness-pack, затем master влит сюда для PR #7. Конфликт только в HANDOFF.md (add/add), оставлена версия линии tilda. Код не менялся.
 - Тесты локально: 197 passed, 5 skipped (Postgres-тесты без PG).
+
+## Чистка __pycache__ (Claude, 11.10)
+- Задача: убрать закоммиченный байткод. Ветка `chore/remove-pycache` → master, отдельный мелкий PR по запросу владельца.
+- Сделано: `__pycache__/app.cpython-314.pyc` снят с учёта (`git rm --cached`); в `.gitignore` добавлены `__pycache__/` и `*.py[cod]`. Код не менялся.
+- Не проверено: CI — запустится на PR.
