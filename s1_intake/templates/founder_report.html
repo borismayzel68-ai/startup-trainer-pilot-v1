@@ -58,7 +58,7 @@
 <h3>Один следующий артефакт (К7)</h3>
 <div class="card"><b>{{ ls.next_artifact.artifact }}</b> <span class="tag">{{ ls.next_artifact.mark }}</span></div>
 {% endif %}
-{% if ls.stage_uncertain %}<p class="small"><b>Стадия:</b> уточнить в диалоге.</p>{% endif %}
+{% if ls.stage_uncertain %}<p class="small"><b>Стадия:</b> не подтверждена (уточнить в диалоге).</p>{% endif %}
 {% if ls.gate_request %}<p class="small"><b>{{ ls.gate_request }}</b></p>{% endif %}
 {% if ls.zones %}
 <h3>Зоны LS-барьеров З1–З7 (на балл не влияют)</h3>

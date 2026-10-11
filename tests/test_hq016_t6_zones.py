@@ -106,7 +106,7 @@ class StageDerivationTests(unittest.TestCase):
         res, pack, _ = h.run(form(intended_use="синтетический актив"), h.ls_classification())
         ls = res.scores.ls
         self.assertTrue(ls["stage_uncertain"])
-        self.assertEqual(ls["stage_label"], "уточнить в диалоге")
+        self.assertEqual(ls["stage_label"], "не подтверждена")  # PM 11.10 (HQ-020)
         self.assertTrue(ls["applied"])  # правило работает и без поля
         self.assertEqual(ls["dialogue_questions"][0]["signal"], "stage")
         self.assertIn("уточнить в диалоге", pack["founder_report_html"])

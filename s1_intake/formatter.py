@@ -13,6 +13,7 @@ from pathlib import Path
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from .models import Category, EvaluationResult
+from .scoring import priority_gaps
 
 log = logging.getLogger(__name__)
 TEMPLATES = Path(__file__).parent / "templates"
@@ -107,6 +108,37 @@ def html_to_pdf(html: str) -> bytes | None:
     return HTML(string=html, base_url=str(TEMPLATES)).write_pdf()
 
 
+def build_free_part(res: EvaluationResult, m: dict) -> dict:
+    """HQ-020 (решение PM): бесплатная часть S1 — балл, три пробела, риск по каждому, метка-оговорка.
+    Уходит автоматически, без approve. Внутренние метки вердикта сюда не попадают."""
+    from .config import build_checklist
+    cfg = m["free_part_s1"]
+    ls = res.scores.ls or {}
+    idx = build_checklist(m, res.routing.get("modules", []), bool(ls.get("milestones")))
+    gaps = []
+    for g in priority_gaps(res.scores, top=50):
+        why = (idx.get(g["item"]) or {}).get("why") or ""
+        if not why:
+            continue  # риск не задан методологией — не выдумываем
+        gaps.append({"gap": g["label"], "risk": why.strip()})
+        if len(gaps) == cfg["gaps"]:
+            break
+    stage = ls.get("stage_label") if ls else None
+    if ls.get("stage_uncertain"):
+        stage = cfg["stage_unconfirmed"]
+    part = {"label": cfg["label"], "score": res.scores.readiness, "scale": "0–100", "stage": stage, "gaps": gaps}
+    rows = "".join(f"<li><b>{_e(g['gap'])}</b><br>Риск: {_e(g['risk'])}</li>" for g in gaps)
+    part["html"] = (f"<div class=\"s1-free\"><p><b>{_e(cfg['label'])}</b></p>"
+                    f"<p>Оценка готовности: {res.scores.readiness} / 100</p>"
+                    + (f"<p>Стадия: {_e(stage)}</p>" if stage else "") + f"<ol>{rows}</ol></div>")
+    return part
+
+
+def _e(x) -> str:
+    import html as _h
+    return _h.escape(str(x))
+
+
 def generate_pack(res: EvaluationResult, m: dict, fund_name: str) -> dict:
     """Readiness Pack: JSON-структура + два HTML. Хранится в БД; PDF — по запросу из HTML."""
     founder = build_founder_view(res, m, fund_name)
@@ -116,6 +148,7 @@ def generate_pack(res: EvaluationResult, m: dict, fund_name: str) -> dict:
             "founder_readiness_report": json.loads(json.dumps(founder, ensure_ascii=False, default=str)),
             "internal_analyst_brief": json.loads(res.model_dump_json()),
         },
+        "free_part": build_free_part(res, m),
         "founder_report_html": _env.get_template("founder_report.html").render(**founder),
         "analyst_brief_html": _env.get_template("analyst_brief.html").render(**internal),
     }

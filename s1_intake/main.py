@@ -21,6 +21,8 @@ from datetime import datetime, timedelta, timezone
 from flask import Blueprint, Flask, Response, current_app, jsonify, request
 
 from .config import Settings, get_settings, load_methodology
+from .dialogue import DialogueError, build_session, ready_for_gate
+from .dialogue import answer as dialogue_answer
 from .evaluator import evaluate
 from .formatter import generate_pack, html_to_pdf
 from .llm import LLMClient
@@ -100,8 +102,16 @@ def _process_job(app: Flask, job_id: str, stale_before: str | None = None) -> No
             res = evaluate(job_id, sub, docs, llm, s, m)
             pack = generate_pack(res, m, s.fund_name)
             pack["llm_calls"] = list(getattr(llm, "calls", []))  # TG-1: модель, temperature, хеш промпта
-            store.update(job_id, data_patch=pack, status="ready_for_review",
+            # HQ-020: сессия диалога раздела 1; пока стадия не подтверждена — в Human Gate не идёт
+            session = build_session(json.loads(res.scores.model_dump_json()), m, job["data"].get("dialogue"))
+            pack["dialogue"] = session
+            gate_ok, _ = ready_for_gate(session)
+            store.update(job_id, data_patch=pack, status="ready_for_review" if gate_ok else "awaiting_founder",
                          verdict=res.scores.verdict, readiness=res.scores.readiness)
+            # HQ-020 (решение PM): бесплатная часть уходит автоматически, без approve.
+            # Канал доставки основателю брифом не задан (решение PM): часть готова сразу, без approve,
+            # GET /s1/jobs/<id>/free-part; в вебхук уходят только метаданные.
+            ping_webhook(s, {"event": "s1.free_part_ready", "job_id": job_id})
             log.info("S1 job %s ready: %s %s/100", job_id, res.scores.verdict, res.scores.readiness)
 
             ping_webhook(s, {"event": "s1.ready_for_review", "job_id": job_id,
@@ -143,6 +153,10 @@ def _deliver_founder_report(job_id: str, approver: str) -> tuple[bool, str, int]
     if job["status"] == "sent" or store.was_sent(job_id, digest):
         store.log_approval(job_id, approver, digest, "blocked_duplicate")
         return False, "report already sent", 409
+    gate_ok, why = ready_for_gate(job["data"].get("dialogue") or {})
+    if not gate_ok:  # HQ-020: стадия не подтверждена — полный отчёт в Human Gate не идёт
+        store.log_approval(job_id, approver, digest, "blocked_stage", why)
+        return False, why, 409
     if job["status"] != "ready_for_review":
         return False, f"job status is {job['status']}", 409
     if not job["founder_email"]:
@@ -307,6 +321,55 @@ def approvals(job_id):
     if not (_admin_ok() or _approver()):
         return _err("unauthorized", 401)
     return jsonify(_state().store.approvals(job_id))
+
+
+@bp.get("/jobs/<job_id>/dialogue")
+def get_dialogue(job_id):
+    if not _admin_ok():
+        return _err("unauthorized", 401)
+    job = _state().store.get(job_id)
+    if not job or "dialogue" not in job["data"]:
+        return _err("not found", 404)
+    return jsonify(job["data"]["dialogue"])
+
+
+@bp.get("/jobs/<job_id>/free-part")
+def get_free_part(job_id):
+    """Бесплатная часть S1 — без approve (решение PM для HQ-020)."""
+    if not _admin_ok():
+        return _err("unauthorized", 401)
+    job = _state().store.get(job_id)
+    if not job or "free_part" not in job["data"]:
+        return _err("not found", 404)
+    return jsonify(job["data"]["free_part"])
+
+
+@bp.post("/jobs/<job_id>/dialogue/stage")
+def answer_stage(job_id):
+    """Ответ основателя на первый вопрос раздела 1 (стадия) → пересчёт тем же ядром yaml + s1_intake."""
+    if not _admin_ok():
+        return _err("unauthorized", 401)
+    st = _state()
+    body = request.get_json(silent=True) or {}
+    rule = st.methodology["ls_stage_rule"]
+    known = set(rule["pre_registration_stages"]) | set(rule["post_registration_stages"])
+    stage = str(body.get("stage") or "").strip().lower()
+    if stage not in known:
+        return _err(f"stage must be one of {sorted(known)}", 400)
+    job = st.store.get(job_id)
+    if not job or "dialogue" not in job["data"]:
+        return _err("not found", 404)
+    session = job["data"]["dialogue"]
+    try:
+        dialogue_answer(session, "stage", str(body.get("answer") or ""), stage)
+    except DialogueError as e:
+        return _err(str(e), 409)
+    sub = dict(job["data"]["submission"], ls_stage=stage)
+    st.store.update(job_id, data_patch={"dialogue": session, "submission": sub})
+    if not st.store.reset_for_rerun(job_id):
+        return _err("job still in progress", 409)
+    st.pool.submit(_process_job, current_app._get_current_object(), job_id)
+    return jsonify({"ok": True, "stage": stage})
 
 
 @bp.post("/jobs/<job_id>/rerun")

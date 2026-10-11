@@ -13,7 +13,7 @@ import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
-STATUSES = ("received", "processing", "ready_for_review", "sending", "sent", "failed", "rejected")
+STATUSES = ("received", "processing", "awaiting_founder", "ready_for_review", "sending", "sent", "failed", "rejected")
 _COLUMNS = ("status", "project_name", "founder_email", "verdict", "readiness", "error", "data_json")
 
 
@@ -148,7 +148,7 @@ class ReadinessJobStore:
     def reset_for_rerun(self, job_id: str) -> bool:
         return self._exec(
             f"UPDATE s1_readiness_jobs SET status='received', updated_at={self.ph} "
-            f"WHERE id={self.ph} AND status IN ('ready_for_review','failed','sent')", (_now(), job_id)) == 1
+            f"WHERE id={self.ph} AND status IN ('ready_for_review','awaiting_founder','failed','sent')", (_now(), job_id)) == 1
 
     def update(self, job_id: str, data_patch: dict | None = None, **fields) -> None:
         bad = set(fields) - set(_COLUMNS)
