@@ -20,3 +20,7 @@ HQ-036 — линия A9 (#6 head 83ab1f7 + #11 head 90e2d22) на линии ti
 
 ## Последний коммит
 см. git log -1 (Merge A9 (#6+#11) в линию tilda)
+
+## Слияние в master (Claude, 11.10)
+- Цепочка #28 (+#9) влита в s1/tilda-readiness-pack, затем master влит сюда для PR #7. Конфликт только в HANDOFF.md (add/add), оставлена версия линии tilda. Код не менялся.
+- Тесты локально: 197 passed, 5 skipped (Postgres-тесты без PG).
