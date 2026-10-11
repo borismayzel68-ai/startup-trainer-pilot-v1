@@ -88,6 +88,13 @@ class ReadinessJobStore:
                 status TEXT NOT NULL, requested_by TEXT, requested_at TEXT NOT NULL,
                 g4_by TEXT, g4_at TEXT, detail TEXT
             )""")
+        # HQ-028: внутренние задачи (очередь подписанта); наружу ничего не уходит
+        self._exec("""
+            CREATE TABLE IF NOT EXISTS s1_tasks (
+                id TEXT PRIMARY KEY, job_id TEXT NOT NULL, assignee TEXT NOT NULL, title TEXT NOT NULL,
+                status TEXT NOT NULL, created_at TEXT NOT NULL
+            )""")
+        self._exec("CREATE UNIQUE INDEX IF NOT EXISTS s1_tasks_once ON s1_tasks (job_id, title)")
         # один и тот же отчёт (job + sha256) может быть отправлен только один раз
         self._exec("CREATE UNIQUE INDEX IF NOT EXISTS s1_approvals_sent_once ON s1_approvals "
                    "(job_id, report_sha256) WHERE outcome='sent'")
@@ -200,6 +207,27 @@ class ReadinessJobStore:
         keys = ("id", "job_id", "kind", "recipient", "status", "requested_by", "requested_at", "g4_by", "g4_at", "detail")
         r = self._exec(f"SELECT {', '.join(keys)} FROM s1_transfers WHERE id={self.ph}", (tid,), "one")
         return dict(zip(keys, r)) if r else None
+
+    def add_task_once(self, job_id: str, assignee: str, title: str) -> bool:
+        import uuid
+        p = self.ph
+        try:
+            self._exec(f"INSERT INTO s1_tasks (id, job_id, assignee, title, status, created_at) "
+                       f"VALUES ({p},{p},{p},{p},'open',{p})", (uuid.uuid4().hex, job_id, assignee, title, _now()))
+            return True
+        except Exception:  # noqa: BLE001 — уже создана (UNIQUE)
+            return False
+
+    def tasks(self, assignee: str | None = None) -> list[dict]:
+        keys = ("id", "job_id", "assignee", "title", "status", "created_at")
+        sql, args = f"SELECT {', '.join(keys)} FROM s1_tasks", ()
+        if assignee:
+            sql, args = sql + f" WHERE assignee={self.ph}", (assignee,)
+        return [dict(zip(keys, r)) for r in self._exec(sql + " ORDER BY created_at", args, "all")]
+
+    def timer_jobs(self) -> list[str]:
+        rows = self._exec("SELECT id FROM s1_readiness_jobs WHERE data_json LIKE '%\"fund_timer\"%'", (), "all")
+        return [r[0] for r in rows]
 
     def reset_for_rerun(self, job_id: str) -> bool:
         return self._exec(

@@ -220,7 +220,10 @@ def _deliver_founder_report(job_id: str, approver: str) -> tuple[bool, str, int]
     for b in blocks:
         if b["n"] == 11 and rec:
             b["signed"] = {"by": rec["approver"], "at": rec["approved_at"], "report_sha256": rec["report_sha256"]}
-    store.update(job_id, status="sent", data_patch={"pack_blocks": blocks})
+    patch = {"pack_blocks": blocks}
+    if not job["data"].get("fund_timer"):  # HQ-028: окно фонда 21 день стартует с подписи на Human Gate
+        patch["fund_timer"] = exit_intro.start_fund_window(st.methodology["working"]["hq028"], approver)
+    store.update(job_id, status="sent", data_patch=patch)
     return True, "sent", 200
 
 
@@ -662,21 +665,6 @@ def admin_consents(job_id):
     return jsonify(_state().store.consents(job_id))
 
 
-@bp.post("/jobs/<job_id>/fund-timer/start")
-def fund_timer_start(job_id):
-    """Старт окна фонда 21 день — явное действие человека (момент старта бриф не задаёт)."""
-    if not _admin_ok():
-        return _err("unauthorized", 401)
-    job = _job_or_404(job_id)
-    if not job:
-        return _err("not found", 404)
-    if job["data"].get("fund_timer"):
-        return _err("fund timer already started", 409)
-    t = exit_intro.start_fund_window(_hq028(), "admin")
-    _state().store.update(job_id, data_patch={"fund_timer": t})
-    return jsonify(t)
-
-
 @bp.get("/jobs/<job_id>/fund-timer")
 def fund_timer_status(job_id):
     """Срабатывание таймера = только смена статуса (fund_window: expired). Ничего не отправляется."""
@@ -685,10 +673,30 @@ def fund_timer_status(job_id):
     job = _job_or_404(job_id)
     if not job:
         return _err("not found", 404)
-    w = exit_intro.fund_window(job["data"], _hq028())
-    if w["state"] == "expired" and job["data"]["fund_timer"].get("state") != "expired":
-        _state().store.update(job_id, data_patch={"fund_timer": {**job["data"]["fund_timer"], "state": "expired"}})
-    return jsonify(w)
+    if not job["data"].get("fund_timer"):
+        return jsonify({"state": "not_started"})
+    return jsonify(exit_intro.fire_if_due(_state().store, job, _hq028()))
+
+
+@bp.post("/fund-timers/sweep")
+def fund_timers_sweep():
+    """Для планировщика: проверить все окна; истёкшие → статус + задача подписанту. Ничего не отправляется."""
+    if not _admin_ok():
+        return _err("unauthorized", 401)
+    st, fired = _state(), []
+    for jid in st.store.timer_jobs():
+        job = st.store.get(jid)
+        if job and job["data"].get("fund_timer", {}).get("state") != "expired":
+            if exit_intro.fire_if_due(st.store, job, _hq028())["state"] == "expired":
+                fired.append(jid)
+    return jsonify({"fired": fired})
+
+
+@bp.get("/tasks")
+def tasks():
+    if not _admin_ok():
+        return _err("unauthorized", 401)
+    return jsonify(_state().store.tasks(request.args.get("assignee")))
 
 
 @bp.post("/jobs/<job_id>/teaser")
@@ -724,8 +732,8 @@ def teaser_sign(job_id):
     if not t:
         return _err("teaser not built", 404)
     decision = str((request.get_json(silent=True) or {}).get("fund_decision") or "").strip()
-    if not decision:
-        return _err("fund_decision required", 400)
+    if decision not in _hq028()["fund_decisions"]:  # только из списка в конфиге, без свободного текста
+        return _err(f"fund_decision must be one of {_hq028()['fund_decisions']}", 400)
     t["fund_decision"] = decision
     t["deid_violations"] = exit_intro.deid_check(t, job, _hq028())
     if t["deid_violations"]:

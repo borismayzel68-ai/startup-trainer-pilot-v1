@@ -34,11 +34,12 @@ class Base28(Tg1Base):
 
     def signed_teaser(self, jid):
         self.c.post(f"/s1/jobs/{jid}/teaser", headers=base.ADMIN, json={"edit": CLEAN})
-        r = self.c.post(f"/s1/jobs/{jid}/teaser/sign", headers=ALICE, json={"fund_decision": "фонд готов к знакомству"})
+        r = self.c.post(f"/s1/jobs/{jid}/teaser/sign", headers=ALICE, json={"fund_decision": "фонд изучает"})
         self.assertEqual(r.status_code, 200, r.get_json())
 
     def expire_window(self, jid):
-        self.c.post(f"/s1/jobs/{jid}/fund-timer/start", headers=base.ADMIN)
+        if not self.state.store.get(jid)["data"].get("fund_timer"):
+            self.assertEqual(self.c.post(f"/s1/jobs/{jid}/approve", headers=ALICE).status_code, 200)  # старт окна
         t = self.state.store.get(jid)["data"]["fund_timer"]
         t["ends_at"] = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
         self.state.store.update(jid, data_patch={"fund_timer": t})
@@ -121,7 +122,7 @@ class TeaserTests(Base28):
             self.assertIn(must, v)
         r = self.c.post(f"/s1/jobs/{jid}/teaser", headers=base.ADMIN, json={"edit": trap}).get_json()
         self.assertTrue(r["deid_violations"])
-        s = self.c.post(f"/s1/jobs/{jid}/teaser/sign", headers=ALICE, json={"fund_decision": "да"})
+        s = self.c.post(f"/s1/jobs/{jid}/teaser/sign", headers=ALICE, json={"fund_decision": "фонд изучает"})
         self.assertEqual(s.status_code, 409)  # обезличивание не пройдено — подписи нет
 
     def test_teaser_structure_and_disclaimer(self):
@@ -141,7 +142,7 @@ class TeaserTests(Base28):
         self.c.post(self.cab_url(self.cabinet(jid), "consent"), json={"scope": "teaser", "recipient": "fund"})
         self.c.post(f"/s1/jobs/{jid}/teaser", headers=base.ADMIN, json={"edit": CLEAN})
         self.assertEqual(self.c.post(f"/s1/jobs/{jid}/teaser/sign", headers=base.ADMIN,
-                                     json={"fund_decision": "да"}).status_code, 403)  # общий токен — не подпись
+                                     json={"fund_decision": "фонд изучает"}).status_code, 403)  # общий токен — не подпись
         r = self.c.post(f"/s1/jobs/{jid}/transfers", headers=base.ADMIN, json={"kind": "teaser", "recipient": "fund"})
         self.assertEqual(r.status_code, 409)
         self.assertIn("тизер не подписан человеком", r.get_json()["blocked"])
@@ -165,8 +166,9 @@ class FundWindowTests(Base28):
         self.signed_teaser(jid)
         r = self.c.post(f"/s1/jobs/{jid}/transfers", headers=base.ADMIN, json={"kind": "teaser", "recipient": "angel-1"})
         self.assertEqual(r.status_code, 409)  # окно не запущено
-        self.c.post(f"/s1/jobs/{jid}/fund-timer/start", headers=base.ADMIN)
-        t = self.state.store.get(jid)["data"]["fund_timer"]
+        self.assertEqual(self.c.post(f"/s1/jobs/{jid}/approve", headers=ALICE).status_code, 200)
+        t = self.state.store.get(jid)["data"]["fund_timer"]  # HQ-028 v2: старт автоматически при approve
+        self.assertEqual(t["started_by"], "alice")
         days = (datetime.fromisoformat(t["ends_at"]) - datetime.fromisoformat(t["started_at"])).days
         self.assertEqual(days, 21)
         r = self.c.post(f"/s1/jobs/{jid}/transfers", headers=base.ADMIN, json={"kind": "teaser", "recipient": "angel-1"})
@@ -175,7 +177,7 @@ class FundWindowTests(Base28):
         self.expire_window(jid)
         st = self.c.get(f"/s1/jobs/{jid}/fund-timer", headers=base.ADMIN).get_json()
         self.assertEqual(st["state"], "expired")  # срабатывание = смена статуса
-        self.assertEqual(self.sent, [])
+        self.assertEqual(len(self.sent), 1)
         link = self.release(jid, "teaser", "angel-1")
         self.assertEqual(self.c.get(link).status_code, 200)
 
@@ -196,3 +198,69 @@ class FundWindowTests(Base28):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Hq028V2Tests(Base28):
+    def test_timer_fire_creates_task_for_signer_once(self):
+        jid = self.ready_job()
+        self.expire_window(jid)
+        with mock.patch("httpx.post") as hp:
+            fired = self.c.post("/s1/fund-timers/sweep", headers=base.ADMIN).get_json()["fired"]
+            self.c.post("/s1/fund-timers/sweep", headers=base.ADMIN)
+            self.c.get(f"/s1/jobs/{jid}/fund-timer", headers=base.ADMIN)
+            hp.assert_not_called()
+        self.assertEqual(fired, [jid])
+        tasks = self.c.get("/s1/tasks?assignee=alice", headers=base.ADMIN).get_json()
+        self.assertEqual([(t["job_id"], t["title"]) for t in tasks], [(jid, "окно фонда истекло, решение?")])
+        self.assertEqual(self.state.store.get(jid)["data"]["fund_timer"]["state"], "expired")
+        self.assertEqual(len(self.sent), 1)  # только подменённое письмо approve
+
+    def test_no_manual_timer_start(self):
+        jid = self.ready_job()
+        self.assertEqual(self.c.post(f"/s1/jobs/{jid}/fund-timer/start", headers=base.ADMIN).status_code, 404)
+        self.assertEqual(self.c.get(f"/s1/jobs/{jid}/fund-timer", headers=base.ADMIN).get_json()["state"], "not_started")
+
+    def test_fund_decision_fixed_list(self):
+        jid = self.ready_job()
+        self.c.post(f"/s1/jobs/{jid}/teaser", headers=base.ADMIN, json={"edit": CLEAN})
+        for bad in ("да", "фонд готов", ""):
+            self.assertEqual(self.c.post(f"/s1/jobs/{jid}/teaser/sign", headers=ALICE,
+                                         json={"fund_decision": bad}).status_code, 400)
+        for ok in CFG["fund_decisions"]:
+            self.assertEqual(self.c.post(f"/s1/jobs/{jid}/teaser/sign", headers=ALICE,
+                                         json={"fund_decision": ok}).status_code, 200)
+
+    def test_trap_team_member_name_and_domain(self):
+        jid = self.ready_job()
+        job = self.state.store.get(jid)
+        bl = exit_intro.case_blacklist(job, CFG)
+        self.assertIn("philips", bl)          # из q_team синтетической анкеты
+        self.assertIn("cardiosense.example", bl)
+        trap = {**CLEAN, "strengths": [{"text": "Сильный опыт: ранее работал в Philips", "status": "заявление"}]}
+        v = exit_intro.deid_check({**exit_intro.build_teaser(job, CFG), **trap}, job, CFG)
+        self.assertTrue(any("имя в команде" in x for x in v), v)
+        sub = dict(job["data"]["submission"])
+        sub["answers"] = [dict(a, value="CTO Мария Соколова, 6 лет в медтехе") if a["field"] == "q_team" else a
+                          for a in sub["answers"]]
+        job2 = {**job, "data": {**job["data"], "submission": sub}}
+        v = exit_intro.deid_check({**CLEAN, "raise": "привлекаем с Соколовой", "fund_decision": None,
+                                   "disclaimer": CFG["disclaimer"]}, job2, CFG)
+        self.assertFalse(v)  # другая словоформа не ловится — поэтому ручная проверка обязательна
+        v = exit_intro.deid_check({**CLEAN, "raise": "команда: Соколова", "fund_decision": None,
+                                   "disclaimer": CFG["disclaimer"]}, job2, CFG)
+        self.assertTrue(any("Соколова".lower() in x for x in v), v)
+
+    def test_no_free_deck_text_only_d5_fields(self):
+        jid = self.ready_job()
+        job = self.state.store.get(jid)
+        t = exit_intro.build_teaser(job, CFG)
+        self.assertEqual(set(t), set(exit_intro.TEASER_KEYS))
+        deck = "wearable ECG patch with AI arrhythmia detection for outpatient monitoring"
+        bad = {**t, "risks": [{"text": deck, "status": "заявление"}]}
+        self.assertTrue(any("из деки" in x for x in exit_intro.deid_check(bad, job, CFG)))
+        extra = {**t, "deck_quote": "x"}
+        self.assertTrue(any("лишнее поле" in x for x in exit_intro.deid_check(extra, job, CFG)))
+        r = self.c.post(f"/s1/jobs/{jid}/teaser", headers=base.ADMIN, json={"edit": {**CLEAN, "risks": [{"text": deck}]}})
+        self.assertTrue(r.get_json()["deid_violations"])
+        self.assertEqual(self.c.post(f"/s1/jobs/{jid}/teaser/sign", headers=ALICE,
+                                     json={"fund_decision": "фонд изучает"}).status_code, 409)
