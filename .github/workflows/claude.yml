@@ -28,8 +28,24 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      # Окружение для тестов: те же зависимости, что в tests.yml. LLM замокан, реальных ключей нет.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          shopt -s nullglob
+          for f in requirements*.txt; do pip install -r "$f"; done
+          pip install pytest
       - uses: anthropics/claude-code-action@v1
+        env:
+          S1_LLM_PROVIDER: mock
+          GH_TOKEN: ${{ github.token }}
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Разрешено: только тесты и открытие PR. Мерж, правка секретов и workflow — запрещены.
           claude_args: |
+            --allowedTools "Bash(python -m pytest*),Bash(pytest*),Bash(gh pr create*),Bash(gh pr view*),Bash(git status*),Bash(git diff*),Bash(git log*)"
+            --disallowedTools "Bash(gh pr merge*),Bash(gh secret*),Bash(gh api*),Bash(git push* master*),Bash(curl*),Bash(wget*)"
             --append-system-prompt "Work only via a new branch and pull request. Never merge, never push to master, never change secrets. Attach the pytest log to the PR description. Founder reports are never sent automatically. Update HANDOFF.md on every commit."
