@@ -33,21 +33,20 @@ def readiness_band(r: int) -> str:
 
 def build_founder_view(res: EvaluationResult, m: dict, fund_name: str) -> dict:
     scale = {int(k): v for k, v in m["evidence_scale"].items()}
+    ls = res.scores.ls
+    excluded = set((ls or {}).get("excluded_blocks", []))
     evidence_map = []
     for b in res.scores.blocks:
-        evidence_map.append({
+        row = {
             "label": b.label,
             "score_pct": int(round(b.score * 100)),
-            "items": [{
-                "label": it.label,
-                "critical": it.critical,
-                "level": LEVEL_CODE[it.best_level] if it.status != Category.UNKNOWN else "нет данных",
-                "level_num": it.best_level if it.status not in (Category.UNKNOWN, Category.CONFLICT) else -1,
-                "conflict": it.status == Category.CONFLICT,
-            } for it in b.items],
-        })
+            "items": [_founder_item(it) for it in b.items],
+        }
+        if b.key in excluded:
+            row["na_by_stage"] = True
+        evidence_map.append(row)
     s = res.synthesis
-    return {
+    view = {
         "fund_name": fund_name,
         "company": res.submission.project_name,
         "founder_name": res.submission.founder_name,
@@ -66,6 +65,24 @@ def build_founder_view(res: EvaluationResult, m: dict, fund_name: str) -> dict:
         "objections": s.founder_objections_to_preempt,
         "file_warnings": [w for d in res.docs for w in d.warnings],
     }
+    if ls:  # HQ-016 §4: только для LS-разметки; не-LS вывод не меняется
+        view["ls"] = {k: ls[k] for k in ("applied", "reason", "stage_label", "summary_line", "na_slots",
+                                         "milestones", "barriers", "next_artifact", "slots_scored",
+                                         "slots_applicable")}
+    return view
+
+
+def _founder_item(it) -> dict:
+    d = {
+        "label": it.label,
+        "critical": it.critical,
+        "level": LEVEL_CODE[it.best_level] if it.status != Category.UNKNOWN else "нет данных",
+        "level_num": it.best_level if it.status not in (Category.UNKNOWN, Category.CONFLICT) else -1,
+        "conflict": it.status == Category.CONFLICT,
+    }
+    if it.applicability == "N_A_BY_STAGE":
+        d.update(level="не применимо по стадии", na_by_stage=True, na_reason=it.na_reason)
+    return d
 
 
 def build_internal_view(res: EvaluationResult, m: dict, fund_name: str) -> dict:

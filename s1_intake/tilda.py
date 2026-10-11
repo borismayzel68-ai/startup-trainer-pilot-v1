@@ -77,6 +77,7 @@ def parse_payload(payload: dict, methodology: dict) -> Submission:
         target_markets=_as_str(payload.get(rf["target_markets"]))[:200],
         product_class=_as_str(payload.get(rf["product_class"]))[:60],
         intended_use=_as_str(payload.get(rf["intended_use"]))[:4000],
+        ls_stage=_as_str(payload.get(rf["ls_stage"])).lower()[:40] if rf.get("ls_stage") else "",
         answers=answers,
         files=files,
     )

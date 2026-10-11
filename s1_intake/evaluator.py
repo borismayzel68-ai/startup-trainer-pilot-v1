@@ -16,7 +16,15 @@ from .models import (
     Submission,
     Synthesis,
 )
-from .scoring import enforce_rules, gap_id, priority_gaps, score, validate_citations
+from .scoring import (
+    apply_revenue_claims,
+    enforce_rules,
+    gap_id,
+    ls_stage_context,
+    priority_gaps,
+    score,
+    validate_citations,
+)
 
 log = logging.getLogger(__name__)
 
@@ -62,7 +70,7 @@ def _gaps_text(scores, idx) -> str:
     rows = [f"{gap_id(k)} — {idx[k]['label']} (КРИТИЧНЫЙ)" for k in scores.critical_gaps]
     for b in scores.blocks:
         for it in b.items:
-            if it.status.value == "UNKNOWN" and not it.critical:
+            if it.status.value == "UNKNOWN" and not it.critical and it.applicability != "N_A_BY_STAGE":
                 rows.append(f"{gap_id(it.key)} — {it.label}")
     return "\n".join(rows) or "(пробелов по чек-листу нет)"
 
@@ -102,7 +110,8 @@ def model_cap_overrides(docs: list[ParsedDoc], m: dict) -> dict[str, int]:
 def evaluate(job_id: str, sub: Submission, docs: list[ParsedDoc], llm: LLMClient, settings: Settings, m: dict) -> EvaluationResult:
     pdir = settings.prompts_dir
     routing = routing_for(sub.jurisdiction, sub.target_markets, sub.product_class, sub.intended_use)
-    idx = build_checklist(m, routing["modules"])
+    ls_ctx = ls_stage_context(routing, sub.ls_stage, m)          # HQ-016
+    idx = build_checklist(m, routing["modules"], ls_milestones=ls_ctx["milestones"])
 
     # 1. Классификация FACT / FOUNDER_CLAIM / UNKNOWN / CONFLICT
     sys_p, usr_p = load_prompt(pdir, "01_classify.md")
@@ -118,7 +127,8 @@ def evaluate(job_id: str, sub: Submission, docs: list[ParsedDoc], llm: LLMClient
 
     # 2. Детерминированные предохранители и скоринг
     cls = enforce_rules(cls, m, idx, {d.source for d in docs if d.ok}, model_cap_overrides(docs, m))
-    scores = score(cls, m, idx)
+    ls_ctx = apply_revenue_claims(ls_ctx, cls, m)
+    scores = score(cls, m, idx, ls_ctx)
     if not routing["routing_complete"]:
         scores.verdict_gates.append("Юрисдикция или класс продукта не распознаны — чек-лист только по общим модулям")
     audit, gaps = _audit_text(cls), _gaps_text(scores, idx)

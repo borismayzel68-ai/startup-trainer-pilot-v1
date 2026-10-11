@@ -96,7 +96,7 @@ def load_methodology(path: str | None = None) -> dict:
 def _check(m: dict) -> None:
     if abs(sum(b["weight"] for b in m["blocks"]) - 1.0) > 1e-6:
         raise ValueError("Block weights must sum to 1.0")
-    known = set(SLOT_CATALOG) | set(m.get("extra_modules", {}))
+    known = set(SLOT_CATALOG) | set(m.get("extra_modules", {})) | set(m.get("ls_milestones", {}))
     mapped = [mod for b in m["blocks"] for mod in b["modules"]]
     unknown = set(mapped) - known
     if unknown:
@@ -126,20 +126,22 @@ def routing_for(jurisdiction: str, target_markets, product_class: str, intended_
             "active_markets": markets, "classification_check_required": check, "routing_complete": True}
 
 
-def build_checklist(m: dict, modules: list[str]) -> dict[str, dict]:
+def build_checklist(m: dict, modules: list[str], ls_milestones: bool = False) -> dict[str, dict]:
     """{'module.slot': {label, why, critical, module, block, block_label}} для выбранных модулей
-    + всегда доп. модули готовности к раунду. Порядок — порядок блоков."""
+    + всегда доп. модули готовности к раунду. Порядок — порядок блоков.
+    ls_milestones=True (HQ-016): добавить LS-вехи К1–К6 вместо IT-слотов N/A по стадии."""
     block_of = {mod: b for b in m["blocks"] for mod in b["modules"]}
     critical = set(m.get("critical_slots", []))
     labels = m.get("slot_labels", {})
-    active = list(dict.fromkeys(list(modules) + list(m.get("extra_modules", {}))))
+    ls_mods = m.get("ls_milestones", {}) if ls_milestones else {}
+    active = list(dict.fromkeys(list(modules) + list(m.get("extra_modules", {})) + list(ls_mods)))
 
     rows: dict[str, dict] = {}
     for b in m["blocks"]:
         for mod in b["modules"]:
             if mod not in active:
                 continue
-            specs = SLOT_CATALOG.get(mod) or m.get("extra_modules", {}).get(mod, [])
+            specs = SLOT_CATALOG.get(mod) or m.get("extra_modules", {}).get(mod) or ls_mods.get(mod, [])
             for spec in specs:
                 key = f"{mod}.{spec['slot']}"
                 rows[key] = {
@@ -150,4 +152,6 @@ def build_checklist(m: dict, modules: list[str]) -> dict[str, dict]:
                     "block": b["key"],
                     "block_label": b["label"],
                 }
+                if mod in ls_mods:
+                    rows[key].update(label=spec["label"], ls_k=spec["k"], next_step=spec["next_step"])
     return rows

@@ -55,7 +55,8 @@ blocks:
     label: "Продукт, технология и защита"
     weight: 0.15
     modules: [product_intended_use, competition_moat, science_mechanism, clinical,
-              diagnostics_validity, cmc_manufacturing, ai_data_cybersecurity]
+              diagnostics_validity, cmc_manufacturing, ai_data_cybersecurity,
+              ls_milestones_product]   # HQ-016: К1, К4, К5 — только при LS-правиле
   - key: traction
     label: "Тракшн и пилоты"
     weight: 0.20
@@ -63,7 +64,8 @@ blocks:
   - key: business_model
     label: "Бизнес-модель и доступ к рынку"
     weight: 0.10
-    modules: [business_model, market_access_procurement_reimbursement]
+    modules: [business_model, market_access_procurement_reimbursement,
+              ls_milestones_market]    # HQ-016: К6 — только при LS-правиле
   - key: finance_round
     label: "Финансы и раунд"
     weight: 0.15
@@ -71,7 +73,8 @@ blocks:
   - key: risks_legal
     label: "Регуляторика, IP и юрструктура"
     weight: 0.10
-    modules: [regulatory, ip_fto, legal_readiness]
+    modules: [regulatory, ip_fto, legal_readiness,
+              ls_milestones_risks]     # HQ-016: К2, К3 — только при LS-правиле
 
 # Слоты готовности к раунду, которых нет в тренажёре (добавляются всегда).
 extra_modules:
@@ -160,6 +163,7 @@ form:
     project_id: project_id        # опционально: VC-ID, если уже присвоен фондом
   routing_fields:                 # те же значения, что в тренажёре (routing_v2)
     jurisdiction: jurisdiction    # RF | EAEU | EU | US | GCC | MULTI (или РФ, ЕАЭС…)
+    ls_stage: ls_stage            # HQ-016 (опц.): idea | poc | preclinical | clinical | registration | registered | pilot | sales
     target_markets: target_markets
     product_class: product_class  # THERAPEUTIC | MEDICAL_DEVICE | SOFTWARE_POTENTIAL_MD | IVD | LAB_SERVICE | WELLNESS_INFORMATION | RESEARCH_ONLY
     intended_use: intended_use
@@ -182,3 +186,67 @@ form:
     - {name: q_use_of_funds, block: finance_round, label: "На что пойдут деньги и какой проверяемой вехи достигнете?"}
     - {name: q_legal, block: risks_legal, label: "Юрлицо, холдинг, структура владения?"}
     - {name: q_risks, block: risks_legal, label: "Регуляторный путь и три главных риска, как вы их видите?"}
+
+# =============================================================================
+# HQ-016 v1.1 · «не применимо по стадии ≠ 0» для LS (LS_CHECKLIST_S1_v0.1)
+# Веса блоков и пороги scoring НЕ меняются. Вторая шкала НЕ вводится: К1–К6 —
+# обычные слоты чек-листа, оцениваются той же шкалой E0–E4 и теми же потолками
+# по источнику (без документа — не выше E2). Блоки К-слотов — по уже действующей
+# группировке модулей (clinical/science/cmc → product; regulatory/ip_fto →
+# risks_legal; reimbursement → business_model).
+# =============================================================================
+ls_stage_rule:
+  # условие 2: тип актива требует регистрации (ЛП/биотех, МИ, ПО-МИ, IVD)
+  asset_classes: [THERAPEUTIC, MEDICAL_DEVICE, SOFTWARE_POTENTIAL_MD, IVD]
+  # условие 3: идея, PoC, доклиника, КИ, регистрация в процессе (нет РУ, пилота, продаж)
+  pre_registration_stages:
+    idea: "идея"
+    poc: "PoC"
+    preclinical: "доклиника"
+    clinical: "КИ (фаза I–III / испытания МИ)"
+    registration: "регистрация в процессе"
+  post_registration_stages: [registered, pilot, sales]
+  # IT-слоты (выручка/MRR, трекшн, юнит-экономика) — уровень слота, не блока
+  it_slots:
+    traction.traction_metrics:
+      risk: "Спрос и выручка не подтверждены — проверяются после РУ / первого пилота"
+    traction.retention:
+      risk: "Удержание клиентов не измеримо до выхода на рынок"
+    business_model.unit_economics:
+      risk: "Юнит-экономика (CAC/LTV, маржа) не подтверждена до продаж"
+  na_reason: "стадия: {stage}; продаж до РУ быть не может"
+  future_milestone: "станет оцениваемым после РУ / первого пилота"
+  barriers_min: 2
+  barriers_max: 5
+
+ls_milestones:
+  ls_milestones_product:
+    - {slot: k1_clinical_stage, k: "К1", label: "К1 · Стадия разработки / КИ, готовность прототипа",
+       why: "Стадия актива (in vitro / in vivo доклиника / фаза I–III; для МИ — макет / прототип / предсерийный образец) и документ, который это подтверждает.",
+       next_step: "Зафиксировать протокол следующего исследования (дизайн, модель, n, endpoints) или заключить договор с аккредитованной лабораторией на испытания прототипа и получить протокол."}
+    - {slot: k4_science_poc, k: "К4", label: "К4 · Научный proof of concept",
+       why: "Механизм / мишень и эксперимент, показавший, что он работает: модель, n, контроль, primary endpoint, воспроизведение вне своей лаборатории.",
+       next_step: "Повторить ключевой эксперимент в независимой лаборатории с заранее зафиксированным endpoint и расчётом n."}
+    - {slot: k5_manufacturing, k: "К5", label: "К5 · Производство / GMP / СМК",
+       why: "Кто и где произведёт серию для доклиники/КИ; лицензия и заключение GMP (ЛП) или СМК и готовность к инспектированию производства (МИ).",
+       next_step: "Получить от CDMO копию лицензии/заключения GMP и предложение на пилотную серию либо запустить внедрение СМК под инспектирование производства."}
+  ls_milestones_risks:
+    - {slot: k2_regulatory_path, k: "К2", label: "К2 · Регуляторный трек",
+       why: "Где первая регистрация и по какому пути, заявленный класс риска и чем он подтверждён.",
+       next_step: "Запросить консультацию экспертного учреждения по классу и процедуре (п. 50 ПП № 1684) и приложить карту: юрисдикция → класс → процедура → каких модулей досье нет."}
+    - {slot: k3_ip, k: "К3", label: "К3 · Интеллектуальная собственность",
+       why: "Поданные заявки, выданные патенты, ноу-хау; правообладатель; был ли FTO.",
+       next_step: "Подать заявку на изобретение (или PCT) до публикации данных и оформить передачу прав от вуза/авторов."}
+  ls_milestones_market:
+    - {slot: k6_reimbursement, k: "К6", label: "К6 · Возмещение / кто платит",
+       why: "Кто конкретно будет платить после регистрации и что нужно доказать этому плательщику.",
+       next_step: "Провести 5 интервью с закупщиками/главврачами и записать, какой endpoint и какие данные они потребуют для закупки."}
+
+# HQ-016 §5: role-config S1 (SKILLS-REGISTRY-R1: SK-01, 02, 03, 04, 07, 08, 11) + SK-05, SK-06.
+# Облегчённые S1-версии; привязка SK-05/SK-06 к S2/S3 здесь не задаётся и не меняется.
+role_config:
+  S1:
+    skills: [SK-01, SK-02, SK-03, SK-04, SK-05, SK-06, SK-07, SK-08, SK-11]
+    skill_notes:
+      SK-05: {name: "Clinical Evidence", s1_scope: "облегчённая S1-версия", criteria: ["К1", "К4"], source: "LS_CHECKLIST_S1_v0.1"}
+      SK-06: {name: "Regulatory Path", s1_scope: "облегчённая S1-версия", criteria: ["К2"], source: "LS_CHECKLIST_S1_v0.1"}

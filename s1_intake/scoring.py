@@ -96,8 +96,82 @@ def enforce_rules(cls: ClassificationResult, m: dict, checklist: dict[str, dict]
     return cls
 
 
+# ------------------------------------------------------ HQ-016: LS-стадия ----
+def ls_stage_context(routing: dict, ls_stage: str, m: dict) -> dict:
+    """Условия 1–3 HQ-016 §3 (условие 4 — заявленная выручка — проверяется после классификации).
+    mark: размечать применимость слотов (SCORED / N_A_BY_STAGE / MISSING);
+    eligible: IT-слоты можно ставить N_A_BY_STAGE; milestones: добавить К1–К6."""
+    rule = m.get("ls_stage_rule") or {}
+    stage = (ls_stage or "").strip().lower()
+    gate = bool(routing.get("routing_complete"))
+    asset = routing.get("product_class")
+    is_ls = gate and asset in rule.get("asset_classes", [])
+    pre = rule.get("pre_registration_stages", {})
+    ctx = {"gate": gate, "asset_class": asset, "stage": stage or None, "stage_label": pre.get(stage, stage or None),
+           # не-LS с гейтом не размечается вовсе (T3: вывод побайтно прежний)
+           "mark": bool(rule) and (is_ls or (bool(stage) and not gate)), "eligible": False, "milestones": False, "reason": ""}
+    if not rule:
+        return ctx
+    if not gate:
+        ctx["reason"] = "Входной гейт (юрисдикция × тип актива) не заполнен — N/A по стадии запрещено"
+    elif not is_ls:
+        ctx["reason"] = "Тип актива не требует регистрации — правило не действует"
+    elif stage in pre:
+        ctx.update(eligible=True, milestones=True, reason="LS до РУ / пилота / продаж")
+    elif stage in rule.get("post_registration_stages", []):
+        ctx["reason"] = "Есть РУ, пилот или продажи — IT-слоты оцениваются по обычным правилам"
+    else:
+        ctx["reason"] = "Стадия не указана — N/A по стадии не ставится"
+    return ctx
+
+
+def apply_revenue_claims(ctx: dict, cls: ClassificationResult, m: dict) -> dict:
+    """Условие 4: основатель заявил выручку / продажи / платящих клиентов → N/A не ставится (T4)."""
+    it = set((m.get("ls_stage_rule") or {}).get("it_slots", {}))
+    if ctx.get("eligible") and any(c.slot in it and c.category != Category.UNKNOWN for c in cls.claims):
+        ctx = {**ctx, "eligible": False,
+               "reason": "Основатель заявил выручку / продажи — IT-слоты оцениваются (SCORED), не N/A"}
+    return ctx
+
+
+def _ls_summary(ctx: dict, m: dict, blocks_out: list[BlockScore], na: dict[str, str],
+                excluded: list[str], applicable_weight: float, checklist: dict[str, dict], readiness: int) -> dict:
+    rule = m["ls_stage_rule"]
+    items = [it for b in blocks_out for it in b.items]
+    scored = [it for it in items if it.applicability == "SCORED"]
+    applicable = [it for it in items if it.applicability in ("SCORED", "MISSING")]
+    na_rows = [{"key": it.key, "label": it.label, "na_reason": it.na_reason,
+                "future_milestone": rule["future_milestone"], "risk": rule["it_slots"][it.key]["risk"]}
+               for it in items if it.applicability == "N_A_BY_STAGE"]
+    ms = sorted((it for it in items if checklist.get(it.key, {}).get("ls_k")), key=lambda it: checklist[it.key]["ls_k"])
+    milestones = [{"k": checklist[it.key]["ls_k"], "key": it.key, "label": it.label, "level": it.best_level,
+                   "status": it.status.value, "applicability": it.applicability} for it in ms]
+    barriers, next_artifact = [], None
+    if ms:
+        def weakness(it):
+            lvl = it.best_level if it.status not in (Category.UNKNOWN, Category.CONFLICT) else -1
+            return (it.status == Category.FACT, lvl)
+        ranked = sorted(ms, key=weakness)  # стабильная сортировка: при равенстве — порядок К
+        non_fact = [it for it in ranked if it.status != Category.FACT]
+        n = min(max(len(non_fact), int(rule["barriers_min"])), int(rule["barriers_max"]), len(ranked))
+        barriers = [{"k": checklist[it.key]["ls_k"], "key": it.key, "label": it.label,
+                     "why": checklist[it.key]["why"], "next_step": checklist[it.key]["next_step"],
+                     "status": it.status.value, "level": it.best_level} for it in ranked[:n]]
+        next_artifact = {"k7": "К7", "from": barriers[0]["k"], "artifact": barriers[0]["next_step"]}
+    na_list = ", ".join(r["label"] for r in na_rows) or "—"
+    return {
+        "applied": bool(na), "reason": ctx["reason"], "gate": ctx["gate"], "asset_class": ctx["asset_class"],
+        "stage": ctx["stage"], "stage_label": ctx["stage_label"],
+        "applicable_weight": round(applicable_weight, 4), "excluded_blocks": excluded,
+        "slots_scored": len(scored), "slots_applicable": len(applicable),
+        "na_slots": na_rows, "milestones": milestones, "barriers": barriers, "next_artifact": next_artifact,
+        "summary_line": f"Readiness {readiness}/100 · {len(scored)} из {len(applicable)} применимых слотов"
+                        f" · не применимо по стадии: {na_list}",
+    }
+
+
 # --------------------------------------------------------------- scoring ----
-def score(cls: ClassificationResult, m: dict, checklist: dict[str, dict]) -> Scores:
+def score(cls: ClassificationResult, m: dict, checklist: dict[str, dict], ls_ctx: dict | None = None) -> Scores:
     ev = {int(k): float(v) for k, v in m["evidence_value"].items()}
     crit_w = float(m["scoring"]["critical_item_weight"])
     fact_min = int(m["fact_min_level"])
@@ -105,6 +179,13 @@ def score(cls: ClassificationResult, m: dict, checklist: dict[str, dict]) -> Sco
     blocks_out: list[BlockScore] = []
     critical_gaps, critical_conflicts = [], []
     weighted = weight_sum = 0.0
+    mark = bool(ls_ctx and ls_ctx.get("mark"))
+    na: dict[str, str] = {}
+    if ls_ctx and ls_ctx.get("eligible"):
+        rule = m["ls_stage_rule"]
+        na = {k: rule["na_reason"].format(stage=ls_ctx["stage_label"])
+              for k in rule["it_slots"] if k in checklist}
+    excluded: list[str] = []
 
     for b in m["blocks"]:
         keys = [k for k, v in checklist.items() if v["block"] == b["key"]]
@@ -115,6 +196,11 @@ def score(cls: ClassificationResult, m: dict, checklist: dict[str, dict]) -> Sco
         for key in keys:
             it = checklist[key]
             related = [c for c in cls.claims if c.slot == key]
+            if key in na:  # HQ-016: не в знаменателе, не пробел, не 0
+                items.append(ItemScore(key=key, label=it["label"], critical=it["critical"], best_level=None,
+                                       status=Category.UNKNOWN, claim_ids=[c.id for c in related],
+                                       applicability="N_A_BY_STAGE", na_reason=na[key]))
+                continue
             substantive = [c for c in related if c.category != Category.UNKNOWN]
             conflicts = [c for c in substantive if c.category == Category.CONFLICT]
             clean = [c for c in substantive if c.category != Category.CONFLICT]
@@ -136,18 +222,23 @@ def score(cls: ClassificationResult, m: dict, checklist: dict[str, dict]) -> Sco
             num += w * val
             den += w
             items.append(ItemScore(key=key, label=it["label"], critical=it["critical"],
-                                   best_level=best, status=status, claim_ids=[c.id for c in related]))
+                                   best_level=best, status=status, claim_ids=[c.id for c in related],
+                                   applicability=("MISSING" if status == Category.UNKNOWN else "SCORED") if mark else None))
         bscore = num / den if den else 0.0
-        weighted += b["weight"] * bscore
-        weight_sum += b["weight"]
+        if den or not na:
+            weighted += b["weight"] * bscore
+            weight_sum += b["weight"]
+        else:  # все слоты блока N_A_BY_STAGE → блок выпадает из знаменателя (вес не перераспределяется)
+            excluded.append(b["key"])
         blocks_out.append(BlockScore(key=b["key"], label=b["label"], weight=b["weight"],
                                      score=round(bscore, 3), items=items))
 
     r = int(round(100 * weighted / weight_sum)) if weight_sum else 0
     substantive = sum(1 for c in cls.claims if c.category != Category.UNKNOWN and c.slot)
     verdict, gates = decide(r, cls.thesis_fit.fit, critical_gaps, critical_conflicts, m, substantive)
+    ls = _ls_summary(ls_ctx, m, blocks_out, na, excluded, weight_sum, checklist, r) if mark else None
     return Scores(readiness=r, blocks=blocks_out, critical_gaps=critical_gaps,
-                  critical_conflicts=critical_conflicts, verdict=verdict, verdict_gates=gates)
+                  critical_conflicts=critical_conflicts, verdict=verdict, verdict_gates=gates, ls=ls)
 
 
 def decide(readiness: int, thesis_fit: bool, crit_gaps: list, crit_conflicts: list, m: dict,
@@ -185,6 +276,8 @@ def priority_gaps(scores: Scores, top: int = 8) -> list[dict]:
     rows = []
     for b in scores.blocks:
         for it in b.items:
+            if it.applicability == "N_A_BY_STAGE":  # HQ-016: не пробел
+                continue
             level = it.best_level if it.status not in (Category.UNKNOWN, Category.CONFLICT) else -1
             deficit = (4 - max(level, 0)) / 4 + (0.5 if it.status in (Category.UNKNOWN, Category.CONFLICT) else 0)
             weight = b.weight * (2 if it.critical else 1)
