@@ -68,13 +68,15 @@ def enforce_rules(cls: ClassificationResult, m: dict, checklist: dict[str, dict]
             c.machine_adjusted.append("удалены несуществующие ссылки конфликта")
         c.conflicts_with = valid
         # 4) категория — из уровня и конфликтов, не из мнения модели
+        c.verified_by = None  # модель не может «подписать» факт
         if c.category == Category.UNKNOWN:
             c.evidence_level = 0
             continue
         if c.conflicts_with:
             new = Category.CONFLICT
         elif c.evidence_level >= fact_min:
-            new = Category.FACT
+            # HQ-035 / канон Р-5: код ставит максимум FACT_CANDIDATE; FACT — только подпись человека
+            new = Category.FACT_CANDIDATE
         else:
             new = Category.FOUNDER_CLAIM
         if new != c.category:
@@ -143,8 +145,19 @@ def cap_device_pilots(ctx: dict, cls: ClassificationResult, m: dict) -> Classifi
         if c.slot in d.get("device_pilot_slots", []) and c.evidence_level > cap:
             c.machine_adjusted.append(f"E{c.evidence_level}→E{cap}: пилот МИ до регистрации — «заявление»")
             c.evidence_level = cap
-            if c.category == Category.FACT:
+            if c.category in (Category.FACT, Category.FACT_CANDIDATE):
                 c.category = Category.FOUNDER_CLAIM
+    return cls
+
+
+def apply_fact_signoffs(cls: ClassificationResult, signoffs: dict[str, dict], fact_min: int) -> ClassificationResult:
+    """HQ-035: подпись человека — пакетом на слот. FACT_CANDIDATE слота → FACT с verified_by = роль подписанта."""
+    for c in cls.claims:
+        so = signoffs.get(c.slot or "")
+        if so and c.category == Category.FACT_CANDIDATE and c.evidence_level >= fact_min:
+            c.category = Category.FACT
+            c.verified_by = so["role"]
+            c.machine_adjusted.append(f"FACT_CANDIDATE→FACT: подпись роли {so['role']} ({so['at']})")
     return cls
 
 
@@ -235,7 +248,12 @@ def score(cls: ClassificationResult, m: dict, checklist: dict[str, dict], ls_ctx
                     critical_conflicts.append(key)
             elif clean:
                 best = max(c.evidence_level for c in clean)
-                status = Category.FACT if best >= fact_min else Category.FOUNDER_CLAIM
+                if best < fact_min:
+                    status = Category.FOUNDER_CLAIM
+                elif any(c.category == Category.FACT and c.verified_by for c in clean):
+                    status = Category.FACT
+                else:
+                    status = Category.FACT_CANDIDATE
                 val = ev[best]
             else:
                 status, best, val = Category.UNKNOWN, None, 0.0

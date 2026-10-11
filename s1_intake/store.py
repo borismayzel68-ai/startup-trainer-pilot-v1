@@ -95,6 +95,12 @@ class ReadinessJobStore:
                 status TEXT NOT NULL, created_at TEXT NOT NULL
             )""")
         self._exec("CREATE UNIQUE INDEX IF NOT EXISTS s1_tasks_once ON s1_tasks (job_id, title)")
+        # HQ-035: журнал подписей факта (кто, когда, роль, слот, основание) — append-only
+        self._exec("""
+            CREATE TABLE IF NOT EXISTS s1_fact_signoffs (
+                job_id TEXT NOT NULL, slot TEXT NOT NULL, signer TEXT NOT NULL, role TEXT NOT NULL,
+                signed_at TEXT NOT NULL, basis TEXT NOT NULL
+            )""")
         # один и тот же отчёт (job + sha256) может быть отправлен только один раз
         self._exec("CREATE UNIQUE INDEX IF NOT EXISTS s1_approvals_sent_once ON s1_approvals "
                    "(job_id, report_sha256) WHERE outcome='sent'")
@@ -228,6 +234,18 @@ class ReadinessJobStore:
     def timer_jobs(self) -> list[str]:
         rows = self._exec("SELECT id FROM s1_readiness_jobs WHERE data_json LIKE '%\"fund_timer\"%'", (), "all")
         return [r[0] for r in rows]
+
+    def log_fact_signoff(self, job_id: str, slot: str, signer: str, role: str, basis: str) -> dict:
+        p, at = self.ph, _now()
+        self._exec(f"INSERT INTO s1_fact_signoffs (job_id, slot, signer, role, signed_at, basis) "
+                   f"VALUES ({p},{p},{p},{p},{p},{p})", (job_id, slot, signer, role, at, basis[:1000]))
+        return {"slot": slot, "signer": signer, "role": role, "at": at, "basis": basis}
+
+    def fact_signoffs(self, job_id: str) -> list[dict]:
+        keys = ("slot", "signer", "role", "at", "basis")
+        rows = self._exec(f"SELECT slot, signer, role, signed_at, basis FROM s1_fact_signoffs WHERE job_id={self.ph} "
+                          f"ORDER BY signed_at", (job_id,), "all")
+        return [dict(zip(keys, r)) for r in rows]
 
     def reset_for_rerun(self, job_id: str) -> bool:
         return self._exec(

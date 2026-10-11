@@ -59,6 +59,9 @@ class Settings:
     admin_token: str = field(default_factory=lambda: _env("S1_ADMIN_TOKEN"))
     # TG-1: персональные токены подписантов «имя:токен;имя2:токен2». Общий admin-токен approve НЕ даёт.
     approvers: dict[str, str] = field(default_factory=lambda: _env_approvers("S1_APPROVERS"))
+    # HQ-035: роль подписанта «имя:роль;…» (имя — ключ из S1_APPROVERS). Список допустимых ролей — working_values.yaml
+    approver_roles: dict[str, str] = field(default_factory=lambda: dict(
+        p.split(":", 1) for p in _env("S1_APPROVER_ROLES").split(";") if ":" in p))
 
     # --- LLM (те же переменные, что у тренажёра) ---
     llm_provider: str = field(default_factory=lambda: _env("S1_LLM_PROVIDER", "openai"))  # openai | mock

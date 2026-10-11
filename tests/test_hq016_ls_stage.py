@@ -83,18 +83,32 @@ class T2PostRegistration(unittest.TestCase):
         self.assertEqual(res.scores.verdict, base.scores.verdict)
 
 
+def _numbers(scores: dict) -> dict:
+    """Числа скоринга; статус FACT_CANDIDATE сводится к FACT (HQ-035 меняет только метку, не балл)."""
+    st = lambda s: "FACT" if s == "FACT_CANDIDATE" else s  # noqa: E731
+    return {"readiness": scores["readiness"], "verdict": scores["verdict"],
+            "blocks": [(b["key"], b["score"], [(i["key"], i["best_level"], st(i["status"]), i.get("applicability"))
+                                               for i in b["items"]]) for b in scores["blocks"]]}
+
+
 class T3NonLsGolden(unittest.TestCase):
+    # HQ-035: golden hq016_* (база 0f72b0a) фиксировал авто-FACT. Байт-в-байт теперь сверяемся с hq035_*
+    # (тот же снапшот после HQ-035), а с hq016_* — по всем числам и статусам (FACT_CANDIDATE ≡ FACT).
     def test_byte_identical_to_pre_hq016(self):
+        gold = Path(__file__).resolve().parent / "golden"
         for name, form in h.NON_LS.items():
             with self.subTest(name):
-                got = json.dumps(h.snapshot(form), ensure_ascii=False, indent=1, sort_keys=True)
-                want = (Path(__file__).resolve().parent / "golden" / f"hq016_{name}.json").read_text(encoding="utf-8")
-                self.assertEqual(got, want)
+                snap = h.snapshot(form)
+                got = json.dumps(snap, ensure_ascii=False, indent=1, sort_keys=True)
+                self.assertEqual(got, (gold / f"hq035_{name}.json").read_text(encoding="utf-8"))
+                old = json.loads((gold / f"hq016_{name}.json").read_text(encoding="utf-8"))
+                self.assertEqual(_numbers(snap["scores"]), _numbers(old["scores"]))
+                self.assertEqual(snap["founder_report_html"], old["founder_report_html"])
 
     def test_non_ls_with_stage_field_unchanged(self):
         form = {**h.NON_LS["it_wellness"], "ls_stage": "preclinical"}
         got = h.snapshot(form)
-        want = json.loads((Path(__file__).resolve().parent / "golden" / "hq016_it_wellness.json").read_text(encoding="utf-8"))
+        want = json.loads((Path(__file__).resolve().parent / "golden" / "hq035_it_wellness.json").read_text(encoding="utf-8"))
         self.assertEqual(got["scores"], want["scores"])
         self.assertEqual(got["founder_report_html"], want["founder_report_html"])
         self.assertNotIn("Life Science", got["founder_report_html"])
@@ -151,7 +165,10 @@ class T6Barriers(unittest.TestCase):
             if c["slot"].startswith("ls_milestones"):
                 c.update(sources=["evidence"], evidence_level=3, category="FACT")
         cls["claims"].append(h._claim("C12", "ls_milestones_product.k5_manufacturing", 3, ["evidence"], "GMP CDMO"))
-        res, _, _ = h.run(h.LS["ls_preclinical_drug"], cls)
+        # HQ-035: «сильный» К = FACT только с подписью человека на слот
+        signed = {c["slot"]: {"role": "fact_signer", "at": "synthetic"} for c in cls["claims"]
+                  if c["slot"].startswith("ls_milestones")}
+        res, _, _ = h.run(h.LS["ls_preclinical_drug"], cls, verified_slots=signed)
         self.assertEqual(len(res.scores.ls["barriers"]), 2)
 
 

@@ -144,7 +144,9 @@ def build_pack_blocks(res: EvaluationResult, m: dict) -> list[dict]:
     Блоки 10 (не дослано) и 11 («проверил, дата») заполняет main.py из сессии и журнала подписи.
     Где источник не даёт значения, блок помечен status=STOP с причиной — значения не выдумываются."""
     ls = res.scores.ls or {}
-    claims = [{"id": c.id, "statement": c.statement, "class": c.category.value, "level": f"E{c.evidence_level}",
+    labels = m["working"]["fact_signoff"]["public_labels"]
+    claims = [{"id": c.id, "statement": c.statement, "class": c.category.value, "label": labels[c.category.value],
+               "verified_by": c.verified_by, "level": f"E{c.evidence_level}",
                "source": c.source_ref or ", ".join(c.sources) or "НЕ ПОДТВЕРЖДЕНО"} for c in res.classification.claims]
     k7 = ls.get("next_artifact")
     w = m["working"]

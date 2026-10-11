@@ -80,7 +80,8 @@ class ParsedDoc(BaseModel):
 
 # ------------------------------------------------------------ evaluation ----
 class Category(str, Enum):
-    FACT = "FACT"
+    FACT = "FACT"                      # HQ-035: только после подписи человека (verified_by), канон Р-5
+    FACT_CANDIDATE = "FACT_CANDIDATE"  # код: документ ≥ fact_min_level без подписи — «заявление с документом»
     FOUNDER_CLAIM = "FOUNDER_CLAIM"
     UNKNOWN = "UNKNOWN"
     CONFLICT = "CONFLICT"
@@ -99,6 +100,7 @@ class Claim(BaseModel):
     conflicts_with: list[str] = []
     verification_step: str = ""
     machine_adjusted: list[str] = []    # что поменяли детерминированные правила (аудит-след)
+    verified_by: str | None = None      # HQ-035: роль подписанта факта (ставит только код по журналу подписей)
 
     @field_validator("sources", mode="before")
     @classmethod

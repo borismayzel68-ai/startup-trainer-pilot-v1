@@ -39,7 +39,7 @@ def settings(tmp: str = "/tmp") -> Settings:
                     database_url=f"sqlite:///{tmp}/hq016.db", analyst_emails=[], smtp_host="")
 
 
-def run(form: dict, cls_override=None):
+def run(form: dict, cls_override=None, verified_slots=None):
     s = settings()
     m = load_methodology(str(s.methodology_path))
     sub = parse_payload(form, m)
@@ -50,7 +50,7 @@ def run(form: dict, cls_override=None):
             return cls_override
         return s1_mock_llm.responder(stage, user)
 
-    res = evaluate("synthetic-job", sub, [], LLMClient(s, responder), s, m)
+    res = evaluate("synthetic-job", sub, [], LLMClient(s, responder), s, m, verified_slots=verified_slots)
     res.created_at = FIXED
     return res, generate_pack(res, m, s.fund_name), m
 
@@ -63,11 +63,13 @@ def snapshot(form: dict) -> dict:
             "analyst_brief_html": pack["analyst_brief_html"]}
 
 
-if __name__ == "__main__":  # генерация golden на базовом коммите (до HQ-016)
+if __name__ == "__main__":  # генерация golden: hq016_* — на базовом коммите 0f72b0a; hq035_* — после HQ-035
+    import sys as _sys
+    prefix = _sys.argv[1] if len(_sys.argv) > 1 else "hq016"
     out = Path(__file__).resolve().parent / "golden"
     out.mkdir(exist_ok=True)
     for name, form in NON_LS.items():
-        (out / f"hq016_{name}.json").write_text(
+        (out / f"{prefix}_{name}.json").write_text(
             json.dumps(snapshot(form), ensure_ascii=False, indent=1, sort_keys=True), encoding="utf-8")
         print("golden", name)
 

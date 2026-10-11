@@ -172,7 +172,8 @@ class S1GuardrailTests(unittest.TestCase):
     def test_deck_cannot_be_fact(self):
         c = self.claims()
         self.assertEqual((c["C02"].evidence_level, c["C02"].category), (1, Category.FOUNDER_CLAIM))
-        self.assertEqual(c["C03"].category, Category.FACT)
+        # HQ-035 / канон Р-5: документ третьей стороны без подписи — FACT_CANDIDATE, не FACT
+        self.assertEqual(c["C03"].category, Category.FACT_CANDIDATE)
 
     def test_phantom_evidence_removed(self):
         c = self.claims(sources=("deck", "model"))

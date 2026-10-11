@@ -48,7 +48,7 @@ def build_teaser(job: dict, cfg: dict) -> dict:
     brief = data["readiness_pack"]["internal_analyst_brief"]
     cls = brief["classification"]
     items = [it for b in brief["scores"]["blocks"] for it in b["items"] if it.get("applicability") != "N_A_BY_STAGE"]
-    stat = lambda it: "факт" if it["status"] == "FACT" else "заявление"  # noqa: E731
+    stat = lambda it: {"FACT": "факт", "FACT_CANDIDATE": "заявление с документом"}.get(it["status"], "заявление")  # noqa: E731
     n = cfg["teaser_items"]
     lvl = lambda it: it.get("best_level") if it.get("best_level") is not None else -1  # noqa: E731
     strong = sorted([it for it in items if lvl(it) >= 1], key=lambda it: -lvl(it))[:n]

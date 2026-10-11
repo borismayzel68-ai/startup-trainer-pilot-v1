@@ -115,7 +115,8 @@ def _process_job(app: Flask, job_id: str, stale_before: str | None = None) -> No
                 store.update(job_id, data_patch={"parsed_docs": [d.model_dump() for d in docs]})
 
             llm = st.llm_factory()
-            res = evaluate(job_id, sub, docs, llm, s, m)
+            signoffs = {so["slot"]: so for so in store.fact_signoffs(job_id)}  # HQ-035: подписи факта
+            res = evaluate(job_id, sub, docs, llm, s, m, verified_slots=signoffs)
             pack = generate_pack(res, m, s.fund_name)
             pack["llm_calls"] = list(getattr(llm, "calls", []))  # TG-1: модель, temperature, хеш промпта
             prov = {"model": res.model, "code_sha": s.code_sha,  # A14: модель, хеш промпта, SHA кода
@@ -714,7 +715,7 @@ def teaser_build(job_id):
             t[k] = str(overrides[k])
     for k in ("strengths", "risks"):
         if k in overrides:
-            t[k] = [{"text": str(x.get("text", "")), "status": x.get("status") if x.get("status") in ("факт", "заявление")
+            t[k] = [{"text": str(x.get("text", "")), "status": x.get("status") if x.get("status") in ("факт", "заявление с документом", "заявление")
                      else "заявление"} for x in overrides[k]][:_hq028()["teaser_items"]]
     t["deid_violations"] = exit_intro.deid_check(t, job, cfg)
     _state().store.update(job_id, data_patch={"teaser": t})
@@ -811,6 +812,39 @@ def shared_open(tid):
         return jsonify({k: t[k] for k in ("area", "stage", "raise", "strengths", "risks", "fund_decision", "disclaimer")})
     html = job["data"]["founder_report_html"]
     return Response(f'<p class="disclaimer"><b>{disc}</b></p>' + html, mimetype="text/html")
+
+
+@bp.post("/jobs/<job_id>/slots/verify")
+def verify_slot(job_id):
+    """HQ-035 / канон Р-5: FACT ставит только человек с ролью из списка подписантов — пакетом на слот,
+    с основанием. Подпись пишется в журнал s1_fact_signoffs, затем пересчёт."""
+    who = _approver()
+    if not who:
+        return _err("personal signature required", 403 if _admin_ok() else 401)
+    st = _state()
+    role = st.settings.approver_roles.get(who)
+    if role not in st.methodology["working"]["fact_signoff"]["signer_roles"]:
+        return _err("signer role not allowed to verify facts", 403)
+    body = request.get_json(silent=True) or {}
+    slot, basis = str(body.get("slot") or ""), str(body.get("basis") or "").strip()
+    job = st.store.get(job_id)
+    if not job or "readiness_pack" not in job["data"]:
+        return _err("not found", 404)
+    brief = job["data"]["readiness_pack"]["internal_analyst_brief"]
+    items = {it["key"]: it for b in brief["scores"]["blocks"] for it in b["items"]}
+    if slot not in items or not basis:
+        return _err("slot from checklist and basis required", 400)
+    if items[slot]["status"] != "FACT_CANDIDATE":
+        return _err("only FACT_CANDIDATE slot (document ≥ fact_min_level) can be verified", 409)
+    rec = st.store.log_fact_signoff(job_id, slot, who, role, basis)
+    return _requeue(job_id) or jsonify({"ok": True, **rec})
+
+
+@bp.get("/jobs/<job_id>/fact-signoffs")
+def fact_signoffs(job_id):
+    if not _admin_ok():
+        return _err("unauthorized", 401)
+    return jsonify(_state().store.fact_signoffs(job_id))
 
 
 @bp.post("/jobs/<job_id>/rerun")
