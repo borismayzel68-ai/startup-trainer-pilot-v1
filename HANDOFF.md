@@ -19,3 +19,6 @@ CI: тестовый workflow `.github/workflows/tests.yml`, ветка `ci/test
 
 ## Последний коммит
 0097f2f — CI: убрать плейсхолдеры INVITE_CODE/ADMIN_KEY/S1_FUND_NAME (ломают тесты); прогон зелёный: https://github.com/borismayzel68-ai/startup-trainer-pilot-v1/actions/runs/38134066999
+
+## Слияние с master (Claude, 11.10)
+- Конфликт add/add в HANDOFF.md (master получил шаблон из #24). Оставлена версия этого PR. Код не менялся.
