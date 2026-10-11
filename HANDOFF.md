@@ -8,7 +8,7 @@ CI: тестовый workflow `.github/workflows/tests.yml`, ветка `ci/test
 ## Сделано
 - Workflow: pull_request (любая база) + push в master и s1/tilda-readiness-pack.
 - ubuntu-latest, Python 3.13 (по Dockerfile ветки hq018/env-postgres), pip install из requirements*.txt (если есть) + pytest.
-- Сервис postgres:16 с healthcheck, `HQ018_PG_URL` указывает на него; фиктивные несекретные плейсхолдеры; OPENAI_API_KEY не задан (LLM замокан, S1_LLM_PROVIDER=mock).
+- Сервис postgres:16 с healthcheck, `HQ018_PG_URL` указывает на него; OPENAI_API_KEY не задан (LLM замокан, S1_LLM_PROVIDER=mock). INVITE_CODE/ADMIN_KEY/S1_FUND_NAME не задаются — тесты ждут дефолты (первый прогон с плейсхолдерами упал: 403 invite, golden-снимки).
 - `python -m pytest -rA -v --junitxml=pytest-junit.xml`, лог и JUnit — артефакты `pytest-results`. Без `|| true`.
 
 ## Дальше

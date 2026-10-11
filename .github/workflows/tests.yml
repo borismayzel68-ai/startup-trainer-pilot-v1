@@ -30,13 +30,10 @@ jobs:
     env:
       PYTHONDONTWRITEBYTECODE: "1"
       HQ018_PG_URL: postgresql://trainer:ci-local-only@localhost:5432/trainer_e1
-      # Фиктивные несекретные плейсхолдеры (не реальные ключи). OPENAI_API_KEY намеренно не задан.
-      INVITE_CODE: ci-invite-placeholder
-      ADMIN_KEY: ci-admin-placeholder
-      SESSION_RETENTION_DAYS: "30"
-      WEBHOOK_TIMEOUT_SECONDS: "10"
+      # Только несекретные значения. OPENAI_API_KEY намеренно не задан — LLM остаётся замоканным.
+      # INVITE_CODE/ADMIN_KEY/S1_FUND_NAME не задаются: тесты рассчитывают на значения по умолчанию
+      # (с плейсхолдерами падают invite-тесты и golden-снимки).
       S1_LLM_PROVIDER: mock
-      S1_FUND_NAME: CI Test Fund
     steps:
       - uses: actions/checkout@v4
 
