@@ -21,7 +21,8 @@ from datetime import datetime, timedelta, timezone
 from flask import Blueprint, Flask, Response, current_app, jsonify, request
 
 from .config import Settings, get_settings, load_methodology
-from .dialogue import DialogueError, build_session, ready_for_gate
+from .dialogue import DialogueError, add_r2_item, attach_file, build_session, r2_candidates, ready_for_gate
+from .vertical import classify_vertical
 from .dialogue import answer as dialogue_answer
 from .evaluator import evaluate
 from .formatter import generate_pack, html_to_pdf
@@ -91,6 +92,19 @@ def _process_job(app: Flask, job_id: str, stale_before: str | None = None) -> No
         try:
             job = store.get(job_id)
             sub = Submission.model_validate(job["data"]["submission"])
+            # HQ-020: вертикаль LS/HT до оценки (решение PM 11.10)
+            vert, why = classify_vertical(sub, m)
+            override = (job["data"].get("vertical_decision") or {}).get("decision")
+            if override:
+                vert = override
+            if vert == "out":
+                store.update(job_id, status="out_of_scope", data_patch={"vertical": {
+                    "result": "out", "reason": why, "message": m["vertical_s1"]["out_of_scope_message"]}})
+                return
+            if vert == "manual_review":
+                store.update(job_id, status="manual_review", data_patch={"vertical": {
+                    "result": "manual_review", "reason": why}})
+                return
             cached = job["data"].get("parsed_docs")
             if cached:  # rerun после правки промптов — не качаем файлы заново
                 docs = [ParsedDoc.model_validate(d) for d in cached]
@@ -102,9 +116,22 @@ def _process_job(app: Flask, job_id: str, stale_before: str | None = None) -> No
             res = evaluate(job_id, sub, docs, llm, s, m)
             pack = generate_pack(res, m, s.fund_name)
             pack["llm_calls"] = list(getattr(llm, "calls", []))  # TG-1: модель, temperature, хеш промпта
+            prov = {"model": res.model, "code_sha": s.code_sha,  # A14: модель, хеш промпта, SHA кода
+                    "prompt_sha256": sorted({c.get("prompt_sha256") for c in pack["llm_calls"] if c.get("prompt_sha256")})}
+            pack["provenance"] = prov
+            pack["readiness_pack"]["provenance"] = prov
             # HQ-020: сессия диалога раздела 1; пока стадия не подтверждена — в Human Gate не идёт
-            session = build_session(json.loads(res.scores.model_dump_json()), m, job["data"].get("dialogue"))
+            scores_d = json.loads(res.scores.model_dump_json())
+            session = build_session(scores_d, m, job["data"].get("dialogue"), sub.product_class)
+            if not session["r2_items"] and not session["r2_not_requested"]:
+                for cand in r2_candidates(scores_d, m):  # §4.1, лимит 5, лишнее — «не запрашивалось»
+                    add_r2_item(session, cand["item"], cand["reason"])
             pack["dialogue"] = session
+            for b in pack["pack_blocks"]:
+                if b["n"] == 10:  # блок 10: не дослано и почему
+                    b["items"] = [{"item": x["item"], "reason": x.get("close_reason") or x["state"]}
+                                  for x in session["r2_items"] if x["state"] != "закрыт файлом"] + \
+                                 list(session["r2_not_requested"])
             gate_ok, _ = ready_for_gate(session)
             store.update(job_id, data_patch=pack, status="ready_for_review" if gate_ok else "awaiting_founder",
                          verdict=res.scores.verdict, readiness=res.scores.readiness)
@@ -157,6 +184,9 @@ def _deliver_founder_report(job_id: str, approver: str) -> tuple[bool, str, int]
     if not gate_ok:  # HQ-020: стадия не подтверждена — полный отчёт в Human Gate не идёт
         store.log_approval(job_id, approver, digest, "blocked_stage", why)
         return False, why, 409
+    if (job["data"].get("fund_call") or {}).get("status") != "call_done":  # A12 (решение PM 11.10)
+        store.log_approval(job_id, approver, digest, "blocked_call", "нет записи итога созвона с фондом")
+        return False, "созвон с фондом не записан: нужен статус call_done с итогом", 409
     if job["status"] != "ready_for_review":
         return False, f"job status is {job['status']}", 409
     if not job["founder_email"]:
@@ -182,7 +212,13 @@ def _deliver_founder_report(job_id: str, approver: str) -> tuple[bool, str, int]
         store.update(job_id, status="failed", error=f"send failed: {e.__class__.__name__}")
         store.log_approval(job_id, approver, digest, "send_error", e.__class__.__name__)
         return False, "send failed", 502
-    store.update(job_id, status="sent")
+    # блок 11 Pack: «проверил, дата» — кто подписал, когда, хеш отчёта (из журнала s1_approvals)
+    rec = next((a for a in reversed(store.approvals(job_id)) if a["outcome"] == "sent"), None)
+    blocks = job["data"].get("pack_blocks") or []
+    for b in blocks:
+        if b["n"] == 11 and rec:
+            b["signed"] = {"by": rec["approver"], "at": rec["approved_at"], "report_sha256": rec["report_sha256"]}
+    store.update(job_id, status="sent", data_patch={"pack_blocks": blocks})
     return True, "sent", 200
 
 
@@ -370,6 +406,132 @@ def answer_stage(job_id):
         return _err("job still in progress", 409)
     st.pool.submit(_process_job, current_app._get_current_object(), job_id)
     return jsonify({"ok": True, "stage": stage})
+
+
+def _requeue(job_id: str):
+    st = _state()
+    if not st.store.reset_for_rerun(job_id):
+        return _err("job still in progress", 409)
+    st.pool.submit(_process_job, current_app._get_current_object(), job_id)
+    return None
+
+
+@bp.post("/jobs/<job_id>/dialogue/answer")
+def dialogue_answer_text(job_id):
+    """Устный ответ основателя (оператор вносит). Пересчёт тем же ядром; без файла — не выше E1."""
+    if not _admin_ok():
+        return _err("unauthorized", 401)
+    st = _state()
+    body = request.get_json(silent=True) or {}
+    qid, text = str(body.get("qid") or ""), str(body.get("answer") or "").strip()
+    job = st.store.get(job_id)
+    if not job or "dialogue" not in job["data"]:
+        return _err("not found", 404)
+    session = job["data"]["dialogue"]
+    q = next((x for r in session["queue"].values() for x in r if x["qid"] == qid), None)
+    if not q or not text or qid == "stage":
+        return _err("unknown question or empty answer (stage — через /dialogue/stage)", 400)
+    if session.get("stage_pending"):
+        return _err("сначала вопрос о стадии (Q0.4)", 409)
+    dialogue_answer(session, qid, text)
+    sub = dict(job["data"]["submission"])
+    sub["answers"] = list(sub.get("answers", [])) + [
+        {"field": f"dlg_{qid}", "block": "dialogue", "label": q["question"], "value": text}]
+    st.store.update(job_id, data_patch={"dialogue": session, "submission": sub})
+    return _requeue(job_id) or jsonify({"ok": True})
+
+
+@bp.post("/jobs/<job_id>/dialogue/r2/file")
+def dialogue_r2_file(job_id):
+    """Р2: файл к пункту «дошлю позже» → пересчёт после каждого файла (TEC-10)."""
+    if not _admin_ok():
+        return _err("unauthorized", 401)
+    st = _state()
+    body = request.get_json(silent=True) or {}
+    item, url = str(body.get("item") or ""), str(body.get("url") or "")
+    job = st.store.get(job_id)
+    if not job or "dialogue" not in job["data"] or not url:
+        return _err("not found or no url", 404 if not job else 400)
+    session = job["data"]["dialogue"]
+    try:
+        attach_file(session, item, url)
+    except DialogueError as e:
+        return _err(str(e), 409)
+    sub = dict(job["data"]["submission"])
+    sub["files"] = list(sub.get("files", [])) + [{"kind": "evidence", "url": url}]
+    st.store.update(job_id, data_patch={"dialogue": session, "submission": sub, "parsed_docs": None})
+    return _requeue(job_id) or jsonify({"ok": True, "rescoring": True})
+
+
+@bp.post("/jobs/<job_id>/call")
+def fund_call(job_id):
+    """A12: итог созвона с фондом (без календаря). Без него approve не проходит."""
+    if not _admin_ok():
+        return _err("unauthorized", 401)
+    st = _state()
+    body = request.get_json(silent=True) or {}
+    outcome = str(body.get("outcome") or "").strip()
+    if not outcome:
+        return _err("outcome required", 400)
+    job = st.store.get(job_id)
+    if not job:
+        return _err("not found", 404)
+    st.store.update(job_id, data_patch={"fund_call": {
+        "status": "call_done", "outcome": outcome, "at": _iso(datetime.now(timezone.utc))}})
+    return jsonify({"ok": True, "status": "call_done"})
+
+
+@bp.post("/jobs/<job_id>/vertical")
+def vertical_decision(job_id):
+    """Ручная проверка пограничного случая: человек решает in/out с причиной."""
+    if not _admin_ok():
+        return _err("unauthorized", 401)
+    st = _state()
+    body = request.get_json(silent=True) or {}
+    decision, reason = body.get("decision"), str(body.get("reason") or "").strip()
+    if decision not in ("in", "out") or not reason:
+        return _err("decision in|out and reason required", 400)
+    job = st.store.get(job_id)
+    if not job or job["status"] != "manual_review":
+        return _err("job not in manual_review", 409)
+    st.store.update(job_id, data_patch={"vertical_decision": {"decision": decision, "reason": reason}})
+    return _requeue(job_id) or jsonify({"ok": True})
+
+
+def _free_token(job_id: str, exp: int) -> str:
+    key = _state().settings.free_link_secret.encode()
+    return hmac.new(key, f"{job_id}.{exp}".encode(), hashlib.sha256).hexdigest()
+
+
+@bp.post("/jobs/<job_id>/free-link")
+def free_link(job_id):
+    """Ограниченная по времени ссылка на бесплатную часть для страницы результата / кабинета."""
+    if not _admin_ok():
+        return _err("unauthorized", 401)
+    s = _state().settings
+    if not s.free_link_secret or len(s.free_link_secret) < 24 or s.free_link_ttl_s <= 0:
+        return _err("free link not configured (S1_FREE_LINK_SECRET, S1_FREE_LINK_TTL_S)", 503)
+    exp = int(datetime.now(timezone.utc).timestamp()) + s.free_link_ttl_s
+    return jsonify({"path": f"/s1/free/{job_id}?exp={exp}&sig={_free_token(job_id, exp)}", "expires": exp})
+
+
+@bp.get("/free/<job_id>")
+def free_public(job_id):
+    s = _state().settings
+    try:
+        exp = int(request.args.get("exp", "0"))
+    except ValueError:
+        return _err("bad link", 400)
+    sig = request.args.get("sig", "")
+    if not s.free_link_secret or not hmac.compare_digest(sig, _free_token(job_id, exp)):
+        return _err("forbidden", 403)
+    if exp < int(datetime.now(timezone.utc).timestamp()):
+        return _err("link expired", 410)
+    job = _state().store.get(job_id)
+    if not job or "free_part" not in job["data"]:
+        return _err("not found", 404)
+    fp = job["data"]["free_part"]
+    return jsonify({k: fp[k] for k in ("label", "score", "scale", "stage", "gaps")})
 
 
 @bp.post("/jobs/<job_id>/rerun")

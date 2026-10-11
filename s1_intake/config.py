@@ -42,6 +42,15 @@ def _env_approvers(name: str) -> dict[str, str]:
     return out
 
 
+def _git_sha() -> str:
+    import subprocess
+    try:
+        return subprocess.run(["git", "rev-parse", "HEAD"], cwd=PKG, capture_output=True, text=True,
+                              timeout=5).stdout.strip() or "unknown"
+    except Exception:  # noqa: BLE001
+        return "unknown"
+
+
 @dataclass(frozen=True)
 class Settings:
     # --- вебхук Tilda / доступ аналитика ---
@@ -83,6 +92,12 @@ class Settings:
     smtp_from: str = field(default_factory=lambda: _env("S1_SMTP_FROM"))
     notify_webhook_url: str = field(default_factory=lambda: _env("S1_NOTIFY_WEBHOOK_URL"))
     fund_name: str = field(default_factory=lambda: _env("S1_FUND_NAME", "Artgen Seed Fund"))
+    # HQ-020: ограниченная по времени ссылка на бесплатную часть. Без секрета и срока ссылки не выдаются
+    # (срок PM не задан — значения по умолчанию нет).
+    free_link_secret: str = field(default_factory=lambda: _env("S1_FREE_LINK_SECRET"))
+    free_link_ttl_s: int = field(default_factory=lambda: int(_env("S1_FREE_LINK_TTL_S", "0") or 0))
+    # HQ-020 / A14: SHA кода в каждом отчёте (Render отдаёт RENDER_GIT_COMMIT)
+    code_sha: str = field(default_factory=lambda: _env("S1_CODE_SHA") or _env("RENDER_GIT_COMMIT") or _git_sha())
 
     def problems(self) -> list[str]:
         """Конфигурация, при которой интейк небезопасно включать."""

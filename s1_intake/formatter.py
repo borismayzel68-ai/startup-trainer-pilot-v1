@@ -139,6 +139,39 @@ def _e(x) -> str:
     return _h.escape(str(x))
 
 
+def build_pack_blocks(res: EvaluationResult, m: dict) -> list[dict]:
+    """HQ-020 §2.7 / S1_DIALOG_SCENARIO_v0.1 §5.2: блоки 1–11 окончательного Readiness Pack.
+    Блоки 10 (не дослано) и 11 («проверил, дата») заполняет main.py из сессии и журнала подписи.
+    Где источник не даёт значения, блок помечен status=STOP с причиной — значения не выдумываются."""
+    ls = res.scores.ls or {}
+    stop = lambda why: {"status": "STOP", "reason": why}  # noqa: E731
+    claims = [{"id": c.id, "statement": c.statement, "class": c.category.value, "level": f"E{c.evidence_level}",
+               "source": c.source_ref or ", ".join(c.sources) or "НЕ ПОДТВЕРЖДЕНО"} for c in res.classification.claims]
+    k7 = ls.get("next_artifact")
+    blocks = [
+        {"n": 1, "title": "Статус", **stop("Пороги LS §2.3 — «предложение PM S1, ручной режим» (сценарий §5.2 п. 1, "
+                                           "открытый вопрос №9); внутренние метки вердикта основателю не показываются")},
+        {"n": 2, "title": "Строка итога", "value": ls.get("summary_line"),
+         "note": "шкала 0–100 по решению PM; формат «X,X / 5» сценария §5.2 п. 2 считается в пилоте вручную"},
+        {"n": 3, "title": "Что доказано", "claims": claims},
+        {"n": 4, "title": "К1–К6 и К7", "milestones": ls.get("milestones"), "k7": k7},
+        {"n": 5, "title": "Слоты N_A_BY_STAGE", "na_slots": ls.get("na_slots")},
+        {"n": 6, "title": "LS-барьеры З1–З7", "zones": ls.get("zones")},
+        {"n": 7, "title": "Критичные барьеры (2–5)", "barriers": ls.get("barriers")},
+        {"n": 8, "title": "Следующие шаги", "first_step_k7": k7,
+         **stop("Горизонты «1–3 и 6–12 мес» vs «30/60/90» не утверждены (сценарий §7 вопрос №6); "
+                "владелец шага и процедура РФ в данных не заданы")},
+        {"n": 9, "title": "Оговорки", "value": m["dialogue_questions_s1"]["pack_disclaimer"]},
+        {"n": 10, "title": "Не дослано и почему", "items": []},
+        {"n": 11, "title": "Проверил, дата", "signed": None},
+    ]
+    if not ls:  # путь IT: LS-блоки не строятся (HQ016 T3)
+        for b in blocks:
+            if b["n"] in (4, 5, 6, 7):
+                b.update(status="N/A", reason="путь IT: LS-блок не строится")
+    return blocks
+
+
 def generate_pack(res: EvaluationResult, m: dict, fund_name: str) -> dict:
     """Readiness Pack: JSON-структура + два HTML. Хранится в БД; PDF — по запросу из HTML."""
     founder = build_founder_view(res, m, fund_name)
@@ -149,6 +182,7 @@ def generate_pack(res: EvaluationResult, m: dict, fund_name: str) -> dict:
             "internal_analyst_brief": json.loads(res.model_dump_json()),
         },
         "free_part": build_free_part(res, m),
+        "pack_blocks": build_pack_blocks(res, m),
         "founder_report_html": _env.get_template("founder_report.html").render(**founder),
         "analyst_brief_html": _env.get_template("analyst_brief.html").render(**internal),
     }

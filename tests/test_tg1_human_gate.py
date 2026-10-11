@@ -47,6 +47,9 @@ class Tg1Base(unittest.TestCase):
         t = base.S1EndToEndTests.wait
         job = t(self, jid)
         self.assertEqual(job["status"], "ready_for_review", job["error"])
+        # HQ-020 A12 (решение PM 11.10): approve требует записанного итога созвона с фондом
+        self.assertEqual(self.c.post(f"/s1/jobs/{jid}/call", headers=base.ADMIN,
+                                     json={"outcome": "синтетический созвон"}).status_code, 200)
         return jid
 
 

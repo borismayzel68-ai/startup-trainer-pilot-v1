@@ -27,41 +27,95 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def build_session(scores: dict, m: dict, previous: dict | None = None) -> dict:
-    """Собрать (или пересобрать после пересчёта) сессию. Ответы прошлой сессии сохраняются."""
-    cfg = m["dialogue_s1"]
+def _branch(product_class: str) -> str:
+    pc = (product_class or "").upper()
+    return {"THERAPEUTIC": "drug", "SOFTWARE_POTENTIAL_MD": "software"}.get(pc, "device")
+
+
+def build_session(scores: dict, m: dict, previous: dict | None = None, product_class: str = "") -> dict:
+    """Собрать (или пересобрать после пересчёта) сессию по банку вопросов S1_DIALOG_SCENARIO_v0.1 §3.
+    Ответы прошлой сессии сохраняются."""
+    cfg, bank = m["dialogue_s1"], m["dialogue_questions_s1"]
     ls = scores.get("ls") or {}
+    is_ls = bool(ls) and ls.get("asset_class") in m["ls_stage_rule"]["asset_classes"]
     prev = previous or {}
     answered = {a["qid"] for a in prev.get("answers", [])}
-    r0, r1 = [], []
-    for q in ls.get("dialogue_questions") or []:
-        qid = "stage" if q["signal"] == "stage" else f"{q.get('zone') or 'Z'}:{q['signal']}"
-        item = {"qid": qid, "question": q["question"], "source": "stage" if qid == "stage" else "zone",
-                "zone": q.get("zone")}
-        (r0 if qid == "stage" else r1).append(item)
-    if ls.get("gate_request"):
-        r0.append({"qid": "gate", "question": ls["gate_request"], "source": "gate", "zone": None})
-    # Р1: слоты К по порядку важности; N_A_BY_STAGE пропускаются
-    items = {it["key"].split(".")[-1]: it for b in scores.get("blocks", []) for it in b.get("items", [])}
-    k_rows = []
-    for k in cfg["r1_order"]:
-        it = items.get(K_SLOTS.get(k, ""))
-        if not it or it.get("applicability") == "N_A_BY_STAGE" or it.get("status") == "FACT":
+    pc = (product_class or ls.get("asset_class") or "").upper()
+    zones = {z["id"]: z for z in ls.get("zones") or []}
+    covered = set()
+    # Р0: Q0.1–Q0.7; Q0.4 — вопрос о стадии (qid "stage"), всегда первый, пока стадия не подтверждена
+    r0 = []
+    for q in bank["r0"]:
+        if q.get("only") and pc not in q["only"]:
             continue
-        k_rows.append({"qid": f"{k}:{it['key']}", "question": it["label"], "source": "slot", "zone": None})
-    r1 = k_rows + r1
+        r0.append({"qid": "stage" if q.get("stage") else q["id"], "id": q["id"], "question": q["text"],
+                   "source": "stage" if q.get("stage") else ("gate" if q.get("gate") else "r0"), "zone": None})
+        covered.add(q.get("signal"))
     stage_pending = bool(ls.get("stage_uncertain")) and "stage" not in answered
-    if stage_pending:  # PM 11.10: вопрос о стадии — всегда первый
+    if stage_pending:
         r0.sort(key=lambda q: q["qid"] != "stage")
+    # Р1
+    items = {it["key"].split(".")[-1]: it for b in scores.get("blocks", []) for it in b.get("items", [])}
+    r1 = []
+    if is_ls:
+        br = _branch(pc)
+        for k in cfg["r1_order"]:
+            if k in bank["r1_ls"]:
+                it = items.get(K_SLOTS.get(k, ""))
+                if it and it.get("applicability") == "N_A_BY_STAGE" and k != "К3":  # IP никогда не N/A
+                    continue
+                texts = bank["r1_ls"][k]
+                r1.append({"qid": f"Q1.{k}", "id": f"Q1.{k}", "question": texts.get(br) or texts.get("all"),
+                           "source": "slot", "zone": None, "slot": it["key"] if it else None})
+            elif k == "team_money":
+                for q in bank["r1_common"]:
+                    if q["id"] in ("Q1.T", "Q1.M"):
+                        r1.append({"qid": q["id"], "id": q["id"], "question": q["text"], "source": "common",
+                                   "zone": None, "proposal": bool(q.get("proposal"))})
+        for q in bank["r1_common"]:
+            if q.get("ls_only"):
+                r1.append({"qid": q["id"], "id": q["id"], "question": q["text"], "source": "control", "zone": None})
+                covered.add(q.get("signal"))
+        for zid, text in bank["zones_now"].items():  # отдельный вопрос только по зоне «сейчас»
+            if zones.get(zid, {}).get("status") == "сейчас":
+                r1.append({"qid": f"{zid}:now", "id": zid, "question": text, "source": "zone_now", "zone": zid})
+    else:
+        for q in bank["r1_it"] + [q for q in bank["r1_common"] if not q.get("ls_only")]:
+            r1.append({"qid": q["id"], "id": q["id"], "question": q["text"], "source": "it", "zone": None,
+                       "proposal": bool(q.get("proposal"))})
+    # вопросы зон «не оценено, нужен ответ» (HQ-016 T6), которые не покрыты Q0.7 / Q1.Z6
+    for q in ls.get("dialogue_questions") or []:
+        if q["signal"] == "stage" or q["signal"] in covered:
+            continue
+        r1.append({"qid": f"{q.get('zone') or 'Z'}:{q['signal']}", "id": q.get("zone"), "question": q["question"],
+                   "source": "zone", "zone": q.get("zone")})
+    if ls.get("gate_request"):
+        r0.append({"qid": "gate", "id": "gate", "question": ls["gate_request"], "source": "gate", "zone": None})
     return {
         "round": prev.get("round", "Р0"), "rounds_used": prev.get("rounds_used", 1),
-        "limits": dict(cfg["limits"]), "queue": {"Р0": r0, "Р1": r1}, "asked": prev.get("asked", {"Р0": [], "Р1": [], "Р2": []}),
+        "limits": dict(cfg["limits"]), "queue": {"Р0": r0, "Р1": r1},
+        "asked": prev.get("asked", {"Р0": [], "Р1": [], "Р2": []}),
         "answers": prev.get("answers", []), "r2_items": prev.get("r2_items", []),
         "r2_not_requested": prev.get("r2_not_requested", []), "human_decisions": prev.get("human_decisions", []),
-        "clarifications": prev.get("clarifications", 0),
+        "clarifications": prev.get("clarifications", 0), "path": "LS" if is_ls else "IT",
         "stage_pending": stage_pending, "gate_missing": bool(ls.get("gate_request")), "exit": prev.get("exit"),
         "question_count": sum(len(v) for v in prev.get("asked", {}).values()),
     }
+
+
+def r2_candidates(scores: dict, m: dict) -> list[dict]:
+    """§4.1: MISSING по К1/К2/К3/К4/К7 и CLAIM ≤ 2 по ним, в порядке К2, К4, К1, К3, К7."""
+    items = {it["key"].split(".")[-1]: it for b in scores.get("blocks", []) for it in b.get("items", [])}
+    out = []
+    for k in m["dialogue_questions_s1"]["r2_priority"]:
+        it = items.get(K_SLOTS.get(k, ""))
+        if not it or it.get("applicability") == "N_A_BY_STAGE":
+            continue
+        if it.get("status") in ("UNKNOWN", "FOUNDER_CLAIM", "CONFLICT") or it.get("applicability") == "MISSING":
+            out.append({"item": f"Q1.{k}", "slot": it["key"],
+                        "reason": "MISSING" if it.get("applicability") == "MISSING" or it.get("status") == "UNKNOWN"
+                        else "CLAIM: документ может поднять балл выше 2"})
+    return out
 
 
 def first_question(session: dict) -> dict | None:

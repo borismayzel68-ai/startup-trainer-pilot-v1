@@ -65,8 +65,12 @@ class DialogueTests(unittest.TestCase):
 
     def test_zone_questions_consumed_in_r1(self):
         s = self.session()
-        zone_q = {q["qid"] for q in s["queue"]["Р1"] if q["source"] == "zone"}
-        self.assertTrue({"З2:hospital_drug", "З3:orphan_paediatric", "З6:biomaterials"} <= zone_q)
+        # З3 покрыт Q0.7 (Р0), З6 — Q1.Z6 (Р1), З2 (ЛП в стационаре) — вопрос зоны из HQ-016 T6
+        r0 = [q["id"] for q in s["queue"]["Р0"]]
+        r1 = [q["qid"] for q in s["queue"]["Р1"]]
+        self.assertIn("Q0.7", r0)
+        self.assertIn("Q1.Z6", r1)
+        self.assertIn("З2:hospital_drug", r1)
 
     def test_no_questions_on_na_slots(self):
         s = self.session()
@@ -170,6 +174,7 @@ class StageGateTests(Tg1Base):
         self.assertEqual(r.status_code, 200, r.get_json())
         _, job = self.wait_done(jid)
         self.assertEqual(job["status"], "ready_for_review", job.get("error"))
+        self.c.post(f"/s1/jobs/{jid}/call", headers=base.ADMIN, json={"outcome": "синтетика"})
         self.assertEqual(self.c.post(f"/s1/jobs/{jid}/approve", headers=base.ADMIN).status_code, 403)
         self.assertEqual(self.c.post(f"/s1/jobs/{jid}/approve", headers=ALICE).status_code, 200)
         self.assertEqual(self.c.post(f"/s1/jobs/{jid}/approve", headers=ALICE).status_code, 409)  # no resend

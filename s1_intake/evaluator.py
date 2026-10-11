@@ -9,6 +9,7 @@ from .config import Settings, build_checklist, routing_for
 from .llm import LLMClient
 from .ls_zones import build_zones, derive_stage
 from .models import (
+    Category,
     BearCase,
     BullCase,
     ClassificationResult,
@@ -130,6 +131,14 @@ def evaluate(job_id: str, sub: Submission, docs: list[ParsedDoc], llm: LLMClient
     # 2. Детерминированные предохранители и скоринг
     cls = enforce_rules(cls, m, idx, {d.source for d in docs if d.ok}, model_cap_overrides(docs, m))
     cls = cap_device_pilots(ls_ctx, cls, m)
+    # HQ-020 / сценарий §3.0, §4.2: устный ответ в диалоге без файла — максимум E1 («не выше 2»)
+    lim = int(m["dialogue_questions_s1"]["text_answer_level"])
+    for c in cls.claims:
+        if "dlg_" in (c.source_ref or "") and c.evidence_level > lim:
+            c.machine_adjusted.append(f"E{c.evidence_level}→E{lim}: ответ в диалоге без файла")
+            c.evidence_level = lim
+            if c.category == Category.FACT:
+                c.category = Category.FOUNDER_CLAIM
     ls_ctx = apply_revenue_claims(ls_ctx, cls, m)
     scores = score(cls, m, idx, ls_ctx)
     if scores.ls is not None and (ls_ctx["asset_class"] in m["ls_stage_rule"]["asset_classes"] or not ls_ctx["gate"]):
