@@ -3,20 +3,17 @@
 Обновлять при каждом коммите.
 
 ## Задача / issue
-HQ-036 — линия A9 (#6 head 83ab1f7 + #11 head 90e2d22) на линии tilda (Refs #22), ветка `chore/hq-036-rebase-a9-on-tilda` от fix/hq-035-fact-ceiling (85d424a, верх линии tilda с HQ-035). PR → s1/tilda-readiness-pack.
+HQ-022 — роль S2 Pre-DD Brief. Issue exec:mos не найден (поручение PM). Ветка `hq022/s2-predd-brief` от chore/hq-036-rebase-a9-on-tilda (e8cad0f, верх линии: #10/#12/#13/#14/#26/#28) — merge, без rebase.
 
 ## Сделано
-- Влит 90e2d22 (содержит 83ab1f7) merge-коммитом, без rebase.
-- app.py: импорты объединены (s1 init_s1 + founder_package/iso_z/utc_now из A9; post_completion_json больше не импортируется — A9 доставляет completion через delivery_worker); лимит запроса 20 МБ (A9) и init_s1 (S1) — оба сохранены.
-- README.md: раздел S1 сохранён целиком; строка Worker: `python delivery_worker.py` из A9 — рядом с Build/Start.
-- Полный прогон: 197 passed, 0 failed, 0 skipped (с тестами A9).
+- Прочитаны: план v2.1 (16ivUku2T7uDsPX3ln7HIsEV2h3G4UrYb), канон v1.7, S2_PRE_DD_BRIEF_MIN_v0.1 (1HFrjnRkd5YI16fXCRaHVnEPkowOdkONN). Брифа HQ-022 в HQ_Trainer нет.
+- Кода ещё нет — ветка заведена, чтобы продолжить с верха линии.
 
 ## Дальше
-- HQ-022: ветка от этой линии, только merge.
+- Собрать минимум S2 по S2_PRE_DD_BRIEF_MIN_v0.1 / канону v1.7 с переиспользованием ссылок, согласия, approve, no-resend, созвона, обезличивания; метка «не инвестиционная рекомендация»; доставка только через G-4.
 
 ## Сломано или не проверено
-- «CI прогон зелёный» (Issue #22): в репо нет тестового workflow (только claude.yml в PR #8) — пробел для PM.
-- delivery_worker вживую (Render worker) не запускался — только тесты.
+- Нет.
 
 ## Последний коммит
-см. git log -1 (Merge A9 (#6+#11) в линию tilda)
+см. git log -1 (HQ-022: ветка от линии HQ-036, HANDOFF)
