@@ -3,18 +3,20 @@
 Обновлять при каждом коммите.
 
 ## Задача / issue
-HQ-035 — потолок FACT (Refs #21), ветка `fix/hq-035-fact-ceiling` (от hq028/exit-intro через hq035/fact-signoff). PR → s1/tilda-readiness-pack, после #14.
+HQ-036 — линия A9 (#6 head 83ab1f7 + #11 head 90e2d22) на линии tilda (Refs #22), ветка `chore/hq-036-rebase-a9-on-tilda` от fix/hq-035-fact-ceiling (85d424a, верх линии tilda с HQ-035). PR → s1/tilda-readiness-pack.
 
 ## Сделано
-- Код ставит максимум FACT_CANDIDATE («заявление с документом»); verified_by от LLM обнуляется.
-- FACT — только POST /s1/jobs/<id>/slots/verify (персональный токен, роль из working_values.yaml fact_signoff.signer_roles = [analyst]), пакетом на слот, журнал s1_fact_signoffs (кто, когда, роль, основание).
-- Тесты: tests/test_hq035_fact_signoff.py (ловушка, подпись → FACT + журнал, отказы). Баллы не изменились.
+- Влит 90e2d22 (содержит 83ab1f7) merge-коммитом, без rebase.
+- app.py: импорты объединены (s1 init_s1 + founder_package/iso_z/utc_now из A9; post_completion_json больше не импортируется — A9 доставляет completion через delivery_worker); лимит запроса 20 МБ (A9) и init_s1 (S1) — оба сохранены.
+- README.md: раздел S1 сохранён целиком; строка Worker: `python delivery_worker.py` из A9 — рядом с Build/Start.
+- Полный прогон: 197 passed, 0 failed, 0 skipped (с тестами A9).
 
 ## Дальше
-- Влит hq028/exit-intro 42de16b (фикс основ имён, PR #14) — merge, без rebase.
+- HQ-022: ветка от этой линии, только merge.
 
 ## Сломано или не проверено
-- Кто подписывает (G-13) не решено: в конфиге только роль `analyst`, имена — через окружение.
+- «CI прогон зелёный» (Issue #22): в репо нет тестового workflow (только claude.yml в PR #8) — пробел для PM.
+- delivery_worker вживую (Render worker) не запускался — только тесты.
 
 ## Последний коммит
-см. git log -1 (merge hq028/exit-intro в fix/hq-035-fact-ceiling)
+см. git log -1 (Merge A9 (#6+#11) в линию tilda)
