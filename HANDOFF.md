@@ -18,4 +18,4 @@ CI: тестовый workflow `.github/workflows/tests.yml`, ветка `ci/test
 - Секреты не добавлялись. `.github/workflows/claude.yml` (PR #8) не затронут.
 
 ## Последний коммит
-<!-- hash и сообщение: см. git log ветки ci/tests -->
+0097f2f — CI: убрать плейсхолдеры INVITE_CODE/ADMIN_KEY/S1_FUND_NAME (ломают тесты); прогон зелёный: https://github.com/borismayzel68-ai/startup-trainer-pilot-v1/actions/runs/38134066999
