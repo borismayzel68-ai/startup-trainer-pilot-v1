@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><title>Founder Readiness Report — {{ company }}</title>
+<style>{% include "_base.css" %}</style></head>
+<body>
+<div class="head">
+  <div><div class="brand">{{ fund_name }} · IR-Навигатор</div>
+    <h1>Founder Readiness Report</h1>
+    <div class="muted">{{ company }}{% if founder_name %} · {{ founder_name }}{% endif %}</div></div>
+  <div class="muted small">{{ date }}</div>
+</div>
+
+<div class="kpi">
+  <div><div class="l">Инвестиционная готовность</div><div class="v">{{ readiness }}/100</div><div class="muted">{{ readiness_band }}</div></div>
+  <div><div class="l">Критические барьеры</div><div class="v">{{ barriers|length }}</div><div class="muted">снять до выхода к инвесторам</div></div>
+  <div><div class="l">Proof Points</div><div class="v">{{ proof_points|length }}</div><div class="muted">доказательства на 90 дней</div></div>
+</div>
+<p class="small muted">Оценка показывает не привлекательность бизнеса, а то, насколько ваши ключевые утверждения подкреплены доказательствами, которые инвестор сможет проверить. Чем выше уровень доказательности — тем меньше дисконт к оценке компании.</p>
+
+<h2>Карта доказательств E0 → E4</h2>
+<table>
+  <tr><th style="width:52%">Пункт</th><th>Уровень</th><th style="width:28%">Шкала</th></tr>
+  {% for b in evidence_map %}
+  <tr><td colspan="3"><b>{{ b.label }}</b> <span class="muted small">· {% if b.na_by_stage %}не применимо по стадии{% else %}{{ b.score_pct }}%{% endif %}</span></td></tr>
+    {% for it in b["items"] %}
+    <tr>
+      <td>{{ it.label }}{% if it.critical %}<span class="tag crit">ключевой</span>{% endif %}</td>
+      <td>{% if it.na_by_stage %}<span class="lvl l-1">не применимо по стадии</span>{% elif it.conflict %}<span class="lvl l-1">противоречие</span>{% elif it.level_num < 0 %}<span class="lvl l-1">нет данных</span>{% else %}<span class="lvl l{{ it.level_num }}">{{ it.level }}</span>{% endif %}</td>
+      <td><span class="ladder{% if it.conflict %} conflict{% endif %}">{% for i in range(5) %}<span class="{% if it.level_num >= i %}on{% endif %}"></span>{% endfor %}</span></td>
+    </tr>
+    {% endfor %}
+  {% endfor %}
+</table>
+<p class="small muted">{% for s in scale %}<b>{{ s.code }}</b> — {{ s.label }}{% if not loop.last %} · {% endif %}{% endfor %}</p>
+
+{% if ls %}
+<h2>Life Science: оценка по стадии</h2>
+<p><b>{{ ls.summary_line }}</b></p>
+{% if ls.na_slots %}
+<h3>Не применимо по стадии — будущие вехи</h3>
+{% for n in ls.na_slots %}
+<div class="card"><b>{{ n.label }}</b>
+  <div class="small"><b>Почему не оценивается:</b> {{ n.na_reason }}</div>
+  <div class="small"><b>Будущая веха:</b> {{ n.future_milestone }}</div>
+  <div class="small muted"><b>Риск для инвестора:</b> {{ n.risk }}</div></div>
+{% endfor %}
+{% endif %}
+{% if ls.milestones %}
+<h3>LS-вехи К1–К6</h3>
+<table>{% for k in ls.milestones %}<tr><td>{{ k.label }}</td><td>{% if k.level is none or k.status == "UNKNOWN" %}нет данных{% else %}E{{ k.level }}{% endif %}</td></tr>{% endfor %}</table>
+{% endif %}
+{% if ls.barriers %}
+<h3>LS-барьеры</h3>
+{% for b in ls.barriers %}
+<div class="card warn"><b>{{ b.label }}</b><div class="small">{{ b.why }}</div></div>
+{% endfor %}
+{% endif %}
+{% if ls.next_artifact %}
+<h3>Один следующий артефакт (К7)</h3>
+<div class="card"><b>{{ ls.next_artifact.artifact }}</b> <span class="tag">{{ ls.next_artifact.mark }}</span></div>
+{% endif %}
+{% if ls.stage_uncertain %}<p class="small"><b>Стадия:</b> не подтверждена (уточнить в диалоге).</p>{% endif %}
+{% if ls.gate_request %}<p class="small"><b>{{ ls.gate_request }}</b></p>{% endif %}
+{% if ls.zones %}
+<h3>Зоны LS-барьеров З1–З7 (на балл не влияют)</h3>
+<table>
+  <tr><th>Зона</th><th>Статус</th><th>Критичный</th><th>Доказательство</th><th>Основание</th></tr>
+  {% for z in ls.zones %}
+  <tr><td>{{ z.id }} · {{ z.title }}</td><td>{{ z.status }}{% if z.status == "не применимо" %} ({{ z.reason }}){% endif %}</td>
+      <td>{% if z.critical %}да{% else %}нет{% endif %}</td><td>{{ z.evidence }}</td>
+      <td class="small">{{ z.basis|join("; ") }}{% if z.next_step %}<br><b>Следующий шаг:</b> {{ z.next_step }}{% endif %}</td></tr>
+  {% endfor %}
+</table>
+{% endif %}
+<p class="small muted">Подтвердить у эксперта / регулятора. Отчёт не является юридическим или регуляторным заключением.</p>
+{% endif -%}
+
+<h2>Критические барьеры</h2>
+{% for b in barriers %}
+<div class="card warn"><b>{{ b.barrier }}</b><div class="small">{{ b.why_it_matters }}</div></div>
+{% else %}<p class="muted">Критических барьеров не выявлено.</p>{% endfor %}
+
+<h2>Proof Points — что поднимет оценку на следующем раунде</h2>
+{% for p in proof_points %}
+<div class="card">
+  <b>{{ p.proof_point }}</b> <span class="tag">{{ p["from"] }} → {{ p["to"] }}</span>
+  <div class="small"><b>Как получить:</b> {{ p.how_to_obtain }}</div>
+  <div class="small muted"><b>Почему важно:</b> {{ p.why }}</div>
+</div>
+{% endfor %}
+
+<h2>План на 30 / 60 / 90 дней</h2>
+<div class="cols">
+  {% for k in ["30", "60", "90"] %}
+  <div><h3>{{ k }} дней</h3><ul>{% for a in plan[k] %}<li>{{ a }}</li>{% endfor %}</ul></div>
+  {% endfor %}
+</div>
+
+{% if objections %}
+<h2>Вопросы, которые зададут инвесторы</h2>
+<ul>{% for o in objections %}<li>{{ o }}</li>{% endfor %}</ul>
+{% endif %}
+
+{% if file_warnings %}
+<h2>Замечания к загруженным файлам</h2>
+<ul class="small">{% for w in file_warnings %}<li>{{ w }}</li>{% endfor %}</ul>
+{% endif %}
+
+<div class="footer-note">Отчёт подготовлен автоматически на основе предоставленных вами материалов и проверен аналитиком {{ fund_name }}. Он не является инвестиционным предложением, обязательством фонда или оценкой стоимости компании.</div>
+</body></html>

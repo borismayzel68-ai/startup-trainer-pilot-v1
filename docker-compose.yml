@@ -1,0 +1,32 @@
+# HQ-018 · E-1: приложение + локальный Postgres. Только синтетические данные, без прод-секретов.
+# Запуск из чистого checkout:  cp .env.example .env  (необязательно)  &&  docker compose up --build
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: trainer_e1
+      POSTGRES_USER: trainer
+      POSTGRES_PASSWORD: ${E1_DB_PASSWORD:-local-e1-only}
+    ports: ["127.0.0.1:5433:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trainer -d trainer_e1"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    volumes: [pgdata:/var/lib/postgresql/data]
+  app:
+    build: .
+    depends_on:
+      db: {condition: service_healthy}
+    environment:
+      SESSION_DATABASE_URL: postgresql://trainer:${E1_DB_PASSWORD:-local-e1-only}@db:5432/trainer_e1
+      S1_LLM_PROVIDER: mock
+      # Заглушка, не ключ: тренажёр создаёт клиент OpenAI при старте. Внешних вызовов нет (base_url — мёртвый порт).
+      OPENAI_API_KEY: e1-dummy-not-a-key
+      OPENAI_BASE_URL: http://127.0.0.1:9/v1
+      S1_TILDA_WEBHOOK_KEY: ${S1_TILDA_WEBHOOK_KEY:-synthetic-e1-webhook-key}
+      S1_ADMIN_TOKEN: ${S1_ADMIN_TOKEN:-synthetic-e1-admin-token}
+      S1_AUTO_SEND_FOUNDER_REPORT: "false"
+    ports: ["127.0.0.1:10000:10000"]
+volumes:
+  pgdata:

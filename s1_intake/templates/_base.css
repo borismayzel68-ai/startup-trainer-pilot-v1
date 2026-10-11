@@ -1,0 +1,39 @@
+@page { size: A4; margin: 16mm 14mm 18mm 14mm;
+  @bottom-right { content: counter(page) " / " counter(pages); font-size: 8pt; color: #888; } }
+* { box-sizing: border-box; }
+body { font-family: "DejaVu Sans", "Inter", Arial, sans-serif; font-size: 9.5pt; color: #1b1f24; line-height: 1.45; margin: 0; }
+h1 { font-size: 17pt; margin: 0 0 2mm 0; letter-spacing: -0.2pt; }
+h2 { font-size: 11.5pt; margin: 7mm 0 2.5mm 0; padding-bottom: 1mm; border-bottom: 1.2pt solid #1b1f24; }
+h3 { font-size: 10pt; margin: 4mm 0 1.5mm 0; }
+.muted { color: #6a7280; }
+.small { font-size: 8pt; }
+.head { display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 2.5pt solid #0f4c5c; padding-bottom: 3mm; margin-bottom: 4mm; }
+.brand { font-size: 8pt; text-transform: uppercase; letter-spacing: 1.2pt; color: #0f4c5c; font-weight: bold; }
+.kpi { display: flex; gap: 4mm; margin: 3mm 0; }
+.kpi > div { flex: 1; border: 0.8pt solid #d5d9df; border-radius: 2mm; padding: 3mm; }
+.kpi .v { font-size: 20pt; font-weight: bold; color: #0f4c5c; }
+.kpi .l { font-size: 8pt; color: #6a7280; text-transform: uppercase; letter-spacing: 0.6pt; }
+table { width: 100%; border-collapse: collapse; margin: 1.5mm 0 3mm 0; }
+th { text-align: left; font-size: 7.5pt; text-transform: uppercase; letter-spacing: 0.5pt; color: #6a7280; border-bottom: 0.8pt solid #1b1f24; padding: 1.2mm 1.5mm; }
+td { border-bottom: 0.5pt solid #e3e6ea; padding: 1.4mm 1.5mm; vertical-align: top; }
+tr { page-break-inside: avoid; }
+.lvl { display: inline-block; min-width: 9mm; text-align: center; border-radius: 1mm; padding: 0.3mm 1mm; font-weight: bold; font-size: 8pt; }
+.l-1 { background: #f6e2e2; color: #8a1c1c; }
+.l0 { background: #f1e7d6; color: #7a4b00; }
+.l1 { background: #f4ecd0; color: #6b5800; }
+.l2 { background: #e5eef0; color: #24525e; }
+.l3 { background: #d6ece3; color: #1d6145; }
+.l4 { background: #bfe3d1; color: #0d4a32; }
+.ladder { display: inline-flex; gap: 0.6mm; vertical-align: middle; }
+.ladder span { width: 5mm; height: 2.6mm; border-radius: 0.6mm; background: #e6e8eb; display: inline-block; }
+.ladder span.on { background: #0f4c5c; }
+.ladder.conflict span.on { background: #b42318; }
+.tag { display: inline-block; font-size: 7pt; padding: 0.2mm 1.2mm; border-radius: 1mm; background: #eef0f3; color: #4a5260; margin-left: 1mm; }
+.tag.crit { background: #fde8e7; color: #9b1c1c; }
+.card { border: 0.8pt solid #d5d9df; border-left: 2.5pt solid #0f4c5c; border-radius: 1.5mm; padding: 2.5mm 3mm; margin: 2mm 0; page-break-inside: avoid; }
+.card.warn { border-left-color: #b42318; }
+.cols { display: flex; gap: 4mm; }
+.cols > div { flex: 1; }
+ul { margin: 1mm 0 2mm 0; padding-left: 5mm; }
+li { margin: 0.6mm 0; }
+.footer-note { margin-top: 8mm; font-size: 7.5pt; color: #6a7280; border-top: 0.5pt solid #d5d9df; padding-top: 2mm; }

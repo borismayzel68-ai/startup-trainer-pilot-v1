@@ -3,22 +3,24 @@
 Обновлять при каждом коммите.
 
 ## Задача / issue
-CI: тестовый workflow `.github/workflows/tests.yml`, ветка `ci/tests` → master (по запросу владельца).
+HQ-036 — линия A9 (#6 head 83ab1f7 + #11 head 90e2d22) на линии tilda (Refs #22), ветка `chore/hq-036-rebase-a9-on-tilda` от fix/hq-035-fact-ceiling (85d424a, верх линии tilda с HQ-035). PR → s1/tilda-readiness-pack.
 
 ## Сделано
-- Workflow: pull_request (любая база) + push в master и s1/tilda-readiness-pack.
-- ubuntu-latest, Python 3.13 (по Dockerfile ветки hq018/env-postgres), pip install из requirements*.txt (если есть) + pytest.
-- Сервис postgres:16 с healthcheck, `HQ018_PG_URL` указывает на него; OPENAI_API_KEY не задан (LLM замокан, S1_LLM_PROVIDER=mock). INVITE_CODE/ADMIN_KEY/S1_FUND_NAME не задаются — тесты ждут дефолты (первый прогон с плейсхолдерами упал: 403 invite, golden-снимки).
-- `python -m pytest -rA -v --junitxml=pytest-junit.xml`, лог и JUnit — артефакты `pytest-results`. Без `|| true`.
+- Влит 90e2d22 (содержит 83ab1f7) merge-коммитом, без rebase.
+- app.py: импорты объединены (s1 init_s1 + founder_package/iso_z/utc_now из A9; post_completion_json больше не импортируется — A9 доставляет completion через delivery_worker); лимит запроса 20 МБ (A9) и init_s1 (S1) — оба сохранены.
+- README.md: раздел S1 сохранён целиком; строка Worker: `python delivery_worker.py` из A9 — рядом с Build/Start.
+- Полный прогон: 197 passed, 0 failed, 0 skipped (с тестами A9).
 
 ## Дальше
-- Чтобы CI запускался на PR в s1/tilda-readiness-pack (#9, #10, #12, #13, #14, #26), tests.yml должен быть и в этой базовой ветке: после слияния этого PR в master — влить master в s1/tilda-readiness-pack, либо добавить тот же файл туда отдельным PR.
+- HQ-022: ветка от этой линии, только merge.
 
 ## Сломано или не проверено
-- Секреты не добавлялись. `.github/workflows/claude.yml` (PR #8) не затронут.
+- «CI прогон зелёный» (Issue #22): в репо нет тестового workflow (только claude.yml в PR #8) — пробел для PM.
+- delivery_worker вживую (Render worker) не запускался — только тесты.
 
 ## Последний коммит
-0097f2f — CI: убрать плейсхолдеры INVITE_CODE/ADMIN_KEY/S1_FUND_NAME (ломают тесты); прогон зелёный: https://github.com/borismayzel68-ai/startup-trainer-pilot-v1/actions/runs/38134066999
+см. git log -1 (Merge A9 (#6+#11) в линию tilda)
 
-## Слияние с master (Claude, 11.10)
-- Конфликт add/add в HANDOFF.md (master получил шаблон из #24). Оставлена версия этого PR. Код не менялся.
+## Слияние в master (Claude, 11.10)
+- Цепочка #28 (+#9) влита в s1/tilda-readiness-pack, затем master влит сюда для PR #7. Конфликт только в HANDOFF.md (add/add), оставлена версия линии tilda. Код не менялся.
+- Тесты локально: 197 passed, 5 skipped (Postgres-тесты без PG).
