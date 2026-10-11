@@ -116,8 +116,15 @@ def deid_check(teaser: dict, job: dict, cfg: dict) -> list[str]:
            and k not in ("deid_violations", "signed_by", "signed_at")]
     text = _teaser_text(teaser)
     low = text.lower()
+    stem = int(cfg.get("name_stem_letters", 5))
     for tok, label in case_blacklist(job, cfg).items():
-        if re.search(r"(?<!\w)" + re.escape(tok) + r"(?!\w)", low):
+        # рабочее (PM 11.10): имена ловим по основе — первые 5 букв + любое окончание (Соколова → Соколовой);
+        # короткие (< 5 букв) — только точное слово, чтобы «Анна» не ловила «аннотацию»
+        if label in ("имя основателя", "имя в команде") and len(tok) >= stem and tok.isalpha():
+            pat = r"(?<!\w)" + re.escape(tok[:stem]) + r"\w*"
+        else:
+            pat = r"(?<!\w)" + re.escape(tok) + r"(?!\w)"
+        if re.search(pat, low):
             bad.append(f"{label}: «{tok}»")
     for p in cfg["deid"]["patent_patterns"]:
         if re.search(p, text, flags=re.IGNORECASE):
