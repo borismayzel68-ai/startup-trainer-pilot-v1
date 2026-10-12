@@ -10,6 +10,7 @@
 - `--allowedTools`: `python -m pytest`, `pytest`, `gh pr create`, `gh pr view`, `git status/diff/log`.
 - `--disallowedTools`: `gh pr merge`, `gh secret`, `gh api`, `git push … master`, `curl`, `wget`.
 - Секреты не менялись.
+- Из индекса убраны все `__pycache__/*.pyc` (`git rm --cached`); `.gitignore` приходит из master (`__pycache__/`, `*.pyc`).
 
 ## Дальше
 - Ревью и мерж — Руководитель бизнеса (master защищён ruleset).
@@ -19,4 +20,4 @@
 - Сам запуск Action с новыми правами проверяется только после мержа в master (workflow на issue_comment берётся из master).
 
 ## Последний коммит
-ci(claude): allow pytest and gh pr create, deny merge/secrets (#31)
+chore: untrack __pycache__/*.pyc (PR #32)
