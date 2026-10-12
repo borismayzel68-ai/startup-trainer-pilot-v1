@@ -84,7 +84,7 @@ class E1ToE3GateTests(unittest.TestCase):
             return cls if stage == "classify" else s1_mock_llm.responder(stage, user)
 
         res = evaluate("synthetic-job", sub, docs, LLMClient(s, responder), s, m)
-        return next(c for c in res.claims if c.id == "C01")
+        return next(c for c in res.classification.claims if c.id == "C01")
 
     def test_dialogue_answer_cannot_reach_e3_even_when_evidence_file_uploaded(self):
         doc = ParsedDoc(kind="evidence", source="evidence", name="synthetic.pdf", url="https://example.test/a.pdf")
