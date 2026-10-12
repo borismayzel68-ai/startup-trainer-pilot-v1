@@ -91,6 +91,10 @@ def _numbers(scores: dict) -> dict:
                                                for i in b["items"]]) for b in scores["blocks"]]}
 
 
+def _structure(scores: dict) -> list:
+    return [(b["key"], [(i["key"], i.get("applicability")) for i in b["items"]]) for b in scores["blocks"]]
+
+
 class T3NonLsGolden(unittest.TestCase):
     # HQ-035: golden hq016_* (база 0f72b0a) фиксировал авто-FACT. Байт-в-байт теперь сверяемся с hq035_*
     # (тот же снапшот после HQ-035), а с hq016_* — по всем числам и статусам (FACT_CANDIDATE ≡ FACT).
@@ -102,8 +106,10 @@ class T3NonLsGolden(unittest.TestCase):
                 got = json.dumps(snap, ensure_ascii=False, indent=1, sort_keys=True)
                 self.assertEqual(got, (gold / f"hq035_{name}.json").read_text(encoding="utf-8"))
                 old = json.loads((gold / f"hq016_{name}.json").read_text(encoding="utf-8"))
-                self.assertEqual(_numbers(snap["scores"]), _numbers(old["scores"]))
-                self.assertEqual(snap["founder_report_html"], old["founder_report_html"])
+                # P0 #36: баллы/уровни hq016_* (база 0f72b0a) считались при «пустой набор файлов = все источники
+                # доступны». Теперь без файлов claims на deck/model/evidence падают до E0, поэтому числа и HTML
+                # сверяем с hq035_* выше, а с базой — только структуру: те же блоки, слоты и применимость.
+                self.assertEqual(_structure(snap["scores"]), _structure(old["scores"]))
 
     def test_non_ls_with_stage_field_unchanged(self):
         form = {**h.NON_LS["it_wellness"], "ls_stage": "preclinical"}
