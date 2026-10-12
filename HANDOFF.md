@@ -29,3 +29,8 @@ HQ-036 — линия A9 (#6 head 83ab1f7 + #11 head 90e2d22) на линии ti
 - Задача: убрать закоммиченный байткод. Ветка `chore/remove-pycache` → master, отдельный мелкий PR по запросу владельца.
 - Сделано: `__pycache__/app.cpython-314.pyc` снят с учёта (`git rm --cached`); в `.gitignore` добавлены `__pycache__/` и `*.py[cod]`. Код не менялся.
 - Не проверено: CI — запустится на PR.
+
+## Issue #51 — ГПФ / живое ТЗ / активация (Claude, 12.10)
+- Добавлено: docs/system/{LIVING_SPEC,ACCEPTANCE_CHECKLIST,IDEA_PIPELINE,MANAGER_RUNBOOK,DEAL_OUTCOME_NODE}.md, .github/pull_request_template.md, activity_log.py (минимальный журнал событий + события активации), tests/test_activity_log.py.
+- Тесты локально: 205 passed. Golden-снимки не менялись.
+- Не сделано/открыто: журнал не подключён к маршрутам app.py (кабинетов пока нет); перечень процессов 1–19 в репо отсутствует — нужен от Grok Bot; схема узла «Исход сделки» — черновик.
