@@ -31,7 +31,8 @@ def enforce_rules(cls: ClassificationResult, m: dict, checklist: dict[str, dict]
     caps = {k: int(v) for k, v in m["source_level_cap"].items()}
     for k, v in (cap_overrides or {}).items():
         caps[k] = min(caps.get(k, v), int(v))
-    available = (available_sources or set(caps)) | {"form"}
+    # P0 #36: пустой набор — «файлов нет», а не «источники не заданы»; различаем только None
+    available = (set(caps) if available_sources is None else set(available_sources)) | {"form"}
     fact_min = int(m["fact_min_level"])
     block_keys = {b["key"] for b in m["blocks"]}
 
