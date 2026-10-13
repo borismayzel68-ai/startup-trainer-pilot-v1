@@ -163,30 +163,45 @@ def apply_fact_signoffs(cls: ClassificationResult, signoffs: dict[str, dict], fa
     return cls
 
 
-def is_revenue_claim(text: str, m: dict) -> bool:
-    """HQ-059/12.4: заявление о выручке / продажах. Отрицание, pre-revenue, планы, «клиенты — клиники»
-    и размер рынка не считаются; явные маркеры («продали», MRR, «платящие клиенты», предзаказы) — считаются.
-    Нет маркеров вовсе → считается заявлением (консервативно: N/A не ставится без причины)."""
+def revenue_claim_info(text: str, m: dict) -> tuple[bool, str | None]:
+    """HQ-059/12.4 + PM (13.10 п. 4): заявление о выручке → (да/нет, пометка).
+    Отрицание, pre-revenue, планы, «клиенты — клиники», размер рынка и гранты (неразбавляющее финансирование)
+    не считаются; явные маркеры («продали», MRR, «платящие клиенты», предзаказы) — считаются;
+    услуги — выручка с пометкой «не основной продукт». Нет маркеров вовсе → заявление (консервативно).
+    Клаузы оцениваются отдельно: грант в одной клаузе не гасит выручку в соседней."""
     rule = m.get("ls_stage_rule") or {}
-    t = text or ""
 
-    def has(key: str) -> bool:
-        return any(re.search(p, t, re.IGNORECASE) for p in rule.get(key, []))
+    def has(key: str, c: str) -> bool:
+        return any(re.search(p, c, re.IGNORECASE) for p in rule.get(key, []))
 
-    if has("revenue_negated"):
-        return False
-    if has("revenue_yes"):
-        return True
-    return not has("revenue_context")
+    clauses = [c for c in re.split(r"[.;!?\n]+", text or "") if c.strip()]
+    if not clauses:
+        return True, None
+    claim, note = False, None
+    for c in clauses:
+        if has("revenue_negated", c) or (has("revenue_grant", c) and not has("revenue_yes", c)):
+            continue
+        if has("revenue_services", c):
+            claim, note = True, rule.get("services_note")
+        elif has("revenue_yes", c) or not has("revenue_context", c):
+            claim = True
+    return claim, (note if claim else None)
+
+
+def is_revenue_claim(text: str, m: dict) -> bool:
+    return revenue_claim_info(text, m)[0]
 
 
 def apply_revenue_claims(ctx: dict, cls: ClassificationResult, m: dict) -> dict:
     """Условие 4: основатель заявил выручку / продажи / платящих клиентов → N/A не ставится (T4)."""
     it = set((m.get("ls_stage_rule") or {}).get("it_slots", {}))
-    if ctx.get("eligible") and any(c.slot in it and c.category != Category.UNKNOWN and is_revenue_claim(c.statement, m)
-                                   for c in cls.claims):
+    infos = [revenue_claim_info(c.statement, m) for c in cls.claims
+             if c.slot in it and c.category != Category.UNKNOWN]
+    if ctx.get("eligible") and any(i[0] for i in infos):
+        notes = {i[1] for i in infos if i[0] and i[1]}
         ctx = {**ctx, "eligible": False,
-               "reason": "Основатель заявил выручку / продажи — IT-слоты оцениваются (SCORED), не N/A"}
+               "reason": "Основатель заявил выручку / продажи — IT-слоты оцениваются (SCORED), не N/A"
+                         + (f" ({'; '.join(sorted(notes))})" if notes else "")}
     return ctx
 
 

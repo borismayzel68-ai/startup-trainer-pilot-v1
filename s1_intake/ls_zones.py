@@ -37,6 +37,8 @@ def stage_hits(text: str, d: dict) -> tuple[list[str], str | None]:
     cs = {k: [re.compile(p) for p in v] for k, v in (d.get("keywords_case_sensitive") or {}).items()}
     hits = []
     for stage, words in d.get("keywords", {}).items():
+        if stage == "foreign_registration":
+            continue
         pats = [re.compile(w, re.IGNORECASE) for w in words] + cs.get(stage, [])
         for c in clauses:
             if stage in non_ru_classes and any(p.search(c) for p in non_ru):
@@ -63,10 +65,13 @@ def derive_stage(sub: Submission, m: dict) -> dict:
     by_field = {a.field: a.value for a in sub.answers}
     text = " ".join([by_field.get(f, "") for f in d.get("fields", [])] + [sub.intended_use])
     hits, phase = stage_hits(text, d)
+    extra = {}
+    if any(re.search(p, text, re.IGNORECASE) for p in d.get("keywords", {}).get("foreign_registration", [])):
+        extra = {"note": d.get("foreign_registration_note", "зарубежная регистрация")}  # не «РУ есть» для гейта РФ
     if len(hits) == 1:
-        return {"stage": hits[0], "phase": phase, "uncertain": False, "source": "ответы анкеты"}
+        return {"stage": hits[0], "phase": phase, "uncertain": False, "source": "ответы анкеты", **extra}
     return {"stage": None, "phase": phase, "uncertain": True, "source": "ответы анкеты",
-            "candidates": hits}
+            "candidates": hits, **extra}
 
 
 def v02_stage(asset: str | None, stage: str | None, phase: str | None) -> str | None:

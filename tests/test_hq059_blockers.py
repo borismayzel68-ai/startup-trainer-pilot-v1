@@ -11,7 +11,7 @@ import hq016_cases as h  # noqa: E402
 from s1_intake import dialogue as d  # noqa: E402
 from s1_intake.config import load_methodology  # noqa: E402
 from s1_intake.ls_zones import derive_stage  # noqa: E402
-from s1_intake.scoring import is_revenue_claim, ls_block1_status  # noqa: E402
+from s1_intake.scoring import is_revenue_claim, ls_block1_status, revenue_claim_info  # noqa: E402
 
 M = load_methodology()
 
@@ -36,13 +36,22 @@ class StageNoFalseHits(unittest.TestCase):
 
     def test_phrases_that_must_set_stage(self):
         for phrase, stage in [("регистрационное удостоверение получено", "registered"), ("РУ № 123", "registered"),
-                              ("CE mark получен", "registered"), ("FDA clearance", "registered"),
                               ("подали на регистрацию", "registration"),
                               ("на экспертизе в Росздравнадзоре", "registration"),
                               ("идёт клиническое исследование фаза II", "clinical"),
                               ("доклиника завершена, планируем фазу I", "preclinical")]:
             with self.subTest(phrase):
                 self.assertEqual(stage_of(phrase)["stage"], stage)
+
+    def test_foreign_registration_is_not_ru(self):
+        """PM 13.10 п. 5: CE / FDA — не «РУ есть» для гейта РФ; пометка «зарубежная регистрация»."""
+        for phrase in ["CE mark получен", "CE-маркировка получена", "FDA clearance", "510(k) cleared"]:
+            with self.subTest(phrase):
+                r = stage_of(phrase)
+                self.assertIsNone(r["stage"])
+                self.assertEqual(r["note"], "зарубежная регистрация")
+        r = stage_of("РУ № 123, CE mark получен")
+        self.assertEqual((r["stage"], r["note"]), ("registered", "зарубежная регистрация"))
 
     def test_customers_field_not_used_for_stage(self):
         self.assertIsNone(stage_of("клинические испытания фаза III", field="q_customers")["stage"])
@@ -60,6 +69,16 @@ class RevenueClaims(unittest.TestCase):
                        "наши клиенты — клиники", "рынок 10 млрд", "платящих клиентов нет"]:
             with self.subTest(phrase):
                 self.assertFalse(is_revenue_claim(phrase, M))
+
+    def test_grant_is_not_revenue_services_are(self):
+        """PM 13.10 п. 4: грант — неразбавляющее финансирование; услуги — выручка «не основной продукт»."""
+        for phrase in ["получили грант 5 млн руб.", "грант РНФ и субсидия", "grant from foundation"]:
+            with self.subTest(phrase):
+                self.assertFalse(is_revenue_claim(phrase, M))
+        self.assertTrue(is_revenue_claim("получили грант. выручка 3 млн руб.", M))
+        self.assertEqual(revenue_claim_info("оказываем услуги лабораториям", M),
+                         (True, "услуги — выручка, не основной продукт"))
+        self.assertEqual(revenue_claim_info("продали 5 устройств", M), (True, None))
 
     def test_revenue_claim(self):
         for phrase in ["выручка 3 млн руб.", "продали 5 устройств", "платящие клиенты: 4", "MRR 100 тыс.",
@@ -200,6 +219,22 @@ class R1Order(unittest.TestCase):
                 self.assertEqual(set(over[:len(cut)]), set(cut))
             else:
                 self.assertTrue({"Q1.T", "Q1.M", "Q1.Z2"} <= set(over))
+
+    def test_mandatory_never_cut_even_over_limit(self):
+        """PM 13.10 п. 1: К1–К7, Q1.R, Q1.Z6 не вырезаются никогда (лучше 13), необязательные уходят с конца."""
+        for lim in (12, 9, 3):
+            m = copy.deepcopy(M)
+            m["dialogue_s1"]["limits"]["r1"] = lim
+            s = self.session(m)
+            q = [x["qid"] for x in s["queue"]["Р1"]]
+            self.assertTrue({"Q1.R", "Q1.Z6"} <= set(q))
+            self.assertTrue(all(x.get("mandatory") for x in s["queue"]["Р1"] if x["source"] in ("slot", "control")
+                                and x["qid"] != "Q1.Z2"))
+            self.assertTrue({"Q1.T", "Q1.M", "Q1.Z2"}.isdisjoint(q) or lim == 12)
+            self.assertGreaterEqual(s["limits"]["r1"], len(q))
+            s["round"] = "Р1"
+            for x in q:
+                d.ask(s, x["qid"] if isinstance(x, dict) else x)  # лимит ask() не режет обязательные
 
     def test_two_clarifications_do_not_displace_r_and_z6(self):
         s = self.session(M)

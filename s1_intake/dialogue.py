@@ -66,12 +66,12 @@ def build_session(scores: dict, m: dict, previous: dict | None = None, product_c
                     continue
                 texts = bank["r1_ls"][k]
                 r1.append({"qid": f"Q1.{k}", "id": f"Q1.{k}", "question": texts.get(br) or texts.get("all"),
-                           "source": "slot", "zone": None, "slot": it["key"] if it else None})
+                           "source": "slot", "zone": None, "slot": it["key"] if it else None, "mandatory": True})
             elif k == "controls":  # обязательные контрольные вопросы: выручка (Q1.R) и биоматериалы (Q1.Z6)
                 for q in bank["r1_common"]:
                     if q.get("ls_only"):
                         r1.append({"qid": q["id"], "id": q["id"], "question": q["text"], "source": "control",
-                                   "zone": None})
+                                   "zone": None, "mandatory": True})
                         covered.add(q.get("signal"))
             elif k in ("Q1.T", "Q1.M"):
                 q = next(x for x in bank["r1_common"] if x["id"] == k)
@@ -98,13 +98,25 @@ def build_session(scores: dict, m: dict, previous: dict | None = None, product_c
                    "source": "zone", "zone": q.get("zone")})
     if ls.get("gate_request"):
         r0.append({"qid": "gate", "id": "gate", "question": ls["gate_request"], "source": "gate", "zone": None})
-    # рабочий лимит Р1: хвост очереди не задаётся, записывается с причиной. Уточнения при противоречии
-    # (≤ 2) занимают места в лимите, но не в очереди — очередь короче на их число, Q1.R / Q1.Z6 стоят выше хвоста
-    lim1 = cfg["limits"]["r1"] - prev.get("clarifications", 0)
-    r1, r1_over = r1[:lim1], [{"qid": q["qid"], "reason": "не задавался: лимит Р1"} for q in r1[lim1:]]
+    # лимит Р1 (PM 13.10): обязательные (К1–К7, Q1.R, Q1.Z6) не вырезаются никогда — лучше 13 вопросов, чем 12;
+    # сверх лимита убираются необязательные с конца очереди. Уточнения (≤ 2) занимают места в лимите.
+    clar = prev.get("clarifications", 0)
+    budget = cfg["limits"]["r1"] - clar
+    over, drop = len(r1) - budget, set()
+    for i in range(len(r1) - 1, -1, -1):
+        if over <= 0:
+            break
+        if not r1[i].get("mandatory"):
+            drop.add(i)
+            over -= 1
+    r1_over = [{"qid": q["qid"], "reason": "не задавался: лимит Р1"} for i, q in enumerate(r1) if i in drop]
+    r1 = [q for i, q in enumerate(r1) if i not in drop]
+    limits = dict(cfg["limits"])
+    limits["r1_base"] = limits["r1"]
+    limits["r1"] = max(limits["r1"], len(r1) + clar)  # обязательные сверх лимита поднимают его (ask() их пропустит)
     return {
         "round": prev.get("round", "Р0"), "rounds_used": prev.get("rounds_used", 1),
-        "limits": dict(cfg["limits"]), "queue": {"Р0": r0, "Р1": r1},
+        "limits": limits, "queue": {"Р0": r0, "Р1": r1},
         "asked": prev.get("asked", {"Р0": [], "Р1": [], "Р2": []}),
         "answers": prev.get("answers", []), "r2_items": prev.get("r2_items", []),
         "r2_not_requested": prev.get("r2_not_requested", []), "human_decisions": prev.get("human_decisions", []),
