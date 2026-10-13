@@ -6,6 +6,8 @@
 """
 from __future__ import annotations
 
+import re
+
 from .models import Category, Scores, Submission
 
 DRUG = {"THERAPEUTIC"}
@@ -18,15 +20,49 @@ NEED_ANSWER = "не оценено, нужен ответ"
 K7_MARK = "рабочее, до пилота"
 
 
+_CLAUSE_SPLIT = re.compile(r"[.;!?\n,]|(?<!\w)но(?!\w)|(?<!\w)а(?!\w)", re.IGNORECASE)
+
+
+def _clauses(text: str, d: dict) -> list[str]:
+    """HQ-059/12.3, 12.10: клаузы с отрицанием / будущим / «до РУ» стадию не задают."""
+    skip = [re.compile(p, re.IGNORECASE) for p in d.get("clause_skip", [])]
+    return [c for c in _CLAUSE_SPLIT.split(text) if c and c.strip() and not any(p.search(c) for p in skip)]
+
+
+def stage_hits(text: str, d: dict) -> tuple[list[str], str | None]:
+    """→ (классы стадии, фаза КИ). Слова ищутся по границе слова, по клаузам, без отрицаний и будущего."""
+    clauses = _clauses(text, d)
+    non_ru = [re.compile(p, re.IGNORECASE) for p in d.get("non_ru_registration", [])]
+    non_ru_classes = set(d.get("non_ru_classes", []))
+    cs = {k: [re.compile(p) for p in v] for k, v in (d.get("keywords_case_sensitive") or {}).items()}
+    hits = []
+    for stage, words in d.get("keywords", {}).items():
+        pats = [re.compile(w, re.IGNORECASE) for w in words] + cs.get(stage, [])
+        for c in clauses:
+            if stage in non_ru_classes and any(p.search(c) for p in non_ru):
+                continue
+            if any(p.search(c) for p in pats):
+                hits.append(stage)
+                break
+    for stage, words in cs.items():  # классы, у которых есть только регистрозависимые слова
+        if stage not in d.get("keywords", {}) and any(p.search(c) for c in clauses for p in words):
+            hits.append(stage)
+    phase = None
+    for p, words in d.get("phase_keywords", {}).items():
+        if any(re.search(w, c, re.IGNORECASE) for w in words for c in clauses):
+            phase = p
+            break
+    return hits, phase
+
+
 def derive_stage(sub: Submission, m: dict) -> dict:
     """Явное поле ls_stage (если когда-нибудь появится в Tilda) важнее; иначе — ключевые слова из ответов."""
     d = m.get("ls_stage_derivation") or {}
     if sub.ls_stage:
         return {"stage": sub.ls_stage, "phase": None, "uncertain": False, "source": "поле формы ls_stage"}
     by_field = {a.field: a.value for a in sub.answers}
-    text = " ".join([by_field.get(f, "") for f in d.get("fields", [])] + [sub.intended_use]).lower() + " "
-    hits = [stage for stage, words in d.get("keywords", {}).items() if any(w in text for w in words)]
-    phase = next((p for p, words in d.get("phase_keywords", {}).items() if any(w in text for w in words)), None)
+    text = " ".join([by_field.get(f, "") for f in d.get("fields", [])] + [sub.intended_use])
+    hits, phase = stage_hits(text, d)
     if len(hits) == 1:
         return {"stage": hits[0], "phase": phase, "uncertain": False, "source": "ответы анкеты"}
     return {"stage": None, "phase": phase, "uncertain": True, "source": "ответы анкеты",

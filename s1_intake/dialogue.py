@@ -67,23 +67,25 @@ def build_session(scores: dict, m: dict, previous: dict | None = None, product_c
                 texts = bank["r1_ls"][k]
                 r1.append({"qid": f"Q1.{k}", "id": f"Q1.{k}", "question": texts.get(br) or texts.get("all"),
                            "source": "slot", "zone": None, "slot": it["key"] if it else None})
-            elif k == "team_money":
+            elif k == "controls":  # обязательные контрольные вопросы: выручка (Q1.R) и биоматериалы (Q1.Z6)
                 for q in bank["r1_common"]:
-                    if q["id"] in ("Q1.T", "Q1.M"):
-                        r1.append({"qid": q["id"], "id": q["id"], "question": q["text"], "source": "common",
-                                   "zone": None, "proposal": bool(q.get("proposal"))})
-        for q in bank["r1_common"]:
-            if q.get("ls_only"):
-                r1.append({"qid": q["id"], "id": q["id"], "question": q["text"], "source": "control", "zone": None})
-                covered.add(q.get("signal"))
-        zq = m["working"]["r1_drug_hospital_question"]  # PM 11.10: З2 «лекарство в стационаре», только ЛП
-        if br == "drug":
-            r1.append({"qid": zq["id"], "id": zq["id"], "question": m["ls_zone_signals"][zq["signal"]],
-                       "source": "control", "zone": "З2"})
-            covered.add(zq["signal"])
-        for zid, text in bank["zones_now"].items():  # отдельный вопрос только по зоне «сейчас»
-            if zones.get(zid, {}).get("status") == "сейчас":
-                r1.append({"qid": f"{zid}:now", "id": zid, "question": text, "source": "zone_now", "zone": zid})
+                    if q.get("ls_only"):
+                        r1.append({"qid": q["id"], "id": q["id"], "question": q["text"], "source": "control",
+                                   "zone": None})
+                        covered.add(q.get("signal"))
+            elif k in ("Q1.T", "Q1.M"):
+                q = next(x for x in bank["r1_common"] if x["id"] == k)
+                r1.append({"qid": q["id"], "id": q["id"], "question": q["text"], "source": "common", "zone": None,
+                           "proposal": bool(q.get("proposal"))})
+            elif k == "hospital_drug" and br == "drug":  # PM 11.10: З2 «лекарство в стационаре», только ЛП
+                zq = m["working"]["r1_drug_hospital_question"]
+                r1.append({"qid": zq["id"], "id": zq["id"], "question": m["ls_zone_signals"][zq["signal"]],
+                           "source": "control", "zone": "З2"})
+                covered.add(zq["signal"])
+            elif k == "zones_now":
+                for zid, text in bank["zones_now"].items():  # отдельный вопрос только по зоне «сейчас»
+                    if zones.get(zid, {}).get("status") == "сейчас":
+                        r1.append({"qid": f"{zid}:now", "id": zid, "question": text, "source": "zone_now", "zone": zid})
     else:
         for q in bank["r1_it"] + [q for q in bank["r1_common"] if not q.get("ls_only")]:
             r1.append({"qid": q["id"], "id": q["id"], "question": q["text"], "source": "it", "zone": None,
@@ -96,7 +98,9 @@ def build_session(scores: dict, m: dict, previous: dict | None = None, product_c
                    "source": "zone", "zone": q.get("zone")})
     if ls.get("gate_request"):
         r0.append({"qid": "gate", "id": "gate", "question": ls["gate_request"], "source": "gate", "zone": None})
-    lim1 = cfg["limits"]["r1"]  # рабочий лимит Р1: хвост очереди не задаётся, записывается с причиной
+    # рабочий лимит Р1: хвост очереди не задаётся, записывается с причиной. Уточнения при противоречии
+    # (≤ 2) занимают места в лимите, но не в очереди — очередь короче на их число, Q1.R / Q1.Z6 стоят выше хвоста
+    lim1 = cfg["limits"]["r1"] - prev.get("clarifications", 0)
     r1, r1_over = r1[:lim1], [{"qid": q["qid"], "reason": "не задавался: лимит Р1"} for q in r1[lim1:]]
     return {
         "round": prev.get("round", "Р0"), "rounds_used": prev.get("rounds_used", 1),
