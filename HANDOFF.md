@@ -2,6 +2,15 @@
 
 Обновлять при каждом коммите.
 
+## MOS-1 Auth + RBAC (Claude, 13.10, Refs #52)
+- Ветка `claude/issue-52-20261013-0822` → PR в master (не мержить без ревью менеджера и без решения владельца; выпуск на живых пользователей утверждает только Борис).
+- Сделано: Google OAuth (OIDC) + `AUTH_ALLOWLIST` (`auth.py`), хранилище users/grants/audit (`auth_store.py`), миграция 001 финализирована (+owner, fund_staff, audit_log, идемпотентна), `require_role` на каждом маршруте (старт приложения падает при маршруте без декоратора), CSRF, noindex, `/admin?key=` и `ADMIN_KEY` удалены (404; админ-просмотр `/admin/sessions` и `/admin/audit` — только owner), `docs/ACCESS_MATRIX.md`, `tests/test_auth.py`.
+- S1 не сломан: Bearer-токены, ключ вебхука Tilda, подписанные ссылки и `X-Completion-Secret` сохранены как «внешняя проверка» (`external=`); сессия owner/fund_staff/investor проходит по ролям и scope (`job_id`).
+- Тесты: `RBAC` выключается для старых тестов флагом `app.config["AUTH_ENFORCED"]` в `tests/conftest.py` (не env); новые тесты помечены `auth_enforced`.
+- НЕ проверено: P0 #43 — смержен ли, проверить не удалось (нет доступа к gh); Postgres-ветка `AuthStore` и реальный Google OAuth локально не запускались (Postgres-тест пойдёт в CI; OAuth в тестах замокан).
+- Решения для владельца: (1) founder-ссылки S1 и вебхуки остаются на собственных токенах, а не на Google-входе; (2) founder теперь входит через Google — его email нужно добавить в `AUTH_ALLOWLIST` со scope = project_id; (3) старый invite-code по-прежнему нужен в `/api/start`.
+- Перед выкладкой: задать в Render `GOOGLE_CLIENT_ID/SECRET`, `SESSION_SECRET`, `AUTH_ALLOWLIST`, `AUTH_REDIRECT_URI`; убрать `ADMIN_KEY`. Секреты я не менял.
+
 ## Задача / issue
 HQ-036 — линия A9 (#6 head 83ab1f7 + #11 head 90e2d22) на линии tilda (Refs #22), ветка `chore/hq-036-rebase-a9-on-tilda` от fix/hq-035-fact-ceiling (85d424a, верх линии tilda с HQ-035). PR → s1/tilda-readiness-pack.
 
