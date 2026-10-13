@@ -225,7 +225,8 @@ def _topic_checklist(inp: dict, topic: str | None) -> list[dict]:
                     + " ".join(f"{f['key']} {f['value']}" for f in m.get("facts") or [])
                     for m in inp["materials"]).lower()
     return [{"item": item, "ok": any(w in text for w in words),
-             "note": "" if any(w in text for w in words) else "в материалах нет — запросить"}
+             "note": "упомянуто в материалах — проверить по документу" if any(w in text for w in words)
+             else "в материалах нет — запросить"}
             for item, words in T.TOPICS[topic]["checklist"]]
 
 
