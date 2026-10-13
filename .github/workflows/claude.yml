@@ -1,0 +1,64 @@
+name: Claude Code
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  issues:
+    types: [opened, assigned]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  id-token: write
+
+jobs:
+  claude:
+    # Runs only when @claude is mentioned by the repository owner
+    if: |
+      github.actor == 'borismayzel68-ai' && (
+        (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
+        (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
+        (github.event_name == 'issues' && contains(github.event.issue.body, '@claude'))
+      )
+    runs-on: ubuntu-latest
+    # Та же среда, что в tests.yml: Postgres 16, мок LLM, только синтетика (решение Бориса 12.10).
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: trainer
+          POSTGRES_PASSWORD: ci-local-only
+          POSTGRES_DB: trainer_e1
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U trainer -d trainer_e1"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+      HQ018_PG_URL: postgresql://trainer:ci-local-only@localhost:5432/trainer_e1
+      S1_LLM_PROVIDER: mock
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          shopt -s nullglob
+          for f in requirements*.txt; do pip install -r "$f"; done
+          pip install pytest
+      - uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: |
+            --append-system-prompt "Work only via a new branch and pull request. Never merge, never push to master, never change secrets. Attach the pytest log to the PR description. Founder reports are never sent automatically. Update HANDOFF.md on every commit."
+            --allowedTools "Bash(python:*),Bash(python3:*),Bash(pytest:*),Bash(python -m pytest:*),Bash(git:*),Bash(ls:*),Bash(cat:*),Bash(tee:*)"

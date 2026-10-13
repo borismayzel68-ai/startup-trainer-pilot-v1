@@ -129,13 +129,19 @@ async function sendAnswer(){
 async function stopSession(){
  document.getElementById('answer').value='стоп'; await sendAnswer();
 }
-function esc(x){return String(x||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+function esc(x){return String(x??'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
 function list(title,arr){return '<h3>'+title+'</h3><ul>'+(arr||[]).map(x=>'<li>'+esc(typeof x==='string'?x:JSON.stringify(x))+'</li>').join('')+'</ul>';}
 function showReport(){
  document.getElementById('chat').classList.add('hidden'); document.getElementById('report').classList.remove('hidden');
- const r=state.report||{}; let h='<p><b>'+esc(r.project_id||state.project_id)+' В· '+esc(r.jurisdiction||state.jurisdiction)+' В· '+esc(r.product_class||state.product_class)+'</b></p><h3>РўРµР·РёСЃ</h3><p>'+esc(r.thesis)+'</p>';
- h+=list('Подтверждено',r.facts)+list('Гипотезы',r.hypotheses)+list('Слабые доказательства',r.weak)+list('Недостающие доказательства',r.missing);
- h+=list('Главные пробелы',r.gaps)+list('Следующие проверки',r.next_tests);
+ const r=state.report||{}; let h='<p><b>'+esc(r.project_id||state.project_id)+' · '+esc(r.jurisdiction||state.jurisdiction)+' · '+esc(r.product_class||state.product_class)+'</b></p><h3>Тезис</h3><p>'+esc(r.thesis)+'</p>';
+ h+=list('Подтверждено документами — E3',[])+ '<p>Первичные документы не проверены; подтверждённых фактов нет.</p>'+list('Заявления основателя — E1, не проверено',(r.claims||[]).concat(r.facts||[]))+list('Гипотезы',r.hypotheses)+list('Слабые доказательства',r.weak)+list('Недостающие доказательства',r.missing);
+ h+='<h3>Карточка проекта</h3><ul>'+Object.entries({project_name:'Проект',jurisdiction:'Юрисдикция',product_class:'Категория',intended_use:'Назначение',stage:'Стадия',user:'Пользователь',buyer:'Покупатель',payer:'Плательщик'}).map(([k,label])=>'<li>'+label+': '+esc((r.project_snapshot||{})[k]||'не указано')+'</li>').join('')+'</ul>';
+ h+=list('Критические пробелы и следующие доказательства',(r.critical_gaps||[]).map(g=>g.gap_id+'. '+g.gap+' Документ: '+g.next_evidence+' Тест: '+g.next_test+' Критерий: '+g.success_criterion+' Ответственный: '+g.owner+'; день '+g.due_day));
+ h+='<h3>План на 30 / 60 / 90 дней</h3>';
+ for(const p of (r.plan_30_60_90||[])) h+=list('День '+p.day+' — '+p.deadline,(p.actions||[]).map(a=>a.gap_id+': '+a.action+' Доказательство: '+a.accepted_evidence+' Критерий: '+a.success_criterion));
+ const score=r.readiness_score||{};
+ h+='<h3>Оценка готовности доказательств</h3><p>'+esc(score.value)+'/'+esc(score.maximum)+' · '+esc(score.method)+' · Покрытие вопросов: '+esc(score.assessment_coverage_percent)+'%. '+esc(score.meaning)+'</p>';
+ h+='<h3>Сохранённый пакет</h3><p><a href="'+esc(r.report_url)+'" target="_blank">Отчёт</a> · <a href="'+esc(r.raw_json_url)+'" target="_blank">Структурированный JSON</a></p><p>Выдача основателю: WAITING_APPROVAL — ожидает одобрения Бориса; не отправлено.</p>';
  h+='<h3>Итог</h3><p><b>'+esc(r.recommendation)+'</b></p>';
  if(r.comparison) h+='<h3>Сравнение гипотез</h3><pre>'+esc(JSON.stringify(r.comparison,null,2))+'</pre>';
  document.getElementById('reportBody').innerHTML=h;

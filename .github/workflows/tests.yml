@@ -1,0 +1,67 @@
+# CI: pytest + Postgres 16. Только синтетические значения, LLM замокан (ключа OpenAI нет).
+name: tests
+
+on:
+  pull_request:
+  push:
+    branches: [master, s1/tilda-readiness-pack]
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: trainer
+          POSTGRES_PASSWORD: ci-local-only
+          POSTGRES_DB: trainer_e1
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U trainer -d trainer_e1"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+      HQ018_PG_URL: postgresql://trainer:ci-local-only@localhost:5432/trainer_e1
+      # Только несекретные значения. OPENAI_API_KEY намеренно не задан — LLM остаётся замоканным.
+      # INVITE_CODE/ADMIN_KEY/S1_FUND_NAME не задаются: тесты рассчитывают на значения по умолчанию
+      # (с плейсхолдерами падают invite-тесты и golden-снимки).
+      S1_LLM_PROVIDER: mock
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"   # как в Dockerfile ветки hq018/env-postgres (python:3.13-slim)
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          shopt -s nullglob
+          files=(requirements*.txt)
+          for f in "${files[@]}"; do echo "pip install -r $f"; pip install -r "$f"; done
+          [ ${#files[@]} -eq 0 ] && echo "requirements*.txt нет — ставлю только pytest"
+          pip install pytest
+
+      - name: Run pytest
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m pytest -rA -v --junitxml=pytest-junit.xml 2>&1 | tee pytest.log
+
+      - name: Upload test artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-results
+          path: |
+            pytest.log
+            pytest-junit.xml
+          if-no-files-found: warn
