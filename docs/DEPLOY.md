@@ -5,7 +5,7 @@
 ## 1. Что поднимает Blueprint (`render.yaml`)
 - web service `mos-staging` (Dockerfile, `dockerCommand` = gunicorn без seed), `healthCheckPath: /health`;
 - managed Postgres `mos-staging-db` (внешний доступ закрыт);
-- `preDeployCommand: python scripts/hq018_migrate.py` — миграции при каждом деплое (идемпотентны).
+- `preDeployCommand: python scripts/predeploy.py` — миграции при каждом деплое; миграции, меняющие данные, идут только с точкой восстановления (п. 5). Миграции выполняются только так; CI к базе Render не подключается (Д-79).
 
 ## 2. Секреты (только Render dashboard → Environment)
 | Переменная | Откуда |
@@ -33,12 +33,18 @@
 3. Дождаться Verify; сертификат Let's Encrypt Render выпускает автоматически, HTTP → HTTPS редирект включён.
 4. Обновить `OAUTH_REDIRECT_URI` и redirect URI в Google; передеплоить.
 
-## 5. Бэкап БД
-- Render Postgres (платный план): автоматические ежедневные бэкапы (Point-in-Time Recovery), восстановление — Dashboard → БД → Recovery.
-- Ручной дамп: `pg_dump "$EXTERNAL_DATABASE_URL" -Fc -f staging-$(date +%F).dump` (на время дампа временно добавить свой IP в allow list; дамп не коммитить, он содержит БД).
-- Восстановление в новую БД: `pg_restore --no-owner -d "$NEW_DATABASE_URL" staging-YYYY-MM-DD.dump`.
+## 5. Бэкап БД и точка восстановления
+Решение Д-79: секрета `RENDER_DATABASE_URL` нет, CI к базе Render не подключается, шаг `pg_dump` (E-3) снят. Бэкапы — штатными средствами Render (Dashboard → БД → Recovery/Backups).
+
+**Правило (поправка 13.10):** миграция, которая меняет или удаляет данные (`DROP`, `TRUNCATE`, `DELETE`, `UPDATE`, `ALTER ... DROP/TYPE/RENAME`), выкладывается только при наличии точки восстановления. `scripts/predeploy.py` определяет такие миграции и:
+- если выставлено `PITR_CONFIRMED=1` — пропускает копию (владелец подтвердил PITR);
+- иначе перед миграцией копирует таблицы `public` в схему `pre_mig_<UTC>` той же БД и сверяет число строк; при любой ошибке деплой прерывается, миграции не применяются.
+
+Текущие миграции (`db/migrations`) только добавляющие, поэтому шаг копии сейчас не срабатывает.
+
+**Перед первым деплоем с миграцией проверить (владелец, в Render): есть ли PITR на выбранном тарифе БД.** Не подтверждено — `PITR_CONFIRMED` не выставлять. Копия в схеме защищает от ошибки миграции, но не от потери самой БД.
 
 ## 6. Откат
 - Код: Render → Service → Events/Deploys → предыдущий успешный деплой → **Rollback** (`autoDeploy: false`, деплой только вручную).
-- Миграции только добавляют (`CREATE TABLE IF NOT EXISTS`), откат кода их не требует. Если нужна откатка схемы — восстановить БД из бэкапа (п. 5) и откатить код.
+- Миграции только добавляют (`CREATE TABLE IF NOT EXISTS`), откат кода их не требует. Если нужна откатка схемы — восстановить БД штатными средствами Render (п. 5) или из схемы `pre_mig_<UTC>` и откатить код.
 - Аварийно закрыть доступ: очистить `AUTH_ALLOWLIST` невозможно (сервис не стартует) — вместо этого Suspend сервис.

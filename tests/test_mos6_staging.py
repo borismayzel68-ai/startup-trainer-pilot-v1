@@ -167,7 +167,7 @@ class SeedTests(unittest.TestCase):
         doc = yaml.safe_load((ROOT / "render.yaml").read_text(encoding="utf-8"))
         svc = doc["services"][0]
         self.assertEqual(svc["healthCheckPath"], "/health")
-        self.assertIn("hq018_migrate", svc["preDeployCommand"])
+        self.assertIn("predeploy.py", svc["preDeployCommand"])
         for ev in svc["envVars"]:
             if ev["key"] in ("GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "AUTH_ALLOWLIST"):
                 self.assertTrue(ev.get("sync") is False and "value" not in ev)

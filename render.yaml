@@ -13,7 +13,7 @@ services:
     runtime: docker
     dockerfilePath: ./Dockerfile
     dockerCommand: gunicorn -b 0.0.0.0:$PORT --timeout 120 app:app   # без hq018_seed: seed вручную, см. docs/DEPLOY.md
-    preDeployCommand: python scripts/hq018_migrate.py              # миграции при каждом деплое (идемпотентны)
+    preDeployCommand: python scripts/predeploy.py   # миграции; если они меняют данные — сначала резервная копия (или PITR_CONFIRMED=1)
     healthCheckPath: /health
     autoDeploy: false
     envVars:
