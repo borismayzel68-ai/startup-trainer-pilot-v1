@@ -34,3 +34,7 @@ HQ-036 — линия A9 (#6 head 83ab1f7 + #11 head 90e2d22) на линии ti
 - Ветка `claude/issue-57-20261013-0822` → master. Добавлено: `render.yaml`, `staging_guard.py` (APP_ENV=staging: проверка env, вход Google + AUTH_ALLOWLIST, всё закрыто кроме /health, /robots.txt, /auth/*; X-Robots-Tag noindex везде), `scripts/seed_synthetic.py`, `docs/DEPLOY.md`, `.env.example`, `tests/test_mos6_staging.py`.
 - Тесты локально: 217 passed (Postgres-тесты без PG пропускаются/CI).
 - Не проверено: живой деплой на Render, реальный Google OAuth. Auth+RBAC из #43 в репо отсутствует — реализован минимальный вход по allowlist (без ролей); роли из таблицы role_grants не используются.
+
+## MOS-6 · Д-79 (Claude, 13.10) — Refs #57
+- Ветка `claude/issue-57-20261013-1253` (содержит работу из `-0822` + правка). `docs/DEPLOY.md` §5–6 приведены к Д-79: бэкапы штатными средствами Render, PITR 3 дня + Export ≥7 дней, шаг резервной копии в pre-deploy НЕ делается, `pg_dump`/`RENDER_DATABASE_URL` убраны. Код не менялся, CI к Render не подключается.
+- Не проверено: имя БД в Blueprint — `mos-staging-db`, а у владельца PITR подтверждён для `startup-trainer-pilot-v1-db`; нужно сверить, что это та же БД/тариф.
