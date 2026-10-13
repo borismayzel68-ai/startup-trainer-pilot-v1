@@ -1,9 +1,18 @@
 # HQ-020 · Рабочие значения до итогов пилота (решения PM 11.10). Всё здесь — «рабочее».
 # methodology.yaml (веса, пороги, потолки) НЕ меняется.
 status: рабочее
-pack_block1:            # статус LS = те же общие пороги yaml (scoring.next_min и др.), подписи — рабочие
+pack_block1:            # путь IT — общие пороги yaml через map; путь LS — LS §2.3 по К1–К7 (HQ-059/13.1), ниже
   label: "рабочие пороги (общие пороги yaml)"
   map: {NEXT: "READY FOR INVESTOR CONVERSATION", HOLD: "ITERATE", PASS: "NOT READY"}
+  ls:
+    label: "рабочие пороги LS_CHECKLIST_S1_v0.2 §2.3 по К1–К7 (+ «дыры» §2.3 закрыты правилом PM, на утверждении)"
+    labels: {not_ready: "NOT READY", iterate: "ITERATE", ready: "READY FOR INVESTOR CONVERSATION"}
+    # перевод E0–E4 → балл К 0–5 (PM S1, 13.4); обратно: 0–1→E0, 2→E1, 3→E2, 4→E3, 5→E4
+    k_score: {0: 1, 1: 2, 2: 3, 3: 4, 4: 5}
+    not_ready_if_le_1: [К1, К2, К4]     # балл 0–1 → NOT READY (SC П-2; К1 — правка 13.3)
+    ready_min: {К1: 3, К2: 3, К3: 3, К4: 3}
+    ready_min_or_na: {К5: 2, К6: 2}     # ≥ 2 либо N/A по стадии с причиной
+    # К7 — не слот чек-листа (это «следующий артефакт»), в статус не входит; НЕ ПОДТВЕРЖДЕНО до решения PM S1
 pack_block8:
   horizons: ["30 дней", "60 дней", "90 дней"]
   not_specified: "не указано"

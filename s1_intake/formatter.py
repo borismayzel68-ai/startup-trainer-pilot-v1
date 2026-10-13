@@ -13,7 +13,7 @@ from pathlib import Path
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from .models import Category, EvaluationResult
-from .scoring import priority_gaps
+from .scoring import ls_block1_status, priority_gaps
 
 log = logging.getLogger(__name__)
 TEMPLATES = Path(__file__).parent / "templates"
@@ -151,9 +151,15 @@ def build_pack_blocks(res: EvaluationResult, m: dict) -> list[dict]:
     k7 = ls.get("next_artifact")
     w = m["working"]
     na = w["pack_block8"]["not_specified"]
+    if ls:  # путь LS: LS §2.3 по К1–К6 (HQ-059/13.1)
+        b1 = ls_block1_status(ls, res.scores.verdict, w)
+        block1 = {"n": 1, "title": "Статус", "value": b1["value"], "basis": b1["basis"], "why": b1["why"],
+                  "status": "рабочее"}
+    else:
+        block1 = {"n": 1, "title": "Статус", "value": w["pack_block1"]["map"][res.scores.verdict],
+                  "basis": w["pack_block1"]["label"], "status": "рабочее"}
     blocks = [
-        {"n": 1, "title": "Статус", "value": w["pack_block1"]["map"][res.scores.verdict],
-         "basis": w["pack_block1"]["label"], "status": "рабочее"},
+        block1,
         {"n": 2, "title": "Строка итога", "value": ls.get("summary_line"),
          "note": "шкала 0–100 по решению PM; формат «X,X / 5» сценария §5.2 п. 2 считается в пилоте вручную"},
         {"n": 3, "title": "Что доказано", "claims": claims},

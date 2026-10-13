@@ -6,6 +6,8 @@ config/methodology.yaml, поэтому их нельзя «уговорить»
 """
 from __future__ import annotations
 
+import re
+
 from .models import (
     Argument,
     BlockScore,
@@ -161,10 +163,28 @@ def apply_fact_signoffs(cls: ClassificationResult, signoffs: dict[str, dict], fa
     return cls
 
 
+def is_revenue_claim(text: str, m: dict) -> bool:
+    """HQ-059/12.4: заявление о выручке / продажах. Отрицание, pre-revenue, планы, «клиенты — клиники»
+    и размер рынка не считаются; явные маркеры («продали», MRR, «платящие клиенты», предзаказы) — считаются.
+    Нет маркеров вовсе → считается заявлением (консервативно: N/A не ставится без причины)."""
+    rule = m.get("ls_stage_rule") or {}
+    t = text or ""
+
+    def has(key: str) -> bool:
+        return any(re.search(p, t, re.IGNORECASE) for p in rule.get(key, []))
+
+    if has("revenue_negated"):
+        return False
+    if has("revenue_yes"):
+        return True
+    return not has("revenue_context")
+
+
 def apply_revenue_claims(ctx: dict, cls: ClassificationResult, m: dict) -> dict:
     """Условие 4: основатель заявил выручку / продажи / платящих клиентов → N/A не ставится (T4)."""
     it = set((m.get("ls_stage_rule") or {}).get("it_slots", {}))
-    if ctx.get("eligible") and any(c.slot in it and c.category != Category.UNKNOWN for c in cls.claims):
+    if ctx.get("eligible") and any(c.slot in it and c.category != Category.UNKNOWN and is_revenue_claim(c.statement, m)
+                                   for c in cls.claims):
         ctx = {**ctx, "eligible": False,
                "reason": "Основатель заявил выручку / продажи — IT-слоты оцениваются (SCORED), не N/A"}
     return ctx
@@ -311,6 +331,39 @@ def decide(readiness: int, thesis_fit: bool, crit_gaps: list, crit_conflicts: li
         gates.append(f"Readiness {readiness} ≥ {sc['next_min']}, критичных конфликтов нет, пробелов в норме")
         return "NEXT", gates
     return "HOLD", gates
+
+
+def k_score(ms: dict, cfg: dict) -> int | None:
+    """Балл К 0–5 из слота К-милестоуна (E0–E4 → таблица PM S1). None = N/A по стадии."""
+    if ms.get("applicability") == "N_A_BY_STAGE":
+        return None
+    if ms.get("status") in ("UNKNOWN", "CONFLICT") or ms.get("level") is None:
+        return 0
+    return int(cfg["k_score"][int(ms["level"])])
+
+
+def ls_block1_status(ls: dict | None, verdict: str, w: dict) -> dict:
+    """HQ-059/13.1–13.3: статус блока 1 Pack для пути LS — по LS §2.3 от К1–К6 и гейта, не по баллу 0–100.
+    Возвращает not_ready / iterate / ready напрямую (канон Р-3), без внутренних меток PASS / HOLD / NEXT."""
+    cfg = w["pack_block1"]["ls"]
+    labels = cfg["labels"]
+
+    def res(key: str, why: str) -> dict:
+        return {"status": key, "value": labels[key], "why": why, "basis": cfg["label"]}
+
+    if not ls or not ls.get("gate"):
+        return res("not_ready", "входной гейт (юрисдикция × тип актива) не заполнен")
+    if verdict == "PASS":
+        return res("not_ready", "вне тезиса или пустая заявка")
+    sc = {m["k"]: k_score(m, cfg) for m in ls.get("milestones") or []}
+    low = [k for k in cfg["not_ready_if_le_1"] if (sc.get(k) or 0) <= 1]
+    if low:
+        return res("not_ready", f"балл {', '.join(low)} ≤ 1")
+    weak = [k for k, mn in cfg["ready_min"].items() if (sc.get(k) or 0) < mn]
+    weak += [k for k, mn in cfg["ready_min_or_na"].items() if sc.get(k, 0) is not None and (sc.get(k) or 0) < mn]
+    if weak:
+        return res("iterate", f"ниже порога READY: {', '.join(sorted(weak))}")
+    return res("ready", "К1–К4 ≥ 3, К5 / К6 ≥ 2 или N/A по стадии")
 
 
 def priority_gaps(scores: Scores, top: int = 8) -> list[dict]:
