@@ -17,6 +17,8 @@ import json
 import re
 from datetime import date
 
+from . import topics as T
+
 # --- словари --------------------------------------------------------------------------------------
 STATUS_COMPANY = "со слов компании"
 STATUS_CLAIM = "claim"
@@ -39,7 +41,8 @@ INPUT_FIELDS = (("question", "вопрос"), ("bounds", "границы ком�
 # вертикаль LS (рабочий список исполнителя — утвердить PM; пересекается с vertical_s1.clinical_words)
 LS_STEMS = ("клиник", "пациент", "диагност", "лечени", "терапи", "медицин", "врач", "регистрац", "медизделие",
             "биотех", "фарм", "лекарств", "препарат", "доклиник", "биомаркер", "ivd", "gmp", "когорт",
-            "ls-", "life science")
+            "ls-", "life science", "медизд", "медицинск", "клеточн", "пептид", "опухол", "экг", "генн",
+            "доклин", "животн", "кров")
 # запросы, на которые S3 не отвечает никогда (рамки issue: нет INVEST/PASS, оценки компании, мед./юр. выводов)
 FORBIDDEN = (
     ("INVEST/PASS", ("инвест", "invest", "pass/fail", "вердикт pass", "вложить")),
@@ -49,9 +52,10 @@ FORBIDDEN = (
                            "эффективен ли препарат", "можно ли лечить")),
     ("юридический вывод", ("законно ли", "юридическ", "нарушает ли закон", "легально ли", "правомерн")),
 )
-BROAD_MARKERS = ("все аспекты", "в целом", "оцените проект", "расскажите про всё", "всё о", "полный анализ")
+BROAD_MARKERS = ("все аспекты", "в целом", "оцените проект", "расскажите про всё", "всё о", "полный анализ",
+                 "что вы думаете", "что вы о ней думаете", "ваше мнение о компании")
 FACT_MARKERS = ("доказан", "установлен", "это факт", "общеизвестно", "известно, что", "подтверждён", "подтвержден",
-                "бесспорно")
+                "бесспорно", "статистически значим", "полностью соответствует", "гарантирован")
 STOP = {"какой", "какая", "какие", "каков", "какова", "каковы", "который", "которые", "имеется", "компании",
         "компания", "проекта", "проект", "этого", "после", "перед", "между", "может", "должен", "ожидается"}
 _STOP_STEMS = {w[:5] for w in STOP}
@@ -102,44 +106,63 @@ def validate_input(inp: dict) -> list[str]:
 
 # --- 2. рамки -----------------------------------------------------------------------------------
 def check_scope(inp: dict) -> dict:
-    """→ {"ok": bool, "reason": str, "suggestion": str|None, "checks": [...]}. Порядок проверок фиксирован."""
+    """→ {"ok", "reason", "suggestion", "suggested_questions", "topic", "checks"}. Порядок проверок фиксирован."""
     q, bounds = inp["question"].strip(), inp["bounds"]
+    topic = T.detect_topic(q, inp.get("topic"))
     checks = []
 
     def add(name, ok, note=""):
         checks.append({"item": name, "ok": ok, "note": note})
         return ok
 
+    def refuse(reason, suggestion=None, narrow=False):
+        sq = _narrow_questions(inp) if narrow else []
+        if sq and not suggestion:
+            suggestion = "Выберите один узкий вопрос: " + " / ".join(f"«{x}»" for x in sq)
+        return {"ok": False, "reason": reason, "suggestion": suggestion, "suggested_questions": sq,
+                "topic": topic, "checks": checks}
+
     forbidden_item = "вопрос не требует INVEST/PASS, оценки компании, мед. или юр. вывода"
     for kind, words in FORBIDDEN:
         if _has(q, words):
             add(forbidden_item, False, kind)
-            return {"ok": False, "reason": f"вопрос требует запрещённого вывода ({kind}); S3 такие выводы не даёт",
-                    "suggestion": "Переформулируйте как проверяемый вопрос о наличии и источнике конкретного утверждения",
-                    "checks": checks}
+            return refuse(f"вопрос требует запрещённого вывода ({kind}); такой вывод делает только человек", narrow=True)
     add(forbidden_item, True)
 
-    if not add("вертикаль LS", _has(f"{q} {bounds}", LS_STEMS)):
-        return {"ok": False, "reason": "вне вертикали LS (науки о жизни / медицина)", "suggestion": None,
-                "checks": checks}
+    case_text = " ".join([q, bounds] + [f"{m.get('title', '')} {m.get('text', '')}" for m in inp["materials"]])
+    if not add("вертикаль LS", _has(case_text, LS_STEMS)):
+        return refuse("вне вертикали LS (науки о жизни / медицина)")
 
     multi = q.count("?") > 1 or len(q) > MAX_QUESTION or _has(q, BROAD_MARKERS)
     if not add("один узкий вопрос", not multi, "несколько вопросов или слишком широкая формулировка" if multi else ""):
-        return {"ok": False, "reason": "не один узкий вопрос",
-                "suggestion": "Сузьте до одного вопроса об одном утверждении, остальные пришлите отдельными запросами",
-                "checks": checks}
+        return refuse("не один узкий вопрос",
+                      None if _narrow_questions(inp) else
+                      "Сузьте до одного вопроса об одном утверждении, остальные пришлите отдельными запросами",
+                      narrow=True)
 
-    if not add("вопрос внутри границ компетенции", bool(_stems(q) & _stems(bounds))):
-        return {"ok": False, "reason": "вопрос вне заявленных границ компетенции",
-                "suggestion": "Расширьте границы компетенции или задайте вопрос по теме границ", "checks": checks}
-    return {"ok": True, "reason": "", "suggestion": None, "checks": checks}
+    in_bounds = bool(_stems(q) & _stems(bounds)) or (topic is not None and _has(bounds, T.TOPICS[topic]["keys"]))
+    if not add("вопрос внутри границ компетенции", in_bounds):
+        return refuse("вопрос вне заявленных границ компетенции",
+                      "Расширьте границы компетенции или задайте вопрос по теме границ")
+    return {"ok": True, "reason": "", "suggestion": None, "suggested_questions": [], "topic": topic, "checks": checks}
+
+
+def _narrow_questions(inp: dict) -> list[str]:
+    """2–3 узких вопроса на выбор: темы, которые видны в материалах, иначе — набор по умолчанию."""
+    text = " ".join(f"{m.get('title', '')} {m.get('text', '')}" for m in inp.get("materials") or []).lower()
+    seen = [k for k, t in T.TOPICS.items() if any(w in text for w in t["keys"])]
+    keys = (seen + [k for k in T.DEFAULT_NARROW if k not in seen])[:3]
+    return [T.TOPICS[k]["narrow"] for k in keys]
 
 
 # --- 3. утверждения ------------------------------------------------------------------------------
-def extract_claims(inp: dict) -> list[dict]:
-    """Каждое предложение материала → утверждение с источником и статусом. Статуса «факт» не бывает."""
+def extract_claims(inp: dict, topic: str | None = None) -> list[dict]:
+    """Каждое предложение материала и каждый структурный факт (`facts`) → утверждение с источником и статусом.
+    Статуса «факт» не бывает. `facts` — [{key, value}]: в проде их извлекает LLM-шаг, в синтетике они заданы."""
     cutoff = _parse_date(inp["cutoff"])
     q_stems = _stems(inp["question"])
+    topic_words = T.TOPICS[topic]["keys"] if topic else ()
+    third_party = any(str(m.get("origin", "company")).lower() == "third_party" for m in inp["materials"])
     claims = []
     for mi, mat in enumerate(inp["materials"]):
         mid = str(mat.get("id") or f"M{mi + 1}")
@@ -147,33 +170,63 @@ def extract_claims(inp: dict) -> list[dict]:
         title = str(mat.get("title") or "").strip()
         has_source = bool(title) and mdate is not None
         company = str(mat.get("origin", "company")).lower() != "third_party"
+        if not has_source:
+            status, why = STATUS_UNKNOWN, "нет источника или даты"
+        elif mdate > cutoff:
+            status, why = STATUS_UNKNOWN, "источник позже даты среза"
+        else:
+            status, why = (STATUS_COMPANY if company else STATUS_CLAIM), ""
+        base = {"source": title or None, "source_id": mid, "source_date": mdate.isoformat() if mdate else None}
         for si, sent in enumerate(_sentences(str(mat.get("text", "")))):
-            if not has_source:
-                status, why = STATUS_UNKNOWN, "нет источника или даты"
-            elif mdate > cutoff:
-                status, why = STATUS_UNKNOWN, "источник позже даты среза"
-            else:
-                status, why = (STATUS_COMPANY if company else STATUS_CLAIM), ""
+            strong = _has(sent, FACT_MARKERS)
             claims.append({
-                "id": f"{mid}.{si + 1}", "text": sent, "status": status, "note": why,
-                "source": title or None, "source_id": mid, "source_date": mdate.isoformat() if mdate else None,
-                "relevant": bool(q_stems & _stems(sent)),
-                "fact_without_source": _has(sent, FACT_MARKERS) and status == STATUS_UNKNOWN,
+                **base, "id": f"{mid}.{si + 1}", "text": sent, "status": status, "note": why, "key": None,
+                "relevant": bool(q_stems & _stems(sent)) or _has(sent, topic_words),
+                # «факт без источника»: категоричное утверждение без источника/даты либо только со слов компании
+                # (нет ни одного стороннего документа в материалах кейса)
+                "fact_without_source": strong and (status == STATUS_UNKNOWN or (company and not third_party)),
             })
+        for fi, f in enumerate(mat.get("facts") or []):
+            claims.append({**base, "id": f"{mid}.f{fi + 1}", "text": f"{f['key']}: {f['value']}", "status": status,
+                           "note": why, "key": str(f["key"]), "value": str(f["value"]), "relevant": True,
+                           "fact_without_source": False})
     _mark_conflicts(claims)
     return claims
 
 
 def _mark_conflicts(claims: list[dict]) -> None:
-    usable = [c for c in claims if c["relevant"] and c["status"] in (STATUS_CLAIM, STATUS_COMPANY)]
+    usable = [c for c in claims if c["relevant"] and c["status"] in (STATUS_CLAIM, STATUS_COMPANY, STATUS_CONFLICT)]
     for i, a in enumerate(usable):
         for b in usable[i + 1:]:
             if a["source_id"] == b["source_id"]:
                 continue
-            na, nb = set(_NUM.findall(a["text"])), set(_NUM.findall(b["text"]))
-            if na and nb and na != nb and len(_stems(a["text"]) & _stems(b["text"])) >= 2:
+            if a["key"] or b["key"]:  # структурные факты: один ключ — разные значения
+                hit = a["key"] and a["key"] == b["key"] and a["value"].strip().lower() != b["value"].strip().lower()
+            else:  # текст: одна тема, разные числа
+                na, nb = set(_NUM.findall(a["text"])), set(_NUM.findall(b["text"]))
+                hit = na and nb and na != nb and len(_stems(a["text"]) & _stems(b["text"])) >= 2
+            if hit:
                 for c, other in ((a, b), (b, a)):
                     c["status"], c["note"] = STATUS_CONFLICT, f"расходится с {other['id']}"
+
+
+def _missing_docs(inp: dict, topic: str | None) -> list[str]:
+    """Обязательные документы темы, которых нет среди материалов (сверка по названию и типу документа)."""
+    if not topic:
+        return []
+    names = " ".join(f"{m.get('title', '')} {m.get('kind', '')}" for m in inp["materials"]).lower()
+    return [label for label, stems in T.TOPICS[topic]["required_docs"] if not all(s in names for s in stems)]
+
+
+def _topic_checklist(inp: dict, topic: str | None) -> list[dict]:
+    if not topic:
+        return []
+    text = " ".join(f"{m.get('title', '')} {m.get('text', '')} "
+                    + " ".join(f"{f['key']} {f['value']}" for f in m.get("facts") or [])
+                    for m in inp["materials"]).lower()
+    return [{"item": item, "ok": any(w in text for w in words),
+             "note": "" if any(w in text for w in words) else "в материалах нет — запросить"}
+            for item, words in T.TOPICS[topic]["checklist"]]
 
 
 # --- 4. бриф ------------------------------------------------------------------------------------
@@ -183,45 +236,66 @@ def build_brief(inp: dict) -> dict:
     if bad:
         raise ValueError("пустые или некорректные поля: " + ", ".join(bad))
     scope = check_scope(inp)
-    claims = extract_claims(inp)
+    topic = scope["topic"]
+    claims = extract_claims(inp, topic)
     cutoff = str(inp["cutoff"]).strip()
     flags = [c["id"] for c in claims if c["fact_without_source"]]
+    traps, missing = [], []
 
     if not scope["ok"]:
         outcome, cls, evidence = OUT_REFUSAL, None, []
         conclusion = f"ОТКАЗ: {scope['reason']}."
         next_step = scope["suggestion"] or "Человек: вернуть вопрос автору с причиной отказа."
+        flags = []
     else:
         evidence = [c for c in claims if c["relevant"]]
         usable = [c for c in evidence if c["status"] in (STATUS_CLAIM, STATUS_COMPANY)]
         conflicts = [c for c in evidence if c["status"] == STATUS_CONFLICT]
+        missing = _missing_docs(inp, topic)
+        parts = []
+        if conflicts:
+            pairs = _conflict_pairs(conflicts)
+            traps += [{"type": CLASS_CONFLICT, "ref": k, "ids": ids} for k, ids in pairs]
+            parts.append("Источники расходятся: " + "; ".join(
+                f"{c['id']} ({c['source']}) — «{c.get('value') or c['text']}»" for c in conflicts) + ".")
+        if missing:
+            traps += [{"type": CLASS_GAP, "ref": f"нет документа: {d}", "ids": []} for d in missing]
+            parts.append("В материалах нет: " + ", ".join(missing) + ".")
+        if flags:
+            traps += [{"type": CLASS_GAP, "ref": "факт без источника", "ids": flags}]
+            parts.append("Категоричные утверждения без подтверждающего источника: " + ", ".join(
+                f"{c['id']} «{c['text']}»" for c in claims if c["fact_without_source"]) + " — не приняты как доказанные.")
         if conflicts:
             outcome, cls = OUT_ANSWER, CLASS_CONFLICT
-            conclusion = (f"По материалам на {cutoff} источники расходятся: "
-                          + "; ".join(f"{c['id']} — «{c['text']}»" for c in conflicts) + ". Единого ответа нет.")
             next_step = "Человек: запросить у компании первичные документы и выяснить, какое из утверждений верно."
-        elif usable:
-            outcome, cls = OUT_ANSWER, CLASS_CLAIM
-            conclusion = (f"По материалам на {cutoff}: "
-                          + "; ".join(f"{c['id']} — «{c['text']}» ({c['status']})" for c in usable)
-                          + ". Это утверждения, а не подтверждённые факты: независимой проверки в системе нет.")
-            next_step = "Человек: проверить утверждения по первичным документам и при подтверждении сам присвоить класс ФАКТ."
-        else:
+        elif missing or flags or not usable:
             outcome, cls = OUT_GAP, CLASS_GAP
-            extra = " Утверждения без источника не приняты." if evidence else ""
-            conclusion = f"По материалам на {cutoff} ответа нет: подходящих утверждений с источником не найдено.{extra}"
-            next_step = "Человек: запросить у компании материал с источником и датой по этому вопросу."
+            if not usable and not parts:
+                parts.append("Подходящих утверждений с источником не найдено.")
+            need = missing or ["документ-основание к утверждениям " + ", ".join(flags)] if (missing or flags) else \
+                ["материал с источником и датой по этому вопросу"]
+            next_step = "Человек: запросить у компании " + "; ".join(need) + "."
+        else:
+            outcome, cls = OUT_ANSWER, CLASS_CLAIM
+            parts.append("Утверждения: " + "; ".join(f"{c['id']} «{c['text']}» ({c['status']})" for c in usable[:4])
+                         + ". Это утверждения, а не подтверждённые факты.")
+            next_step = "Человек: проверить утверждения по первичным документам и при подтверждении сам присвоить класс ФАКТ."
+        conclusion = f"По материалам на {cutoff}: " + " ".join(parts)
 
-    if flags:
-        conclusion += f" Отмечено «факт без источника»: {', '.join(flags)} — не использовано."
+    topic_name = T.TOPICS[topic]["name"] if topic else None
     return {
-        "version": "s3-brief-0.1",
+        "version": "s3-brief-0.2",
         "question": inp["question"].strip(),
         "bounds": inp["bounds"].strip(),
+        "topic": topic,
+        "topic_name": topic_name,
         "outcome": outcome,
         "class": cls,
-        "checklist": scope["checks"] + _evidence_checks(claims, scope["ok"]),
+        "checklist": scope["checks"] + (_topic_checklist(inp, topic) + _evidence_checks(claims) if scope["ok"] else []),
         "conclusion": conclusion,
+        "traps": traps,
+        "missing_docs": missing,
+        "suggested_questions": scope["suggested_questions"],
         "evidence": [{"claim_id": c["id"], "claim": c["text"], "status": c["status"], "source": c["source"],
                       "source_date": c["source_date"], "cutoff": cutoff, "note": c["note"]} for c in evidence],
         "all_claims": [{"claim_id": c["id"], "status": c["status"], "relevant": c["relevant"],
@@ -235,9 +309,14 @@ def build_brief(inp: dict) -> dict:
     }
 
 
-def _evidence_checks(claims: list[dict], in_scope: bool) -> list[dict]:
-    if not in_scope:
-        return []
+def _conflict_pairs(conflicts: list[dict]) -> list[tuple[str, list[str]]]:
+    by_key: dict[str, list[str]] = {}
+    for c in conflicts:
+        by_key.setdefault(c["key"] or "текст", []).append(c["id"])
+    return list(by_key.items())
+
+
+def _evidence_checks(claims: list[dict]) -> list[dict]:
     rel = [c for c in claims if c["relevant"]]
     trap = any(c["fact_without_source"] for c in claims)
     return [
@@ -245,8 +324,7 @@ def _evidence_checks(claims: list[dict], in_scope: bool) -> list[dict]:
          "ok": all(c["source"] and c["source_date"] for c in rel), "note": ""},
         {"item": "источники не позже даты среза", "ok": not any("позже" in c["note"] for c in rel), "note": ""},
         {"item": "конфликтов между источниками нет", "ok": not any(c["status"] == STATUS_CONFLICT for c in rel), "note": ""},
-        {"item": "«факт без источника» не принят", "ok": not trap, "note": "найдено и отброшено" if trap else ""},
-        {"item": "статус «факт» системой не ставится", "ok": True, "note": ""},
+        {"item": "«факт без источника» не принят", "ok": not trap, "note": "найдено и не принято" if trap else ""},
     ]
 
 
@@ -271,6 +349,7 @@ def to_markdown(brief: dict) -> str:
     L = ["# Бриф S3 · вопрос → ответ", "", f"**Статус:** {sig}", "",
          "| Поле | Значение |", "|---|---|",
          f"| Вопрос | {_cell(brief['question'])} |",
+         f"| Тема | {brief.get('topic_name') or '—'} |",
          f"| Исход | {brief['outcome']} |",
          f"| Класс | {brief['class'] or '—'} |",
          f"| Вывод | {_cell(brief['conclusion'])} |",
@@ -279,6 +358,8 @@ def to_markdown(brief: dict) -> str:
          "## Чеклист проверки", ""]
     L += [f"- [{'x' if c['ok'] else ' '}] {c['item']}" + (f" — {c['note']}" if c.get("note") else "")
           for c in brief["checklist"]]
+    if brief.get("suggested_questions"):
+        L += ["", "## Узкие вопросы на выбор", ""] + [f"- {x}" for x in brief["suggested_questions"]]
     L += ["", "## Доказательность (источник и дата среза)", ""]
     if brief["evidence"]:
         L += ["| Утверждение | Статус | Источник | Дата источника | Срез |", "|---|---|---|---|---|"]

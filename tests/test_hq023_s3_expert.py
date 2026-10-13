@@ -18,6 +18,17 @@ ROOT = Path(__file__).resolve().parent.parent
 GOOD = cases.CASES[0]["input"]
 
 
+def _inp(question, bounds, materials, cutoff="2026-09-30"):
+    return {"question": question, "bounds": bounds, "cutoff": cutoff, "materials": materials}
+
+
+def _mat(mid, text, title="Документ (вымышл.)", date="2026-06-01", origin="company"):
+    return {"id": mid, "title": title, "date": date, "text": text, "origin": origin}
+
+
+BOUNDS = "клинические исследования медицинских изделий"
+
+
 class EngineTests(unittest.TestCase):
     def test_empty_fields_returned_to_user(self):
         for key, label in E.INPUT_FIELDS:
@@ -27,14 +38,23 @@ class EngineTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             E.build_brief({**GOOD, "question": "  "})
 
-    def test_scope_refusals(self):
-        by_id = {c["id"]: E.build_brief(c["input"]) for c in cases.CASES}
-        self.assertIn("вне вертикали LS", by_id["S3-SYN-05"]["conclusion"])
-        self.assertIn("не один узкий вопрос", by_id["S3-SYN-06"]["conclusion"])
-        self.assertIn("Сузьте", by_id["S3-SYN-06"]["next_step_human"])
-        for sid in ("S3-SYN-07", "S3-SYN-09"):
-            self.assertEqual(by_id[sid]["outcome"], "ОТКАЗ")
-            self.assertIsNone(by_id[sid]["class"])
+    def test_out_of_vertical_refused(self):
+        b = E.build_brief(_inp("Какой тариф подписки у SaaS-платформы для маркетплейса?", "тарифы подписки SaaS",
+                               [_mat("D1", "Тариф подписки составляет 50 евро в месяц.")]))
+        self.assertEqual((b["outcome"], b["class"]), ("ОТКАЗ", None))
+        self.assertIn("вне вертикали LS", b["conclusion"])
+
+    def test_two_questions_refused_with_narrowing(self):
+        b = E.build_brief(_inp("Какой класс риска у прибора? И сколько пациентов в исследовании?", BOUNDS,
+                               [_mat("D1", "Прибор прошёл пилотное клиническое исследование.")]))
+        self.assertIn("не один узкий вопрос", b["conclusion"])
+        self.assertTrue(2 <= len(b["suggested_questions"]) <= 3)
+
+    def test_medical_and_valuation_requests_refused(self):
+        for q in ("Безопасен ли препарат и какая дозировка подходит пациенту?",
+                  "Какова оценка компании для клинического раунда?"):
+            b = E.build_brief(_inp(q, "клинические данные препаратов", [_mat("D1", "Препарат в первой фазе исследования.")]))
+            self.assertEqual((b["outcome"], b["class"]), ("ОТКАЗ", None), q)
 
     def test_system_never_sets_fact(self):
         for c in cases.CASES:
@@ -44,16 +64,36 @@ class EngineTests(unittest.TestCase):
             self.assertTrue(all(x["status"] in E.CLAIM_STATUSES for x in b["all_claims"]))
             self.assertFalse([e for e in b["evidence"] if e["status"].lower() == "факт"])
 
-    def test_fact_without_source_trap(self):
-        b = E.build_brief(cases.CASES[3]["input"])  # SYN-04
-        self.assertEqual(b["unsourced_fact_flags"], ["D1.1"])
-        self.assertEqual(b["class"], "ПРОБЕЛ")
-        self.assertEqual([e["status"] for e in b["evidence"]], ["неизвестно"])
+    def test_fact_without_source_trap_syn04_syn05(self):
+        for i in (3, 4):
+            b = E.build_brief(cases.CASES[i]["input"])
+            self.assertEqual(b["class"], "ПРОБЕЛ")
+            self.assertTrue(b["unsourced_fact_flags"])
+            self.assertIn("не приняты как доказанные", b["conclusion"])
+
+    def test_strong_claim_ok_when_third_party_source_present(self):
+        b = E.build_brief(_inp("Достаточно ли клинического исследования для следующего этапа?", BOUNDS, [
+            _mat("D1", "Эффект в клиническом исследовании подтверждён."),
+            _mat("D2", "Протокол исследования утверждён.", title="Протокол исследования (вымышл.)", origin="third_party")]))
+        self.assertEqual(b["unsourced_fact_flags"], [])
 
     def test_cutoff_excludes_later_source(self):
-        b = E.build_brief(cases.CASES[7]["input"])  # SYN-08
+        b = E.build_brief(_inp("Достаточно ли клинического исследования для следующего этапа?", BOUNDS, [
+            _mat("D1", "Клиническое исследование завершено по протоколу.", title="Протокол (вымышл.)", date="2026-10-05")]))
         self.assertEqual(b["class"], "ПРОБЕЛ")
         self.assertIn("позже даты среза", b["evidence"][0]["note"])
+
+    def test_structured_conflict_names_both_sources(self):
+        b = E.build_brief(cases.CASES[6]["input"])  # SYN-07: 12 клиентов ↔ 2 договора
+        self.assertEqual(b["class"], "ПРОТИВОРЕЧИЕ")
+        self.assertIn("«12»", b["conclusion"])
+        self.assertIn("«2»", b["conclusion"])
+
+    def test_missing_required_document_is_gap(self):
+        b = E.build_brief(cases.CASES[2]["input"])  # SYN-03: нет лицензионного договора
+        self.assertEqual((b["outcome"], b["class"]), ("ПРОБЕЛ", "ПРОБЕЛ"))
+        self.assertIn("лицензионный договор", b["missing_docs"])
+        self.assertIn("лицензионный договор", b["next_step_human"])
 
     def test_brief_has_bp07_columns_and_md_json(self):
         b = E.build_brief(GOOD)
@@ -89,6 +129,15 @@ class AcceptanceTests(unittest.TestCase):
         for i in range(1, 11):
             self.assertTrue((d / f"S3-SYN-{i:02d}.md").exists() and (d / f"S3-SYN-{i:02d}.json").exists())
         self.assertTrue((d / "summary.md").exists())
+
+    def test_judge_catches_broken_engine(self):
+        """Отрицательный контроль: если сломать правило, приёмка обязана упасть."""
+        with mock.patch.object(E, "_mark_conflicts", lambda c: None):
+            self.assertFalse(cases.run_acceptance()["summary"]["threshold_met"])
+        with mock.patch.object(E, "FACT_MARKERS", ()):
+            self.assertGreater(cases.run_acceptance()["summary"]["missed_traps"], 0)
+        with mock.patch.object(E, "FORBIDDEN", ()), mock.patch.object(E, "BROAD_MARKERS", ()):
+            self.assertFalse(cases.run_acceptance()["summary"]["syn10_pass"])
 
 
 class S3HttpBase(tg1.Tg1Base):
@@ -172,7 +221,7 @@ class HumanGateTests(S3HttpBase):
             self.assertEqual(self.c.post(f"/s3/briefs/{bid}/sign", headers=tg1.BOB, json={"checked": True}).status_code, 200)
 
     def test_refusal_brief_also_waits_for_signature(self):
-        bid = self.create(cases.CASES[4]["input"])  # SYN-05, ОТКАЗ
+        bid = self.create(cases.CASES[9]["input"])  # SYN-10, ОТКАЗ
         self.assertEqual(self.c.get(f"/s3/briefs/{bid}/brief.md", headers=base.ADMIN).status_code, 403)
 
     def test_s1_approve_cannot_send_s3_brief(self):
@@ -204,7 +253,7 @@ class NoOutboundCodeTests(unittest.TestCase):
             self.assertNotIn("s1_intake.scoring", f.read_text(encoding="utf-8"))
 
     def test_synthetic_only_marker(self):
-        self.assertIn("СИНТЕТИЧЕСКИЕ", Path(cases.__file__).read_text(encoding="utf-8"))
+        self.assertIn("ВСЕ КЕЙСЫ ВЫМЫШЛЕНЫ", Path(cases.__file__).read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":
