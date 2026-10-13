@@ -29,3 +29,8 @@ HQ-036 — линия A9 (#6 head 83ab1f7 + #11 head 90e2d22) на линии ti
 - Задача: убрать закоммиченный байткод. Ветка `chore/remove-pycache` → master, отдельный мелкий PR по запросу владельца.
 - Сделано: `__pycache__/app.cpython-314.pyc` снят с учёта (`git rm --cached`); в `.gitignore` добавлены `__pycache__/` и `*.py[cod]`. Код не менялся.
 - Не проверено: CI — запустится на PR.
+
+## MOS-6 staging deploy (Claude, 13.10) — Refs #57
+- Ветка `claude/issue-57-20261013-0822` → master. Добавлено: `render.yaml`, `staging_guard.py` (APP_ENV=staging: проверка env, вход Google + AUTH_ALLOWLIST, всё закрыто кроме /health, /robots.txt, /auth/*; X-Robots-Tag noindex везде), `scripts/seed_synthetic.py`, `docs/DEPLOY.md`, `.env.example`, `tests/test_mos6_staging.py`.
+- Тесты локально: 217 passed (Postgres-тесты без PG пропускаются/CI).
+- Не проверено: живой деплой на Render, реальный Google OAuth. Auth+RBAC из #43 в репо отсутствует — реализован минимальный вход по allowlist (без ролей); роли из таблицы role_grants не используются.
