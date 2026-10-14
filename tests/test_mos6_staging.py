@@ -162,15 +162,73 @@ class SeedTests(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 seed_synthetic.assert_synthetic_rows()
 
-    def test_render_yaml_has_no_secret_values(self):
-        import yaml
-        doc = yaml.safe_load((ROOT / "render.yaml").read_text(encoding="utf-8"))
-        svc = doc["services"][0]
-        self.assertEqual(svc["healthCheckPath"], "/health")
-        self.assertIn("hq018_migrate", svc["preDeployCommand"])
-        for ev in svc["envVars"]:
-            if ev["key"] in ("GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "AUTH_ALLOWLIST"):
-                self.assertTrue(ev.get("sync") is False and "value" not in ev)
+
+class YandexCloudDeployTests(unittest.TestCase):
+    def setUp(self):
+        sys.path.insert(0, str(ROOT / "scripts"))
+
+    def test_render_blueprint_removed(self):
+        self.assertFalse((ROOT / "render.yaml").exists())
+
+    def test_current_migrations_additive_only(self):
+        import migration_guard
+        self.assertEqual(migration_guard.destructive_migrations(), [])
+        self.assertEqual(migration_guard.main(), 0)
+
+    def test_guard_detects_destructive_sql(self):
+        import migration_guard as g
+        for sql in ("DROP TABLE x;", "truncate t;", "DELETE FROM t WHERE a=1;", "UPDATE t SET a=1;",
+                    "ALTER TABLE t ALTER COLUMN a TYPE text;", "ALTER TABLE t RENAME TO u;",
+                    "ALTER TABLE t DROP COLUMN a;"):
+            self.assertTrue(g.is_destructive(sql), sql)
+        for sql in ("CREATE TABLE IF NOT EXISTS t (a int REFERENCES u(id) ON DELETE CASCADE);",
+                    "INSERT INTO t VALUES (1) ON CONFLICT (a) DO UPDATE SET b=1;",
+                    "-- DROP TABLE x;\nALTER TABLE t ADD COLUMN c int;"):
+            self.assertFalse(g.is_destructive(sql), sql)
+
+    def test_migrate_job_requires_snapshot_for_destructive(self):
+        import migrate_job
+        with mock.patch.object(migrate_job.migration_guard, "destructive_migrations", return_value=["003_x.sql"]), \
+                mock.patch.object(migrate_job.hq018_migrate, "main") as m:
+            code, body = migrate_job.run({})
+            self.assertEqual((code, body["error"]), (409, "snapshot_required"))
+            m.assert_not_called()
+            code, body = migrate_job.run({"snapshot_id": "b1"})
+            self.assertEqual(code, 200)
+            m.assert_called_once()
+
+    def test_migrate_job_reports_failure(self):
+        import migrate_job
+        with mock.patch.object(migrate_job.migration_guard, "destructive_migrations", return_value=[]), \
+                mock.patch.object(migrate_job.hq018_migrate, "main", side_effect=RuntimeError("boom")):
+            self.assertEqual(migrate_job.run({})[0], 500)
+
+    def test_ci_tests_job_has_no_cloud_secrets_and_no_deploy(self):
+        text = (ROOT / ".github" / "workflows" / "tests.yml").read_text(encoding="utf-8")
+        for bad in ("secrets.", "YC_", "yc ", "LOCKBOX", "migrate", "deploy", "RENDER"):
+            self.assertNotIn(bad, text)
+        self.assertIn("postgres:16", text)
+
+    def test_deploy_scripts_have_no_secret_values_and_migrate_outside_web(self):
+        deploy = (ROOT / "deploy" / "yc" / "deploy.sh").read_text(encoding="utf-8")
+        self.assertIn("migration_guard.py", deploy)
+        self.assertIn("cluster backup", deploy)
+        self.assertLess(deploy.index("cluster backup"), deploy.index("/run"))
+        self.assertLess(deploy.index("/run"), deploy.index("--container-name \"$WEB\""))
+        web = (ROOT / "deploy" / "yc" / "web-entrypoint.sh").read_text(encoding="utf-8")
+        code = "\n".join(l for l in web.splitlines() if not l.startswith("#"))
+        self.assertNotIn("migrate", code)
+        self.assertNotIn("seed", code)
+        for f in (ROOT / "deploy" / "yc").iterdir():
+            t = f.read_text(encoding="utf-8")
+            for key in ("SESSION_SECRET", "GOOGLE_CLIENT_SECRET", "AUTH_ALLOWLIST"):
+                self.assertNotRegex(t, key + r"=[^,\s\"$]")
+
+    def test_env_example_names_only(self):
+        for line in (ROOT / ".env.example").read_text(encoding="utf-8").splitlines():
+            for key in ("GOOGLE_CLIENT_SECRET", "SESSION_SECRET", "AUTH_ALLOWLIST", "DATABASE_URL"):
+                if line.startswith(key + "="):
+                    self.assertEqual(line.split("=", 1)[1].split("#")[0].strip(), "")
 
 
 if __name__ == "__main__":

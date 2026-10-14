@@ -4,6 +4,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt pytest
 COPY . .
+RUN chmod +x deploy/yc/*.sh
 ENV PORT=10000
 EXPOSE 10000
 CMD ["sh", "-c", "python scripts/hq018_migrate.py && python scripts/hq018_seed.py && gunicorn -b 0.0.0.0:${PORT} app:app"]

@@ -2,7 +2,7 @@
 
 Включается только при APP_ENV=staging — локальная среда, CI и S1 работают как раньше.
 Открыты только /health, /robots.txt и /auth/*; всё остальное — 401 (API) или редирект на вход.
-Секреты берутся только из env (Render dashboard), в репозитории их нет."""
+Секреты берутся только из env (Yandex Lockbox), в репозитории их нет."""
 import hmac
 import secrets
 from datetime import timedelta
@@ -34,7 +34,7 @@ def validate_env(env) -> dict:
     if missing:
         raise StagingConfigError(
             "APP_ENV=staging: не заданы обязательные переменные окружения: " + ", ".join(missing)
-            + ". Задайте их в Render dashboard (см. .env.example, docs/DEPLOY.md).")
+            + ". Задайте их в Yandex Lockbox (см. .env.example, README «Развёртывание в Yandex Cloud»).")
     cfg = {k: env[k].strip() for k in REQUIRED_ENV}
     if len(cfg["SESSION_SECRET"]) < MIN_SESSION_SECRET:
         raise StagingConfigError(f"SESSION_SECRET короче {MIN_SESSION_SECRET} символов (openssl rand -hex 32).")

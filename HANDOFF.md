@@ -77,3 +77,10 @@ HQ-036 — линия A9 (#6 head 83ab1f7 + #11 head 90e2d22) на линии ti
 ## MOS-6 · Д-79 (Claude, 13.10) — Refs #57
 - Ветка `claude/issue-57-20261013-1253` (содержит работу из `-0822` + правка). `docs/DEPLOY.md` §5–6 приведены к Д-79: бэкапы штатными средствами Render, PITR 3 дня + Export ≥7 дней, шаг резервной копии в pre-deploy НЕ делается, `pg_dump`/`RENDER_DATABASE_URL` убраны. Код не менялся, CI к Render не подключается.
 - Не проверено: имя БД в Blueprint — `mos-staging-db`, а у владельца PITR подтверждён для `startup-trainer-pilot-v1-db`; нужно сверить, что это та же БД/тариф.
+
+## MOS-6 · перенос с Render на Yandex Cloud (Claude, 14.10) — Refs #57
+- Ветка `claude/issue-57-20261014-1100` (включает #63). `render.yaml` удалён. Добавлено: `deploy/yc/deploy.sh` (образ → `migration_guard` → резервная копия кластера при деструктивной миграции → миграции в приватном контейнере → web → /health), `deploy/yc/rollback.sh`, `deploy/yc/deploy-workflow.example.yml` (шаблон: `.github/workflows` мне недоступен, MOS Tech копирует сам), `scripts/migration_guard.py`, `scripts/migrate_job.py` (409 без `snapshot_id` для деструктивных), README «Развёртывание в Yandex Cloud» (секреты, IAM-роли, шаги, откат), `docs/DEPLOY.md` — указатель.
+- Миграции вне CI и вне старта web; `tests.yml` без секретов (тест это проверяет). Код Render из CI не добавлялся (Д-79 заменён решением 14.10).
+- Тесты: 261 passed локально; Postgres-тесты без `HQ018_PG_URL` пропускаются, их запустит CI.
+- Не проверено: живой деплой, флаги `yc` (сверить с `--help`), названия IAM-ролей, `bash -n` скриптов (запуск не разрешён), домен/сертификат, достижимость Google OAuth из ru-central1 (нужен NAT). `PUBLIC_BASE_URL` в app.py по умолчанию всё ещё render-домен (не менял — на него завязаны тесты/пакет); задаётся env.
+- Auth+RBAC #43 в репо нет — вход по allowlist минимальный.
