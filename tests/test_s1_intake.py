@@ -177,7 +177,8 @@ class S1GuardrailTests(unittest.TestCase):
 
     def test_phantom_evidence_removed(self):
         c = self.claims(sources=("deck", "model"))
-        self.assertEqual((c["C03"].evidence_level, c["C03"].category), (0, Category.FOUNDER_CLAIM))
+        # фантомный evidence снят; осталась анкета → E1 (канон: заявление основателя = E1, не E3)
+        self.assertEqual((c["C03"].evidence_level, c["C03"].category), (1, Category.FOUNDER_CLAIM))
 
     def test_hardcoded_model_is_e1(self):
         hard = ParsedDoc(kind="fin_model", source="model", name="m.xlsx", url="u", formula_cells=0)
