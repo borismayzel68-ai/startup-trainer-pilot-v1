@@ -15,6 +15,7 @@ from s1_intake.config import Settings, load_methodology  # noqa: E402
 from s1_intake.evaluator import evaluate  # noqa: E402
 from s1_intake.formatter import generate_pack  # noqa: E402
 from s1_intake.llm import LLMClient  # noqa: E402
+from s1_intake.models import ParsedDoc  # noqa: E402
 from s1_intake.tilda import parse_payload  # noqa: E402
 
 FIXED = datetime(2026, 10, 11, 10, 0, tzinfo=timezone.utc)
@@ -39,7 +40,13 @@ def settings(tmp: str = "/tmp") -> Settings:
                     database_url=f"sqlite:///{tmp}/hq016.db", analyst_emails=[], smtp_host="")
 
 
-def run(form: dict, cls_override=None, verified_slots=None):
+# P0 #36: источник, на который ссылается claim, должен быть реально загружен. LS-кейсы ниже ссылаются на
+# deck/evidence — им нужны синтетические «загруженные» документы; golden-снимок остаётся «без файлов».
+SYNTH_DOCS = [ParsedDoc(kind=k, source=src, name=f"synthetic-{src}", url=f"https://example.test/{src}")
+              for k, src in (("pitch_deck", "deck"), ("evidence", "evidence"))]
+
+
+def run(form: dict, cls_override=None, verified_slots=None, docs=None):
     s = settings()
     m = load_methodology(str(s.methodology_path))
     sub = parse_payload(form, m)
@@ -50,7 +57,9 @@ def run(form: dict, cls_override=None, verified_slots=None):
             return cls_override
         return s1_mock_llm.responder(stage, user)
 
-    res = evaluate("synthetic-job", sub, [], LLMClient(s, responder), s, m, verified_slots=verified_slots)
+    if docs is None:
+        docs = SYNTH_DOCS if cls_override is not None else []
+    res = evaluate("synthetic-job", sub, docs, LLMClient(s, responder), s, m, verified_slots=verified_slots)
     res.created_at = FIXED
     return res, generate_pack(res, m, s.fund_name), m
 
