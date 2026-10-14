@@ -76,3 +76,10 @@ HQ-036 — линия A9 (#6 head 83ab1f7 + #11 head 90e2d22) на линии ti
 
 ## 2026-10-14 · MOS Tech
 - Merged master into the #62 branch (MOS-2): HANDOFF.md conflict, both sections kept. No code changes.
+
+## MOS-3 импорт-CLI из CSV (Claude, 14.10, Refs #54)
+- Ветка `claude/issue-54-20261014-1648` → master, draft PR. Добавлено: `scripts/import_dealflow.py`, `dealflow/importer.py`, `docs/IMPORT_FORMAT.md`, `tests/test_mos3_import.py`, синтетические CSV в `tests/fixtures/import/`, правила в `.gitignore` (`imports/*.csv|json|md`, `import_report*`).
+- Dry-run по умолчанию (БД не трогается, подключение не нужно); `--apply` — одна транзакция, upsert startups/documents, смена статуса с reason=`import`. Дубли, конфликты, ID на проверке и ID без источника статуса не пишутся.
+- Тесты: 276 passed (Postgres-тесты выполнены). Лог — в описании PR.
+- Допущение (нужно подтвердить): реальных заголовков CSV у меня нет — набор колонок и синонимы в `docs/IMPORT_FORMAT.md` выбраны мной. Книги статуса не дают, ID только из книг остаются в отчёте.
+- Не сделано: portfolio_companies и cabinets при импорте не создаются (это #55).

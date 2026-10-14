@@ -12,3 +12,9 @@ __pycache__/
 # Python bytecode
 __pycache__/
 *.py[cod]
+
+# MOS-3: реальные выгрузки и отчёты импорта не коммитим
+imports/*.csv
+imports/*.json
+imports/*.md
+import_report*

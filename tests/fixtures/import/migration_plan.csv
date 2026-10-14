@@ -1,0 +1,11 @@
+VC ID,Название,Зона,Этап,Ссылка
+VC-001,Synth Alpha,00 — INBOX / НОВЫЕ,,https://drive.google.com/drive/folders/SYNfolderAAA111
+VC-002,Synth Beta,10 — ACTIVE DEALFLOW / SCREENING & DD,DD,https://drive.google.com/file/d/SYNfileBBB222/view?usp=sharing
+VC-003,Synth Gamma,10 — ACTIVE DEALFLOW / SCREENING & DD,ACTIVE,
+VC-028,Synth Dup One,00 — INBOX / НОВЫЕ,,
+VC-028,Synth Dup One,00 — INBOX / НОВЫЕ,,
+VC-085,Synth Conflict Name,00 — INBOX / НОВЫЕ,,
+VC-103,Synth Conflict Status,10 — ACTIVE DEALFLOW / SCREENING & DD,DD,
+VC-104,Synth Unknown Zone,99 — SYNTHETIC ZONE,,
+,Synth No Id,00 — INBOX / НОВЫЕ,,
+VC-005,Synth Bad Link,00 — INBOX / НОВЫЕ,,not-a-drive-link
