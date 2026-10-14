@@ -60,6 +60,11 @@ HQ-036 — линия A9 (#6 head 83ab1f7 + #11 head 90e2d22) на линии ti
 - Сделано: `__pycache__/app.cpython-314.pyc` снят с учёта (`git rm --cached`); в `.gitignore` добавлены `__pycache__/` и `*.py[cod]`. Код не менялся.
 - Не проверено: CI — запустится на PR.
 
+## MOS-2 схема dealflow (Claude, Refs #53)
+- Ветка `claude/issue-53-20261013-0822` → master. Добавлено: `db/migrations/003_dealflow.sql` (startups, deal_status_history append-only триггером, portfolio_companies, cabinets, documents с drive_file_id), `dealflow/status.py` (enum, TRANSITIONS, change_status, map_zone, map_core), `docs/STATUS_MAPPING.md`, `tests/test_mos2_dealflow.py`.
+- Тесты: 224 passed (Postgres-тесты MOS-2 выполнены, не skipped). Лог — в описании PR.
+- Требует решения менеджера/владельца: допущения маппинга CORE (CONDITIONAL+MONITOR→ON_HOLD, +REQUEST_EVIDENCE→DD, без действия→ACTIVE) и таблица переходов; прочие зоны плана миграции в репо отсутствуют → флаг.
+- Не сделано: привязка доступа к кабинету через role_grants.scope (только схема), noindex/allowlist не трогались.
 ## P0 #36 S1: запрет E1→E3 + полный пакет основателю (Claude, 12.10)
 - Ветка `claude/issue-36-20261012-1121`, PR #43; не мержить — ревью Руководителя бизнеса. Номер задачи P0 #36 (HQ-042 — это S5).
 - Код: `s1_intake/scoring.enforce_rules` — `available_sources or set(caps)` заменено на проверку `is None`. Пустой набор файлов теперь значит «источников нет»: ссылка на `evidence` удаляется, E3 недостижим без файла. `None` — прежнее «без ограничений».
@@ -68,3 +73,6 @@ HQ-036 — линия A9 (#6 head 83ab1f7 + #11 head 90e2d22) на линии ti
 - Правка 12.10 (golden): `python tests/hq016_cases.py hq035` — пересчитаны `tests/golden/hq035_{it_wellness,lab_service,no_gate}.json` (без файлов claims на deck/model/evidence теряют источник и падают до E0). `hq016_cases.run` для LS-кейсов с `cls_override` подаёт синтетические deck/evidence-документы (`SYNTH_DOCS`), поэтому ожидания LS-тестов не менялись; T3 сверяет с базовым `hq016_*` только структуру. Полный прогон: 211 passed, 0 failed. Лог — в описании PR.
 - Замечание: фикс шире, чем «запрет E3»: без файлов теряют источник и deck/model, т.е. E1/E2 → E0 (readiness non-LS кейсов 7–10 → 3–4). Решение Руководителя: подтвердить, что так и задумано.
 - `jobs_kind_check` (db/migrations/002_jobs_queue.sql) этим PR не затронут, не чинилось.
+
+## 2026-10-14 · MOS Tech
+- Merged master into the #62 branch (MOS-2): HANDOFF.md conflict, both sections kept. No code changes.
