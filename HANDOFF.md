@@ -68,3 +68,9 @@ HQ-036 — линия A9 (#6 head 83ab1f7 + #11 head 90e2d22) на линии ti
 - Правка 12.10 (golden): `python tests/hq016_cases.py hq035` — пересчитаны `tests/golden/hq035_{it_wellness,lab_service,no_gate}.json` (без файлов claims на deck/model/evidence теряют источник и падают до E0). `hq016_cases.run` для LS-кейсов с `cls_override` подаёт синтетические deck/evidence-документы (`SYNTH_DOCS`), поэтому ожидания LS-тестов не менялись; T3 сверяет с базовым `hq016_*` только структуру. Полный прогон: 211 passed, 0 failed. Лог — в описании PR.
 - Замечание: фикс шире, чем «запрет E3»: без файлов теряют источник и deck/model, т.е. E1/E2 → E0 (readiness non-LS кейсов 7–10 → 3–4). Решение Руководителя: подтвердить, что так и задумано.
 - `jobs_kind_check` (db/migrations/002_jobs_queue.sql) этим PR не затронут, не чинилось.
+
+## S1 · утечка примерного текста гипотез в разбор (Claude, 14.10)
+- Ветка `claude/s1-hypothesis-template-leak`, draft PR; Refs #36. Найдено на живой синтетической сессии VC-994: в сценарии A поле «Новая гипотеза» было заполнено примером про «Гемабанк», текст ушёл на сервер и попал в слот business_model.pricing как источник основателя.
+- Код: `templates/index.html` — примерный текст в полях гипотез заменён подсказкой (placeholder); `app.py` — гипотеза сохраняется только в своём сценарии (A — текущая, B — новая, C — обе).
+- Тест: `tests/test_hypothesis_mode_leak.py`. Полный прогон: 236 passed, 5 skipped, 1 warning, 29 subtests passed in 24.73s
+- Вне кода (на сервисе startup-trainer-pilot-v1, 14.10): добавлены GUNICORN_CMD_ARGS=--timeout 180 (финальный отчёт падал по таймауту 30 с) и PUBLIC_BASE_URL. Не сделано: FLASK_SECRET_KEY не задан — после каждого перезапуска сессии в браузере теряют доступ (401); это секрет, задаёт MOS Tech.
