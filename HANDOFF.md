@@ -47,3 +47,9 @@ HQ-036 — линия A9 (#6 head 83ab1f7 + #11 head 90e2d22) на линии ti
 - Правка 12.10 (golden): `python tests/hq016_cases.py hq035` — пересчитаны `tests/golden/hq035_{it_wellness,lab_service,no_gate}.json` (без файлов claims на deck/model/evidence теряют источник и падают до E0). `hq016_cases.run` для LS-кейсов с `cls_override` подаёт синтетические deck/evidence-документы (`SYNTH_DOCS`), поэтому ожидания LS-тестов не менялись; T3 сверяет с базовым `hq016_*` только структуру. Полный прогон: 211 passed, 0 failed. Лог — в описании PR.
 - Замечание: фикс шире, чем «запрет E3»: без файлов теряют источник и deck/model, т.е. E1/E2 → E0 (readiness non-LS кейсов 7–10 → 3–4). Решение Руководителя: подтвердить, что так и задумано.
 - `jobs_kind_check` (db/migrations/002_jobs_queue.sql) этим PR не затронут, не чинилось.
+
+## MOS-1 #52: ребейз на master с #43 (Claude, 14.10)
+- Ветка `claude/issue-52-20261014-0838`: коммит MOS-1 перенесён (cherry-pick) с ветки 13.10 на master после мержа #43. Конфликтов нет.
+- Pytest локально (без Postgres): 310 passed, 4 skipped, 29 subtests. Лог — в описании PR; Postgres-ветка проверяется в CI.
+- Не мержить: мерж делает человек в дневное окно. Порядок критического пути: #52 → #53 → #55, затем #54, #56, #57.
+- Не проверено: реальный вход через Google (в тестах замокан); значения `GOOGLE_CLIENT_ID/SECRET`, `SESSION_SECRET`, `AUTH_ALLOWLIST` в Render не задавались.
