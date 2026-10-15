@@ -18,6 +18,7 @@ from completion_event import build_completion_payload  # A9: доставка co
 from founder_package import build_package, render_markdown, plan_ledger_write, verify_ledger, validate_package
 from s1_intake.main import init_s1
 from staging_guard import init_staging
+from s3_expert.blueprint import bp as s3_bp
 
 app = Flask(__name__)
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
@@ -60,6 +61,8 @@ app.config["MAX_CONTENT_LENGTH"] = 20 * 1024 * 1024
 # S1 · БП-01: приём заявок с Tilda → Readiness Pack (/s1/*). Без S1_* переменных вебхук отвечает 503,
 # тренажёр работает как раньше.
 init_s1(app)
+# S3 · БП-07 (HQ-023): один вопрос → ответ → бриф, подпись владельца через механизм S1 (/s3/*). Отправки наружу нет.
+app.register_blueprint(s3_bp)
 ALLOWED_STATUS = {"fact","hypothesis","missing","weak"}
 ALLOWED_REC = {"not_ready","iterate","ready_for_investor_conversation"}
 
@@ -579,8 +582,9 @@ def start():
         "active_markets":active_markets,
         "jurisdiction_vocab":vocab(active_markets),
         "mode":mode,
-        "hypothesis_a":request.form.get("hypothesis_a","")[:2500],
-        "hypothesis_b":request.form.get("hypothesis_b","")[:2500],
+        # Гипотеза попадает в разбор только в своём сценарии: A — текущая модель, B — новая, C — обе
+        "hypothesis_a":request.form.get("hypothesis_a","")[:2500] if mode in ("A","C") else "",
+        "hypothesis_b":request.form.get("hypothesis_b","")[:2500] if mode in ("B","C") else "",
         "description":request.form.get("description","")[:12000],
         "deck_text":deck_text,
         "input_manifest":input_manifest,

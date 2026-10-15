@@ -1,40 +1,12 @@
-# HANDOFF
+# HANDOFF (индекс)
 
-Обновлять при каждом коммите.
+Подробный handoff ведётся по задачам в `docs/handoff/<issue>.md`; здесь — только ссылки. При каждом коммите обновляется файл своей задачи (и эта таблица, если появилась новая задача).
 
-## Задача / issue
-HQ-036 — линия A9 (#6 head 83ab1f7 + #11 head 90e2d22) на линии tilda (Refs #22), ветка `chore/hq-036-rebase-a9-on-tilda` от fix/hq-035-fact-ceiling (85d424a, верх линии tilda с HQ-035). PR → s1/tilda-readiness-pack.
-
-## Сделано
-- Влит 90e2d22 (содержит 83ab1f7) merge-коммитом, без rebase.
-- app.py: импорты объединены (s1 init_s1 + founder_package/iso_z/utc_now из A9; post_completion_json больше не импортируется — A9 доставляет completion через delivery_worker); лимит запроса 20 МБ (A9) и init_s1 (S1) — оба сохранены.
-- README.md: раздел S1 сохранён целиком; строка Worker: `python delivery_worker.py` из A9 — рядом с Build/Start.
-- Полный прогон: 197 passed, 0 failed, 0 skipped (с тестами A9).
-
-## Дальше
-- HQ-022: ветка от этой линии, только merge.
-
-## Сломано или не проверено
-- «CI прогон зелёный» (Issue #22): в репо нет тестового workflow (только claude.yml в PR #8) — пробел для PM.
-- delivery_worker вживую (Render worker) не запускался — только тесты.
-
-## Последний коммит
-см. git log -1 (Merge A9 (#6+#11) в линию tilda)
-
-## Слияние в master (Claude, 11.10)
-- Цепочка #28 (+#9) влита в s1/tilda-readiness-pack, затем master влит сюда для PR #7. Конфликт только в HANDOFF.md (add/add), оставлена версия линии tilda. Код не менялся.
-- Тесты локально: 197 passed, 5 skipped (Postgres-тесты без PG).
-
-## Чистка __pycache__ (Claude, 11.10)
-- Задача: убрать закоммиченный байткод. Ветка `chore/remove-pycache` → master, отдельный мелкий PR по запросу владельца.
-- Сделано: `__pycache__/app.cpython-314.pyc` снят с учёта (`git rm --cached`); в `.gitignore` добавлены `__pycache__/` и `*.py[cod]`. Код не менялся.
-- Не проверено: CI — запустится на PR.
-
-## MOS-6 staging deploy (Claude, 13.10) — Refs #57
-- Ветка `claude/issue-57-20261013-0822` → master. Добавлено: `render.yaml`, `staging_guard.py` (APP_ENV=staging: проверка env, вход Google + AUTH_ALLOWLIST, всё закрыто кроме /health, /robots.txt, /auth/*; X-Robots-Tag noindex везде), `scripts/seed_synthetic.py`, `docs/DEPLOY.md`, `.env.example`, `tests/test_mos6_staging.py`.
-- Тесты локально: 217 passed (Postgres-тесты без PG пропускаются/CI).
-- Не проверено: живой деплой на Render, реальный Google OAuth. Auth+RBAC из #43 в репо отсутствует — реализован минимальный вход по allowlist (без ролей); роли из таблицы role_grants не используются.
-
-## MOS-6 · Д-79 (Claude, 13.10) — Refs #57
-- Ветка `claude/issue-57-20261013-1253` (содержит работу из `-0822` + правка). `docs/DEPLOY.md` §5–6 приведены к Д-79: бэкапы штатными средствами Render, PITR 3 дня + Export ≥7 дней, шаг резервной копии в pre-deploy НЕ делается, `pg_dump`/`RENDER_DATABASE_URL` убраны. Код не менялся, CI к Render не подключается.
-- Не проверено: имя БД в Blueprint — `mos-staging-db`, а у владельца PITR подтверждён для `startup-trainer-pilot-v1-db`; нужно сверить, что это та же БД/тариф.
+| Issue | Тема | Файл |
+|---|---|---|
+| #22 | HQ-036 · линия tilda (A9 + S1) | [docs/handoff/22.md](docs/handoff/22.md) |
+| #33 | Чистка __pycache__ | [docs/handoff/33.md](docs/handoff/33.md) |
+| #36 | P0 #36 · S1 (шкала E, пакет основателю) | [docs/handoff/36.md](docs/handoff/36.md) |
+| #53 | MOS-2 · схема dealflow | [docs/handoff/53.md](docs/handoff/53.md) |
+| #57 | MOS-6 · staging | [docs/handoff/57.md](docs/handoff/57.md) |
+| #59 | HQ-023 · S3 Эксперт (БП-07) | [docs/handoff/59.md](docs/handoff/59.md) |

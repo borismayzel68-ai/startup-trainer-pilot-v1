@@ -22,7 +22,7 @@ ENV = {
 }
 
 
-def make_app(env=ENV):
+def make_app(env=ENV, data_check=lambda url: None):
     app = Flask(__name__)
     app.secret_key = "x"
 
@@ -42,7 +42,7 @@ def make_app(env=ENV):
     def api():
         return {"ok": True}
 
-    sg.init_staging(app, env)
+    sg.init_staging(app, env, data_check=data_check)
     return app
 
 
@@ -162,15 +162,83 @@ class SeedTests(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 seed_synthetic.assert_synthetic_rows()
 
-    def test_render_yaml_has_no_secret_values(self):
-        import yaml
-        doc = yaml.safe_load((ROOT / "render.yaml").read_text(encoding="utf-8"))
-        svc = doc["services"][0]
-        self.assertEqual(svc["healthCheckPath"], "/health")
-        self.assertIn("hq018_migrate", svc["preDeployCommand"])
-        for ev in svc["envVars"]:
-            if ev["key"] in ("GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "AUTH_ALLOWLIST"):
-                self.assertTrue(ev.get("sync") is False and "value" not in ev)
+    def test_render_yaml_removed(self):
+        self.assertFalse((ROOT / "render.yaml").exists())
+
+    def test_deploy_proposal_skips_without_secret_and_has_no_hardcoded_ids(self):
+        text = (ROOT / "docs/deploy/yc-deploy.yml.proposed").read_text(encoding="utf-8")
+        self.assertIn('-n "$YC_SA_KEY"', text)
+        self.assertIn("steps.gate.outputs.enabled == 'true'", text)
+        self.assertNotIn("render", text.lower())
+        for ident in ("b1glq3r8033s27m72v2u", "b1gl7ikgct8sob9mtm1g"):
+            self.assertNotIn(ident, text)
+        self.assertFalse((ROOT / ".github/workflows/yc-deploy.yml").exists())
+
+
+class SyntheticOnlyTests(unittest.TestCase):
+    def test_flag_default_true(self):
+        self.assertTrue(sg.synthetic_only({}))
+        self.assertTrue(sg.synthetic_only({"STAGING_SYNTHETIC_ONLY": ""}))
+        self.assertTrue(sg.synthetic_only({"STAGING_SYNTHETIC_ONLY": "TRUE"}))
+
+    def test_flag_off_refuses_start(self):
+        for v in ("false", "0", "no", "off", "garbage"):
+            with self.assertRaises(sg.StagingConfigError, msg=v) as cm:
+                make_app(dict(ENV, STAGING_SYNTHETIC_ONLY=v))
+            self.assertIn("STAGING_SYNTHETIC_ONLY", str(cm.exception))
+
+    def test_flag_unset_starts(self):
+        make_app(ENV)
+
+    def test_non_staging_ignores_flag(self):
+        make_app({"STAGING_SYNTHETIC_ONLY": "false"})
+
+    def test_data_check_failure_refuses_start(self):
+        def bad(url):
+            raise sg.StagingConfigError("в users найдено не-синтетических записей: 1")
+        with self.assertRaises(sg.StagingConfigError):
+            make_app(ENV, data_check=bad)
+
+    def test_data_check_receives_database_url(self):
+        seen = []
+        make_app(ENV, data_check=seen.append)
+        self.assertEqual(seen, [ENV["DATABASE_URL"]])
+
+    def _fake_pg(self, count=None, exc=None):
+        import psycopg
+        conn = mock.MagicMock()
+        conn.__enter__.return_value = conn
+        if exc:
+            conn.execute.side_effect = exc
+        else:
+            conn.execute.return_value.fetchone.return_value = (count,)
+        return mock.patch.object(psycopg, "connect", return_value=conn)
+
+    def test_check_rejects_real_users(self):
+        with self._fake_pg(count=2):
+            with self.assertRaises(sg.StagingConfigError) as cm:
+                sg.check_synthetic_data("postgresql://x")
+        self.assertIn("не-синтетических", str(cm.exception))
+
+    def test_check_passes_on_synthetic_only(self):
+        with self._fake_pg(count=0):
+            sg.check_synthetic_data("postgresql://x")
+
+    def test_check_missing_table_ok(self):
+        from psycopg import errors
+        with self._fake_pg(exc=errors.UndefinedTable("no users")):
+            sg.check_synthetic_data("postgresql://x")
+
+    def test_check_unreachable_db_fails_closed(self):
+        import psycopg
+        with mock.patch.object(psycopg, "connect", side_effect=psycopg.OperationalError("down")):
+            with self.assertRaises(sg.StagingConfigError):
+                sg.check_synthetic_data("postgresql://x")
+
+    def test_real_app_refuses_when_flag_off(self):
+        p = RealAppTests().run_app(dict(ENV, DATABASE_URL="sqlite:///:memory:", STAGING_SYNTHETIC_ONLY="false"))
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("STAGING_SYNTHETIC_ONLY", p.stderr)
 
 
 if __name__ == "__main__":
