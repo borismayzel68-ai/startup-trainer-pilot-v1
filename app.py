@@ -579,8 +579,9 @@ def start():
         "active_markets":active_markets,
         "jurisdiction_vocab":vocab(active_markets),
         "mode":mode,
-        "hypothesis_a":request.form.get("hypothesis_a","")[:2500],
-        "hypothesis_b":request.form.get("hypothesis_b","")[:2500],
+        # Гипотеза попадает в разбор только в своём сценарии: A — текущая модель, B — новая, C — обе
+        "hypothesis_a":request.form.get("hypothesis_a","")[:2500] if mode in ("A","C") else "",
+        "hypothesis_b":request.form.get("hypothesis_b","")[:2500] if mode in ("B","C") else "",
         "description":request.form.get("description","")[:12000],
         "deck_text":deck_text,
         "input_manifest":input_manifest,
