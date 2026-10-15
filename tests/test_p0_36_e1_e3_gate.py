@@ -64,6 +64,12 @@ class E1ToE3GateTests(unittest.TestCase):
         self.assertNotIn(c.category, (Category.FACT, Category.FACT_CANDIDATE))
         self.assertTrue(any("несуществующие источники" in a for a in c.machine_adjusted))
 
+    def test_form_answer_is_e1_like_trainer_and_never_e3(self):
+        # Единая шкала: ответ в анкете = E1 (как в тренажёре), модель не может поднять его до E3
+        c = enforce(3, ["form"], set())
+        self.assertEqual(c.evidence_level, 1)
+        self.assertEqual(c.category, Category.FOUNDER_CLAIM)
+
     def test_available_sources_none_means_unrestricted_and_empty_means_none(self):
         self.assertEqual(enforce(3, ["evidence"], None).evidence_level, 3)
         self.assertLess(enforce(3, ["deck"], set()).evidence_level, 2)

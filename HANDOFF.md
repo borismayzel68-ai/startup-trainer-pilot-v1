@@ -74,6 +74,18 @@ HQ-036 — линия A9 (#6 head 83ab1f7 + #11 head 90e2d22) на линии ti
 - Замечание: фикс шире, чем «запрет E3»: без файлов теряют источник и deck/model, т.е. E1/E2 → E0 (readiness non-LS кейсов 7–10 → 3–4). Решение Руководителя: подтвердить, что так и задумано.
 - `jobs_kind_check` (db/migrations/002_jobs_queue.sql) этим PR не затронут, не чинилось.
 
+## S1 · утечка примерного текста гипотез в разбор (Claude, 14.10)
+- Ветка `claude/s1-hypothesis-template-leak`, draft PR; Refs #36. Найдено на живой синтетической сессии VC-994: в сценарии A поле «Новая гипотеза» было заполнено примером про «Гемабанк», текст ушёл на сервер и попал в слот business_model.pricing как источник основателя.
+- Код: `templates/index.html` — примерный текст в полях гипотез заменён подсказкой (placeholder); `app.py` — гипотеза сохраняется только в своём сценарии (A — текущая, B — новая, C — обе).
+- Тест: `tests/test_hypothesis_mode_leak.py`. Полный прогон: 236 passed, 5 skipped, 1 warning, 29 subtests passed in 24.73s
+- Вне кода (на сервисе startup-trainer-pilot-v1, 14.10): добавлены GUNICORN_CMD_ARGS=--timeout 180 (финальный отчёт падал по таймауту 30 с) и PUBLIC_BASE_URL. Не сделано: FLASK_SECRET_KEY не задан — после каждого перезапуска сессии в браузере теряют доступ (401); это секрет, задаёт MOS Tech.
+
+## S1 · единая шкала E: ответ анкеты = E1 (Claude, 14.10)
+- Ветка `claude/s1-form-e1-scale`, draft PR; Refs #36. Решение Бориса 14.10: «анкета = E1», как в тренажёре (канон CORE: E0 — нет данных, E1 — заявление основателя).
+- Код: `s1_intake/methodology.yaml` — `source_level_cap.form: 0 → 1`, описания E0/E1/E2 приведены к канону; `prompts/01_classify.md` — определения E0/E1.
+- E3 по-прежнему только с документом третьей стороны (`evidence`), FACT — только подпись человека. Утверждение, чей единственный источник — несуществующий файл, остаётся E0.
+- Тесты: `test_phantom_evidence_removed` — C03 после снятия фантомного evidence = E1 (анкета); новый `test_form_answer_is_e1_like_trainer_and_never_e3`. Golden `hq035_*` пересчитаны (`python tests/hq016_cases.py hq035`): готовность it_wellness 3→6, lab_service 3→5, no_gate 4→6. Полный прогон: 235 passed, 0 failed.
+
 ## 2026-10-14 · MOS Tech
 - Merged master into the #62 branch (MOS-2): HANDOFF.md conflict, both sections kept. No code changes.
 
