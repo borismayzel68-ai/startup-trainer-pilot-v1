@@ -60,6 +60,11 @@ HQ-036 — линия A9 (#6 head 83ab1f7 + #11 head 90e2d22) на линии ti
 - Сделано: `__pycache__/app.cpython-314.pyc` снят с учёта (`git rm --cached`); в `.gitignore` добавлены `__pycache__/` и `*.py[cod]`. Код не менялся.
 - Не проверено: CI — запустится на PR.
 
+## MOS-2 схема dealflow (Claude, Refs #53)
+- Ветка `claude/issue-53-20261013-0822` → master. Добавлено: `db/migrations/003_dealflow.sql` (startups, deal_status_history append-only триггером, portfolio_companies, cabinets, documents с drive_file_id), `dealflow/status.py` (enum, TRANSITIONS, change_status, map_zone, map_core), `docs/STATUS_MAPPING.md`, `tests/test_mos2_dealflow.py`.
+- Тесты: 224 passed (Postgres-тесты MOS-2 выполнены, не skipped). Лог — в описании PR.
+- Требует решения менеджера/владельца: допущения маппинга CORE (CONDITIONAL+MONITOR→ON_HOLD, +REQUEST_EVIDENCE→DD, без действия→ACTIVE) и таблица переходов; прочие зоны плана миграции в репо отсутствуют → флаг.
+- Не сделано: привязка доступа к кабинету через role_grants.scope (только схема), noindex/allowlist не трогались.
 ## P0 #36 S1: запрет E1→E3 + полный пакет основателю (Claude, 12.10)
 - Ветка `claude/issue-36-20261012-1121`, PR #43; не мержить — ревью Руководителя бизнеса. Номер задачи P0 #36 (HQ-042 — это S5).
 - Код: `s1_intake/scoring.enforce_rules` — `available_sources or set(caps)` заменено на проверку `is None`. Пустой набор файлов теперь значит «источников нет»: ссылка на `evidence` удаляется, E3 недостижим без файла. `None` — прежнее «без ограничений».
@@ -74,3 +79,6 @@ HQ-036 — линия A9 (#6 head 83ab1f7 + #11 head 90e2d22) на линии ti
 - Код: `s1_intake/methodology.yaml` — `source_level_cap.form: 0 → 1`, описания E0/E1/E2 приведены к канону; `prompts/01_classify.md` — определения E0/E1.
 - E3 по-прежнему только с документом третьей стороны (`evidence`), FACT — только подпись человека. Утверждение, чей единственный источник — несуществующий файл, остаётся E0.
 - Тесты: `test_phantom_evidence_removed` — C03 после снятия фантомного evidence = E1 (анкета); новый `test_form_answer_is_e1_like_trainer_and_never_e3`. Golden `hq035_*` пересчитаны (`python tests/hq016_cases.py hq035`): готовность it_wellness 3→6, lab_service 3→5, no_gate 4→6. Полный прогон: 235 passed, 0 failed.
+
+## 2026-10-14 · MOS Tech
+- Merged master into the #62 branch (MOS-2): HANDOFF.md conflict, both sections kept. No code changes.
