@@ -1,0 +1,18 @@
+# Защищённые пути (REVIEW.md, раздел 3). Q-067, черновик 17.10.2026.
+# Действует только после включения в настройках GitHub правила
+# «Require review from Code Owners» для master — это решение Бориса.
+# Владелец пока один аккаунт; отдельный аккаунт MOS Tech — E0 (уточнить).
+
+/db/migrations/                 @borismayzel68-ai
+/scripts/hq018_migrate.py       @borismayzel68-ai
+/app.py                         @borismayzel68-ai
+/s1_intake/scoring.py           @borismayzel68-ai
+/s1_intake/methodology.yaml     @borismayzel68-ai
+/s1_intake/working_values.yaml  @borismayzel68-ai
+/s1_intake/llm.py               @borismayzel68-ai
+/.github/                       @borismayzel68-ai
+/Dockerfile                     @borismayzel68-ai
+/docker-compose.yml             @borismayzel68-ai
+/.env.example                   @borismayzel68-ai
+/REVIEW.md                      @borismayzel68-ai
+/CLAUDE.md                      @borismayzel68-ai
