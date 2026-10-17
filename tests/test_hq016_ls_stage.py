@@ -210,3 +210,39 @@ class T8RoleConfig(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LSMv1BarrierRanking(unittest.TestCase):
+    """LSM v1 (решение Бориса 16.10, Q-096): E0-пробел не вытесняется вехами с документом E3."""
+
+    def _samd(self):
+        form = {**h._BASE, "tranid": "synthetic:VC-997", "jurisdiction": "РФ", "product_class": "SOFTWARE_POTENTIAL_MD",
+                "intended_use": "ПО с ИИ: анализ КТ лёгких, подсказка врачу (синтетика)", "ls_stage": "poc"}
+        cls = h.ls_classification([h._claim("C11", "ls_milestones_risks.k2_regulatory_path", 3, ["deck"],
+                                            "«ПО не является медизделием» (синтетика)")])
+        return h.run(form, cls)
+
+    def test_weak_before_evidenced_and_e0_payer_not_dropped(self):
+        res, pack, _ = self._samd()
+        bars = res.scores.ls["barriers"]
+        ks = [b["k"] for b in bars]
+        self.assertIn("К6", ks)                       # E0 «кто платит» — в барьерах
+        self.assertTrue(all((b["level"] or 0) < 3 for b in bars))  # E3-вехи не выдаются за барьер
+        self.assertEqual(ks[0], "К2")                 # порядок v0.2 среди слабых сохранён
+        self.assertTrue(2 <= len(bars) <= 5)
+
+    def test_deck_claim_never_lifts_regulatory_to_e3(self):
+        res, _, _ = self._samd()
+        k2 = [it for b in res.scores.blocks for it in b.items if it.key.endswith("k2_regulatory_path")][0]
+        self.assertLess(k2.best_level, 3)
+
+    def test_no_success_probabilities_for_devices(self):
+        _, pack, _ = self._samd()
+        html = pack["founder_report_html"] + pack["analyst_brief_html"]
+        for bad in ("вероятность успеха", "PoS", "LOA", "probability of success"):
+            self.assertNotIn(bad, html)
+
+    def test_pre_revenue_ls_not_zeroed(self):
+        res, _, _ = self._samd()
+        self.assertEqual(len(res.scores.ls["na_slots"]), 3)
+        self.assertGreater(res.scores.readiness, 0)

@@ -186,10 +186,15 @@ def _ls_summary(ctx: dict, m: dict, blocks_out: list[BlockScore], na: dict[str, 
                    "status": it.status.value, "applicability": it.applicability} for it in ms]
     barriers, next_artifact = [], None
     if ms:
-        # порядок v0.2: регуляторный трек, клинические данные, IP, производство, возмещение
-        ranked = sorted(ms, key=lambda it: (it.status == Category.FACT, order.index(checklist[it.key]["ls_k"])))
-        non_fact = [it for it in ranked if it.status != Category.FACT]
-        n = min(max(len(non_fact), int(rule["barriers_min"])), int(rule["barriers_max"]), len(ranked))
+        # порядок v0.2: регуляторный трек, клинические данные, IP, производство, возмещение.
+        # LSM v1 (16.10): сначала слабые (нет данных / E0–E2), потом подтверждённые документом (E3+), потом FACT;
+        # внутри группы — порядок v0.2. Иначе E3-вехи вытесняли E0 «кто платит» за лимит barriers_max.
+        def _evidenced(it):
+            return (it.best_level or 0) >= 3
+        ranked = sorted(ms, key=lambda it: (it.status == Category.FACT, _evidenced(it),
+                                             order.index(checklist[it.key]["ls_k"])))
+        weak = [it for it in ranked if it.status != Category.FACT and not _evidenced(it)]
+        n = min(max(len(weak), int(rule["barriers_min"])), int(rule["barriers_max"]), len(ranked))
         barriers = [{"k": checklist[it.key]["ls_k"], "key": it.key, "label": it.label,
                      "why": checklist[it.key]["why"], "next_step": checklist[it.key]["next_step"],
                      "status": it.status.value, "level": it.best_level} for it in ranked[:n]]
