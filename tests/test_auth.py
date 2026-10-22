@@ -40,6 +40,7 @@ def env(monkeypatch):
 
 def make_client(store, email, grants):
     """Клиент с готовой сессией (как после входа). grants: [(role, scope)]."""
+    os.environ["AUTH_ALLOWLIST"] += ", %s:%s" % (email, grants[0][0] if grants else "owner")  # откатывает monkeypatch в env
     user = store.upsert_user(email, "Synthetic " + email)
     for role, scope in grants:
         store.ensure_grant(user["id"], role, scope)
@@ -338,3 +339,58 @@ def test_no_lp_metrics_in_auth_code():
         text = open(os.path.join(os.path.dirname(appmod.__file__), name), encoding="utf-8").read().lower()
         for banned in ("tvpi", "dpi", "rvpi", "management fee", "carry"):
             assert banned not in text, (name, banned)
+
+
+def test_removed_from_allowlist_logs_out_and_403(env, cases, monkeypatch):
+    _, sid_a, _ = cases
+    c, _ = make_client(env, "i@example.test", [("investor", "VC-1001")])
+    assert c.get("/api/session/" + sid_a, base_url=BASE).status_code == 200
+    monkeypatch.setenv("AUTH_ALLOWLIST", "boris@example.test:owner")
+    assert c.get("/api/session/" + sid_a, base_url=BASE).status_code == 403
+    assert rows(env, actor="i@example.test", detail="removed_from_allowlist")
+    with c.session_transaction() as s:
+        assert "uid" not in s
+    assert c.get("/api/session/" + sid_a, base_url=BASE).status_code == 401
+
+
+def test_client_ip_ignores_spoofed_forwarded_for(env, cases):
+    owner, sid_a, _ = cases
+    owner.get("/api/session/" + sid_a, base_url=BASE, headers={"X-Forwarded-For": "6.6.6.6"},
+              environ_overrides={"REMOTE_ADDR": "203.0.113.9"})
+    assert rows(env, actor="boris@example.test", ip="203.0.113.9")
+    assert not rows(env, ip="6.6.6.6")
+
+
+def test_trusted_proxy_uses_proxyfix():
+    from werkzeug.middleware.proxy_fix import ProxyFix
+    from flask import Flask
+    a = Flask("t")
+    a.wsgi_app = ProxyFix(a.wsgi_app, x_for=1)
+    a.add_url_rule("/", "ip", lambda: auth.client_ip())
+    r = a.test_client().get("/", headers={"X-Forwarded-For": "6.6.6.6, 198.51.100.4"})
+    assert r.get_data(as_text=True) == "198.51.100.4"
+
+
+@pytest.mark.parametrize("env_name", ["staging", "production"])
+def test_no_start_without_session_secret(env_name):
+    import subprocess
+    import sys
+    base = {k: v for k, v in os.environ.items() if k not in ("SESSION_SECRET",)}
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    r = subprocess.run([sys.executable, "-c", "import app"], cwd=root, capture_output=True, text=True,
+                       env={**base, "APP_ENV": env_name})
+    assert r.returncode != 0 and "SESSION_SECRET" in r.stderr
+    r = subprocess.run([sys.executable, "-c", "import app"], cwd=root, capture_output=True, text=True,
+                       env={**base, "APP_ENV": env_name, "SESSION_SECRET": "synthetic"})
+    assert "SESSION_SECRET обязателен" not in r.stderr
+
+
+def test_audit_limit_cap_and_bad_value(env):
+    owner, _ = make_client(env, "o@example.test", [("owner", "*")])
+    assert owner.get("/admin/audit?limit=abc", base_url=BASE).status_code == 400
+    assert owner.get("/admin/audit?limit=999999", base_url=BASE).status_code == 200
+    seen = []
+    orig = env.audit_rows
+    env.audit_rows = lambda limit=200: seen.append(limit) or orig(limit)
+    owner.get("/admin/audit?limit=999999", base_url=BASE)
+    assert seen == [500]

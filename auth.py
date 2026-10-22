@@ -80,8 +80,9 @@ def store() -> AuthStore:
 
 
 def client_ip():
-    fwd = request.headers.get("X-Forwarded-For", "")
-    return (fwd.split(",")[0].strip() if fwd else request.remote_addr) or ""
+    """Только request.remote_addr: за доверенным прокси его подменяет ProxyFix (TRUSTED_PROXY_COUNT, см. app.py).
+    Заголовок X-Forwarded-For напрямую не читается — клиент мог бы вписать в него любой IP."""
+    return request.remote_addr or ""
 
 
 def audit(action, obj, result, actor=None, detail=None):
@@ -95,7 +96,13 @@ def current_user():
     uid = session.get("uid")
     if uid:
         user = store().user_by_id(uid)
-        if user:
+        if user and user["email"].lower() not in allowlist():
+            # email убран из AUTH_ALLOWLIST — доступ отзывается на ближайшем же запросе
+            audit("logout", request.path, "deny", actor=user["email"], detail="removed_from_allowlist")
+            session.clear()
+            g.rbac_revoked = True
+            user = None
+        elif user:
             user["grants"] = store().active_grants(uid)  # отзыв гранта действует сразу
     g.rbac_user = user
     return user
@@ -171,6 +178,9 @@ def _enforce(fn, roles, scope, external, args, kwargs):
         g.rbac_session_ok = True
         audit(action, obj, "allow", actor=user["email"], detail="case=%s roles=%s" % (case, ",".join(sorted(granted))))
         return fn(*args, **kwargs)
+    if g.get("rbac_revoked") and not (external and _has_external_credential(external)):
+        g.rbac_delegated = None
+        return jsonify({"error": "Доступ запрещён", "code": "removed_from_allowlist"}), 403
     if external and (not user or _has_external_credential(external)):
         g.rbac_delegated = (user["email"] if user else None, action, obj, case)
         return fn(*args, **kwargs)

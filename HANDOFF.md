@@ -113,3 +113,11 @@ HQ-036 — линия A9 (#6 head 83ab1f7 + #11 head 90e2d22) на линии ti
 
 ## 2026-10-16 · MOS Tech · #71
 - Д-93 в CLAUDE.md и docs/STATE.md приведён к Д-92/Д-42 по решению PM: мерж — MOS Tech после зелёного CI и PASS не-автора; Claude в master не мержит.
+
+## MOS-1 #52 · правки по ревью Р-4 (Claude, 22.10)
+- Merge master (63f9000), конфликт только HANDOFF.md.
+- (1) `auth.current_user`: на каждом запросе email сессии сверяется с AUTH_ALLOWLIST; нет — сессия сбрасывается, audit `removed_from_allowlist`, ответ 403 (следующий запрос — 401).
+- (2) `auth.client_ip` = `request.remote_addr`; за прокси — `ProxyFix` по `TRUSTED_PROXY_COUNT` (по умолчанию 0; на Render задать 1 — это переменная окружения, делает MOS Tech).
+- (3) `APP_ENV=staging|production` без `SESSION_SECRET` — `RuntimeError` при импорте приложения.
+- (4) `/admin/audit?limit=`: максимум 500, не число — 400.
+- Тесты в `tests/test_auth.py`. pytest: 376 passed, 4 skipped, 1 warning, 29 subtests passed in 20.89s.

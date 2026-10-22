@@ -17,6 +17,7 @@ from session_store import DurableSessionStore, iso_z, utc_now
 from completion_event import build_completion_payload  # A9: доставка completion — через delivery_worker
 from founder_package import build_package, render_markdown, plan_ledger_write, verify_ledger, validate_package
 from s1_intake.main import init_s1
+from werkzeug.middleware.proxy_fix import ProxyFix
 import auth
 from auth import require_role, public, ANY_ROLE, STAFF_ROLES
 from s3_expert.blueprint import bp as s3_bp
@@ -40,6 +41,14 @@ except ValueError:
     COMPLETION_GATE_LEASE_SECONDS = 300
 MAX_COMPLETION_EVENT_BYTES = 64 * 1024
 PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "https://startup-trainer-a9-staging.onrender.com").rstrip("/")
+if os.environ.get("APP_ENV", "").strip().lower() in ("staging", "production") and not os.environ.get("SESSION_SECRET", "").strip():
+    raise RuntimeError("SESSION_SECRET обязателен при APP_ENV=staging|production: без него сессии подписываются случайным ключом")
+try:
+    _PROXIES = max(0, int(os.environ.get("TRUSTED_PROXY_COUNT", "0")))
+except ValueError:
+    _PROXIES = 0
+if _PROXIES:  # X-Forwarded-For доверяем только от N ближайших прокси (иначе remote_addr)
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=_PROXIES, x_proto=1, x_host=0)
 app.secret_key = os.environ.get("SESSION_SECRET") or os.environ.get("FLASK_SECRET_KEY") or hashlib.sha256((COMPLETION_RECEIVER_SECRET or str(uuid.uuid4())).encode()).hexdigest()
 app.config.update(SESSION_COOKIE_SECURE=True, SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax", PERMANENT_SESSION_LIFETIME=timedelta(hours=12))
 INVITE_CODE = os.environ.get("INVITE_CODE", "PILOT-S1-EXT-001")
@@ -710,7 +719,11 @@ def admin_sessions():
 @app.get("/admin/audit")
 @require_role(["owner"], scope="*")
 def admin_audit():
-    return jsonify(auth.store().audit_rows(int(request.args.get("limit", 200))))
+    try:
+        limit = int(request.args.get("limit", 200))
+    except ValueError:
+        return jsonify({"error": "limit должен быть целым числом", "code": "bad_limit"}), 400
+    return jsonify(auth.store().audit_rows(max(1, min(limit, 500))))
 
 # S1: собственная проверка (Bearer-токены, ключ вебхука, подписанные ссылки) остаётся; сессия owner/fund_staff/investor
 # проходит по ролям. Запрос без сессии передаётся этой проверке (external). См. docs/ACCESS_MATRIX.md.
