@@ -17,6 +17,7 @@ from session_store import DurableSessionStore, iso_z, utc_now
 from completion_event import build_completion_payload  # A9: доставка completion — через delivery_worker
 from founder_package import build_package, render_markdown, plan_ledger_write, verify_ledger, validate_package
 from s1_intake.main import init_s1
+from s2_mandate.blueprint import bp as s2_bp
 from s3_expert.blueprint import bp as s3_bp
 
 app = Flask(__name__)
@@ -60,6 +61,8 @@ app.config["MAX_CONTENT_LENGTH"] = 20 * 1024 * 1024
 init_s1(app)
 # S3 · БП-07 (HQ-023): один вопрос → ответ → бриф, подпись владельца через механизм S1 (/s3/*). Отправки наружу нет.
 app.register_blueprint(s3_bp)
+# S2 · шлюз мандата фонда (#44): правила из s2_mandate/investment_policy.yaml, EXCEPTION решает человек (/s2/*).
+app.register_blueprint(s2_bp)
 ALLOWED_STATUS = {"fact","hypothesis","missing","weak"}
 ALLOWED_REC = {"not_ready","iterate","ready_for_investor_conversation"}
 

@@ -1,0 +1,15 @@
+# S2 · Мандат фонда (issue #44). Источник правил шлюза — этот конфиг, в коде порогов и списков нет.
+# Все значения — ГИПОТЕЗА до решения фонда (Д-013); менять здесь или через S2_POLICY_PATH.
+status: hypothesis
+check_rub:                       # чек, ₽ (границы включительно)
+  min: 6000000
+  max: 10000000
+instruments:                     # значение: preferred | exception | no_fit
+  convertible_loan: preferred    # конвертируемый заём — предпочтительный → FIT
+  equity: exception              # прочие известные инструменты — только по решению человека
+  loan: exception
+  safe: exception
+  grant: no_fit
+unknown_instrument: exception    # инструмент вне списка → на человека
+sectors: [life_sciences, medtech, biotech]   # только эти секторы
+require_innovative: true         # не инновационный проект → NO_FIT

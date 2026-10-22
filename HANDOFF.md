@@ -2,6 +2,20 @@
 
 Обновлять при каждом коммите.
 
+## S2 — шлюз мандата фонда, issue #44, ветка `claude/issue-44-20261022-0512` → master (Claude, 22.10)
+**Сделано**
+- `s2_mandate/investment_policy.yaml` — единственный источник правил: чек 6–10 млн ₽ (границы включительно), инструменты (convertible_loan = preferred; equity/loan/safe → exception; grant → no_fit; неизвестный → exception), сектора life_sciences/medtech/biotech + инновационность. Всё помечено `status: hypothesis`; путь можно сменить через `S2_POLICY_PATH`.
+- `s2_mandate/engine.py` — чистая оценка → FIT / NO_FIT / EXCEPTION (NO_FIT > EXCEPTION > FIT), причины по каждому правилу. Порогов и списков в коде нет (тест по исходнику).
+- `s2_mandate/blueprint.py` — `POST /s2/checks` (admin), `GET /s2/checks/<id>`, `POST /s2/checks/<id>/decision` (approve|reject). Human Gate — механизм S1: персональный токен из `S1_APPROVERS`, журнал `s1_approvals` (outcome `s2_exception_approved|rejected`, хеш записи). Admin-токен решение принять не может (403). `cleared_for_meeting` для EXCEPTION = true только после approve человека. В `app.py` — только регистрация blueprint.
+- Отправки наружу нет. Данные только синтетические.
+
+**Не решено / проверить**
+- Какие инструменты кроме конвертируемого займа — «исключение», а какие «не подходит» (grant → NO_FIT) — моё допущение, нужно решение Бориса/фонда; правится в yaml.
+- Чек вне диапазона = NO_FIT (не EXCEPTION). Валюта — только ₽, без пересчёта.
+- Подключения к S1/Pack (вызов шлюза из потока заявки) нет — отдельная задача.
+
+**Тесты:** 275 passed (новые: tests/test_s2_mandate.py — границы 5.9/6/10/10.1, каждый инструмент, сектор, EXCEPTION без подписи).
+
 ## HQ-023 — S3 Эксперт (БП-07), issue #59, ветка `claude/issue-59-20261013-1241` → master (Claude, 13.10)
 **Сделано**
 - `s3_expert/engine.py` — чистая логика: проверка входа (пустое поле → вернуть пользователю), рамки (LS, один узкий вопрос, границы компетенции, запрет INVEST/PASS/оценки/мед.-юр. вывода → ОТКАЗ + предложение сузить), утверждения со статусами claim / со слов компании / неизвестно / конфликт (статуса «факт» нет), бриф по таблице БП-07, md + json.
