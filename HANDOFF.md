@@ -110,3 +110,6 @@ HQ-036 — линия A9 (#6 head 83ab1f7 + #11 head 90e2d22) на линии ti
 - Новые маршруты S3 попали под RBAC: `create_brief/get_status/review/issue_json/issue_md` — owner/fund_staff + внешний Bearer; `sign` — owner + персональный Bearer из `S1_APPROVERS` (G-12 не ослаблен); `sign_screen` — только вошедшим.
 - Pytest локально (без Postgres): 370 passed, 4 skipped, 29 subtests. Лог — в описании PR.
 - Не проверено: реальный Google OAuth, Postgres-ветка (CI).
+
+## 2026-10-16 · MOS Tech · #71
+- Д-93 в CLAUDE.md и docs/STATE.md приведён к Д-92/Д-42 по решению PM: мерж — MOS Tech после зелёного CI и PASS не-автора; Claude в master не мержит.
