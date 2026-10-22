@@ -19,6 +19,7 @@ from founder_package import build_package, render_markdown, plan_ledger_write, v
 from s1_intake.main import init_s1
 import auth
 from auth import require_role, public, ANY_ROLE, STAFF_ROLES
+from s3_expert.blueprint import bp as s3_bp
 
 app = Flask(__name__, static_folder=None)  # статики нет: маршрут /static не нужен
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
@@ -58,6 +59,8 @@ app.config["MAX_CONTENT_LENGTH"] = 20 * 1024 * 1024
 # S1 · БП-01: приём заявок с Tilda → Readiness Pack (/s1/*). Без S1_* переменных вебхук отвечает 503,
 # тренажёр работает как раньше.
 init_s1(app)
+# S3 · БП-07 (HQ-023): один вопрос → ответ → бриф, подпись владельца через механизм S1 (/s3/*). Отправки наружу нет.
+app.register_blueprint(s3_bp)
 ALLOWED_STATUS = {"fact","hypothesis","missing","weak"}
 ALLOWED_REC = {"not_ready","iterate","ready_for_investor_conversation"}
 
@@ -594,8 +597,9 @@ def start():
         "active_markets":active_markets,
         "jurisdiction_vocab":vocab(active_markets),
         "mode":mode,
-        "hypothesis_a":request.form.get("hypothesis_a","")[:2500],
-        "hypothesis_b":request.form.get("hypothesis_b","")[:2500],
+        # Гипотеза попадает в разбор только в своём сценарии: A — текущая модель, B — новая, C — обе
+        "hypothesis_a":request.form.get("hypothesis_a","")[:2500] if mode in ("A","C") else "",
+        "hypothesis_b":request.form.get("hypothesis_b","")[:2500] if mode in ("B","C") else "",
         "description":request.form.get("description","")[:12000],
         "deck_text":deck_text,
         "input_manifest":input_manifest,
@@ -730,6 +734,11 @@ S1_POLICY = {
         "founder_dialogue", "founder_dialogue_answer", "free_public",
         "cabinet_consent", "cabinet_revoke", "cabinet_consents")},
     "s1_intake.shared_open": (["investor", "owner", "fund_staff"], None, "link"),
+    # S3 (HQ-023): подпись брифа по-прежнему только персональным Bearer из S1_APPROVERS (G-12); сессия заменяет лишь admin-токен
+    **{"s3_expert." + n: _S1_ALL for n in (
+        "create_brief", "get_status", "review", "issue_json", "issue_md")},
+    "s3_expert.sign_screen": (["owner", "fund_staff"], "*", None),  # статичная страница без данных: только вошедшим
+    "s3_expert.sign": (["owner"], "*", "secret"),
 }
 auth.init_auth(app, SESSION_DATABASE_URL, S1_POLICY)
 
