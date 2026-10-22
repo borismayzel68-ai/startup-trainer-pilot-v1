@@ -1,10 +1,5 @@
--- MOS-5 (#56) · вид фонда: роли owner/fund_staff, Decision Snapshot, решения IC, audit_log.
+-- MOS-5 (#56) · вид фонда: Decision Snapshot, решения IC. Роли owner/fund_staff, users, role_grants и audit_log — в 001 (MOS-1).
 -- Идемпотентно. LP-метрик (TVPI/DPI/RVPI/fee/carry) нет (Д-69).
-INSERT INTO roles (code, label) VALUES
-    ('owner',      'Владелец фонда'),
-    ('fund_staff', 'Команда фонда')
-ON CONFLICT (code) DO NOTHING;
-
 -- Один snapshot на стартап. fact_* заполняются только подписью владельца (см. fund_view/service.py).
 CREATE TABLE IF NOT EXISTS decision_snapshots (
     id               BIGSERIAL PRIMARY KEY,
@@ -40,23 +35,10 @@ CREATE TABLE IF NOT EXISTS ic_decisions (
 );
 CREATE INDEX IF NOT EXISTS ic_decisions_startup_idx ON ic_decisions (startup_id, decided_at);
 
-CREATE TABLE IF NOT EXISTS audit_log (
-    id         BIGSERIAL PRIMARY KEY,
-    actor_id   BIGINT REFERENCES users(id),
-    action     TEXT NOT NULL,
-    entity     TEXT NOT NULL,
-    entity_id  BIGINT,
-    detail     JSONB NOT NULL DEFAULT '{}'::jsonb,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
 CREATE OR REPLACE FUNCTION fund_view_append_only() RETURNS trigger AS $$
 BEGIN
     RAISE EXCEPTION '% is append-only', TG_TABLE_NAME;
 END $$ LANGUAGE plpgsql;
 DROP TRIGGER IF EXISTS ic_decisions_no_change ON ic_decisions;
 CREATE TRIGGER ic_decisions_no_change BEFORE UPDATE OR DELETE ON ic_decisions
-    FOR EACH ROW EXECUTE FUNCTION fund_view_append_only();
-DROP TRIGGER IF EXISTS audit_log_no_change ON audit_log;
-CREATE TRIGGER audit_log_no_change BEFORE UPDATE OR DELETE ON audit_log
     FOR EACH ROW EXECUTE FUNCTION fund_view_append_only();

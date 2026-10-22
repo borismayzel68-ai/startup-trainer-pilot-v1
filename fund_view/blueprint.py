@@ -1,17 +1,14 @@
 """MOS-5 (#56): вид фонда (owner / fund_staff). Вида инвестора (Артур) здесь нет — Д-92.
-Сайт не публичный: доступ по allowlist (FUND_TOKENS), X-Robots-Tag + meta noindex на всех ответах /fund/*.
-
-ТОЧКА ЗАМЕНЫ НА AUTH ИЗ #61 (MOS-1): функция resolve_actor(). Пока она сопоставляет Bearer-токен из
-FUND_TOKENS ("токен=email;токен=email") с пользователем и его активным грантом owner/fund_staff в role_grants.
-Роль investor и любые другие сюда не допускаются."""
+Доступ — auth MOS-1: на каждом маршруте auth.require_role("owner", "fund_staff"), пользователь и роль из
+auth.current_user() и грантов; investor → 403, без входа → 401. X-Robots-Tag + meta noindex на всех ответах /fund/*."""
 from __future__ import annotations
 
-import hmac
 import os
 from html import escape
 
-from flask import Blueprint, Response, jsonify, request
+from flask import Blueprint, Response, g, jsonify, request
 
+import auth
 from dealflow.status import InvalidTransition, change_status
 from . import service as S
 from .gates import GateBlocked, evaluate
@@ -29,29 +26,14 @@ def connect():
     return psycopg.connect(url)
 
 
-def _allowlist() -> dict[str, str]:
-    out = {}
-    for pair in os.environ.get("FUND_TOKENS", "").split(";"):
-        tok, _, email = pair.partition("=")
-        if tok.strip() and email.strip():
-            out[tok.strip()] = email.strip().lower()
-    return out
-
-
-def resolve_actor(conn) -> dict | None:
-    """-> {"user_id", "role"} | None (нет в allowlist). Заменить на auth #61."""
-    token = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
-    email = next((e for t, e in _allowlist().items() if token and hmac.compare_digest(token, t)), None)
-    if not email:
+def resolve_actor() -> dict | None:
+    """-> {"user_id", "email", "role"} из сессии MOS-1; owner приоритетнее fund_staff."""
+    user = auth.current_user()
+    if not user:
         return None
-    rows = conn.execute(
-        "SELECT u.id, g.role_code FROM users u JOIN role_grants g ON g.user_id=u.id "
-        "WHERE lower(u.email)=%s AND g.revoked_at IS NULL AND g.scope='*'", (email,)).fetchall()
-    roles = {r[1]: r[0] for r in rows}
-    for role in FUND_ROLES:  # owner приоритетнее
-        if role in roles:
-            return {"user_id": roles[role], "role": role}
-    return {"user_id": rows[0][0] if rows else None, "role": rows[0][1] if rows else "none"}
+    roles = g.get("rbac_roles") or {r for r, _ in user["grants"]}
+    role = next((r for r in FUND_ROLES if r in roles), None)
+    return {"user_id": user["id"], "email": user["email"], "role": role} if role else None
 
 
 @bp.after_request
@@ -75,11 +57,9 @@ def _guard(fn):
         if conn is None:
             return _fail("БД Postgres не настроена", "db_unavailable", 503)
         with conn:
-            actor = resolve_actor(conn)
-            if actor is None:
+            actor = resolve_actor()
+            if actor is None:  # require_role уже отсёк; защита на случай отключённого RBAC в тестах
                 return _fail("нет доступа", "unauthorized", 401)
-            if actor["role"] not in FUND_ROLES:
-                return _fail("роль не допущена к виду фонда", "forbidden", 403)
             st = S.find_startup(conn, vc_id)
             if st is None:
                 return _fail("стартап не найден", "not_found", 404)
@@ -105,12 +85,14 @@ def _view(conn, st) -> dict:
 
 
 @bp.get("/startups/<vc_id>/snapshot")
+@auth.require_role(FUND_ROLES, scope="*")
 @_guard
 def get_snapshot(conn, actor, st):
     return jsonify(_view(conn, st))
 
 
 @bp.get("/startups/<vc_id>/snapshot.html")
+@auth.require_role(FUND_ROLES, scope="*")
 @_guard
 def get_snapshot_html(conn, actor, st):
     v = _view(conn, st)
@@ -128,48 +110,53 @@ def get_snapshot_html(conn, actor, st):
 
 
 @bp.put("/startups/<vc_id>/snapshot")
+@auth.require_role(FUND_ROLES, scope="*")
 @_guard
 def put_snapshot(conn, actor, st):
     body = request.get_json(silent=True) or {}
     if "evidence_status" in body or "asf_engagement" in body:
         return _fail("evidence_status и asf_engagement меняются только подписью owner", "bad_request", 400)
-    snap = S.save_snapshot(conn, st["id"], body, actor["user_id"])
+    snap = S.save_snapshot(conn, st["id"], body, actor)
     return jsonify({"snapshot": snap, "gates": evaluate(snap)})
 
 
 @bp.post("/startups/<vc_id>/engagement")
+@auth.require_role(FUND_ROLES, scope="*")
 @_guard
 def post_engagement(conn, actor, st):
     denied = _owner_only(actor)
     if denied:
         return denied
     snap = S.set_engagement(conn, st["id"], (request.get_json(silent=True) or {}).get("value", ""),
-                            actor["user_id"])
+                            actor)
     return jsonify({"snapshot": snap, "gates": evaluate(snap)})
 
 
 @bp.post("/startups/<vc_id>/sign-fact")
+@auth.require_role(FUND_ROLES, scope="*")
 @_guard
 def post_sign_fact(conn, actor, st):
     denied = _owner_only(actor)
     if denied:
         return denied
-    return jsonify({"snapshot": S.sign_fact(conn, st["id"], actor["user_id"])})
+    return jsonify({"snapshot": S.sign_fact(conn, st["id"], actor)})
 
 
 @bp.post("/startups/<vc_id>/transition")
+@auth.require_role(FUND_ROLES, scope="*")
 @_guard
 def post_transition(conn, actor, st):
     body = request.get_json(silent=True) or {}
     to = body.get("to_status", "")
     change_status(conn, st["id"], to, reason=str(body.get("reason", "")), changed_by=actor["user_id"])
-    S.audit(conn, actor["user_id"], "status.change", "startup", st["id"], {"from": st["status"], "to": to})
+    S.audit(conn, actor, "status.change", "startup", st["id"], {"from": st["status"], "to": to})
     return jsonify({"from_status": st["status"], "to_status": to})
 
 
 @bp.post("/startups/<vc_id>/ic-decision")
+@auth.require_role(FUND_ROLES, scope="*")
 @_guard
 def post_decision(conn, actor, st):
     body = request.get_json(silent=True) or {}
     return jsonify(S.record_decision(conn, st["id"], body.get("quarter", ""), body.get("decision", ""),
-                                     body.get("reason", ""), actor["user_id"]))
+                                     body.get("reason", ""), actor))

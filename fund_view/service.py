@@ -23,9 +23,12 @@ class FundError(ValueError):
     pass
 
 
-def audit(conn, actor_id, action: str, entity: str, entity_id, detail: dict | None = None) -> None:
-    conn.execute("INSERT INTO audit_log (actor_id, action, entity, entity_id, detail) VALUES (%s,%s,%s,%s,%s)",
-                 (actor_id, action, entity, entity_id, json.dumps(detail or {}, ensure_ascii=False)))
+def audit(conn, actor: dict, action: str, entity: str, entity_id, detail: dict | None = None) -> None:
+    """Запись в общий audit_log MOS-1 (миграция 001): actor = email, object = '<entity>:<id>'."""
+    from flask import request
+    conn.execute("INSERT INTO audit_log (actor, action, object, result, ip, detail) VALUES (%s,%s,%s,'allow',%s,%s)",
+                 (actor["email"], action, f"{entity}:{entity_id}", request.remote_addr or "",
+                  json.dumps(detail or {}, ensure_ascii=False)))
 
 
 def find_startup(conn, vc_id: str):
@@ -45,7 +48,7 @@ def load_snapshot(conn, startup_id: int) -> dict | None:
     return snap
 
 
-def save_snapshot(conn, startup_id: int, fields: dict, actor_id) -> dict:
+def save_snapshot(conn, startup_id: int, fields: dict, actor: dict) -> dict:
     """Правка текстовых полей. Статус доказательств этим путём не повышается; любая правка сбрасывает подпись FACT."""
     unknown = set(fields) - set(EDITABLE)
     if unknown:
@@ -56,35 +59,35 @@ def save_snapshot(conn, startup_id: int, fields: dict, actor_id) -> dict:
     sets = [f"{k}=%s" for k in vals] + ["evidence_status='hypothesis'", "fact_signed_by=NULL",
                                         "fact_signed_at=NULL", "updated_by=%s", "updated_at=now()"]
     conn.execute(f"UPDATE decision_snapshots SET {', '.join(sets)} WHERE startup_id=%s",
-                 (*vals.values(), actor_id, startup_id))
-    audit(conn, actor_id, "snapshot.save", "startup", startup_id, {"fields": sorted(vals)})
+                 (*vals.values(), actor["user_id"], startup_id))
+    audit(conn, actor, "snapshot.save", "startup", startup_id, {"fields": sorted(vals)})
     return load_snapshot(conn, startup_id)
 
 
-def set_engagement(conn, startup_id: int, value: str, actor_id) -> dict:
+def set_engagement(conn, startup_id: int, value: str, actor: dict) -> dict:
     """Фиксация участия ASF (Engagement gate). Вызывать только для роли owner."""
     if value not in ("FIXED", "DECLINED", "NOT_DECIDED"):
         raise FundError("asf_engagement: FIXED | DECLINED | NOT_DECIDED")
     conn.execute("INSERT INTO decision_snapshots (startup_id) VALUES (%s) ON CONFLICT (startup_id) DO NOTHING",
                  (startup_id,))
     conn.execute("UPDATE decision_snapshots SET asf_engagement=%s, engagement_by=%s, engagement_at=now(), "
-                 "updated_at=now() WHERE startup_id=%s", (value, actor_id, startup_id))
-    audit(conn, actor_id, "snapshot.engagement", "startup", startup_id, {"value": value})
+                 "updated_at=now() WHERE startup_id=%s", (value, actor["user_id"], startup_id))
+    audit(conn, actor, "snapshot.engagement", "startup", startup_id, {"value": value})
     return load_snapshot(conn, startup_id)
 
 
-def sign_fact(conn, startup_id: int, actor_id) -> dict:
+def sign_fact(conn, startup_id: int, actor: dict) -> dict:
     """FACT только по подписи владельца; гипотеза сама в факт не превращается."""
     snap = load_snapshot(conn, startup_id)
     if not snap or not snap["thesis"]:
         raise FundError("нечего подписывать: тезис пуст")
     conn.execute("UPDATE decision_snapshots SET evidence_status='fact', fact_signed_by=%s, fact_signed_at=now(), "
-                 "updated_at=now() WHERE startup_id=%s", (actor_id, startup_id))
-    audit(conn, actor_id, "snapshot.sign_fact", "startup", startup_id)
+                 "updated_at=now() WHERE startup_id=%s", (actor["user_id"], startup_id))
+    audit(conn, actor, "snapshot.sign_fact", "startup", startup_id)
     return load_snapshot(conn, startup_id)
 
 
-def record_decision(conn, startup_id: int, quarter: str, decision: str, reason: str, actor_id) -> dict:
+def record_decision(conn, startup_id: int, quarter: str, decision: str, reason: str, actor: dict) -> dict:
     """Квартальное решение IC: ic_decisions (history) + при смене статуса deal_status_history + audit_log."""
     decision = (decision or "").upper()
     if decision not in DECISIONS:
@@ -102,10 +105,10 @@ def record_decision(conn, startup_id: int, quarter: str, decision: str, reason: 
     target = {"GO": "ACTIVE" if before == "ON_HOLD" else before, "PAUSE": "ON_HOLD", "STOP": "PASS"}[decision]
     if target != before:
         change_status(conn, startup_id, target, reason=f"IC {quarter} {decision}: {reason.strip()}",
-                      changed_by=actor_id)
+                      changed_by=actor["user_id"])
     conn.execute("INSERT INTO ic_decisions (startup_id, quarter, decision, reason, decided_by) "
-                 "VALUES (%s,%s,%s,%s,%s)", (startup_id, quarter, decision, reason.strip(), actor_id))
-    audit(conn, actor_id, "ic.decision", "startup", startup_id,
+                 "VALUES (%s,%s,%s,%s,%s)", (startup_id, quarter, decision, reason.strip(), actor["user_id"]))
+    audit(conn, actor, "ic.decision", "startup", startup_id,
           {"quarter": quarter, "decision": decision, "from": before, "to": target})
     return {"quarter": quarter, "decision": decision, "from_status": before, "to_status": target}
 
