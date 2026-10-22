@@ -2,6 +2,15 @@
 
 Обновлять при каждом коммите.
 
+## MOS-1 Auth + RBAC (Claude, 13.10, Refs #52)
+- Ветка `claude/issue-52-20261013-0822` → PR в master (не мержить без ревью менеджера и без решения владельца; выпуск на живых пользователей утверждает только Борис).
+- Сделано: Google OAuth (OIDC) + `AUTH_ALLOWLIST` (`auth.py`), хранилище users/grants/audit (`auth_store.py`), миграция 001 финализирована (+owner, fund_staff, audit_log, идемпотентна), `require_role` на каждом маршруте (старт приложения падает при маршруте без декоратора), CSRF, noindex, `/admin?key=` и `ADMIN_KEY` удалены (404; админ-просмотр `/admin/sessions` и `/admin/audit` — только owner), `docs/ACCESS_MATRIX.md`, `tests/test_auth.py`.
+- S1 не сломан: Bearer-токены, ключ вебхука Tilda, подписанные ссылки и `X-Completion-Secret` сохранены как «внешняя проверка» (`external=`); сессия owner/fund_staff/investor проходит по ролям и scope (`job_id`).
+- Тесты: `RBAC` выключается для старых тестов флагом `app.config["AUTH_ENFORCED"]` в `tests/conftest.py` (не env); новые тесты помечены `auth_enforced`.
+- НЕ проверено: P0 #43 — смержен ли, проверить не удалось (нет доступа к gh); Postgres-ветка `AuthStore` и реальный Google OAuth локально не запускались (Postgres-тест пойдёт в CI; OAuth в тестах замокан).
+- Решения для владельца: (1) founder-ссылки S1 и вебхуки остаются на собственных токенах, а не на Google-входе; (2) founder теперь входит через Google — его email нужно добавить в `AUTH_ALLOWLIST` со scope = project_id; (3) старый invite-code по-прежнему нужен в `/api/start`.
+- Перед выкладкой: задать в Render `GOOGLE_CLIENT_ID/SECRET`, `SESSION_SECRET`, `AUTH_ALLOWLIST`, `AUTH_REDIRECT_URI`; убрать `ADMIN_KEY`. Секреты я не менял.
+
 ## HQ-023 — S3 Эксперт (БП-07), issue #59, ветка `claude/issue-59-20261013-1241` → master (Claude, 13.10)
 **Сделано**
 - `s3_expert/engine.py` — чистая логика: проверка входа (пустое поле → вернуть пользователю), рамки (LS, один узкий вопрос, границы компетенции, запрет INVEST/PASS/оценки/мед.-юр. вывода → ОТКАЗ + предложение сузить), утверждения со статусами claim / со слов компании / неизвестно / конфликт (статуса «факт» нет), бриф по таблице БП-07, md + json.
@@ -74,6 +83,12 @@ HQ-036 — линия A9 (#6 head 83ab1f7 + #11 head 90e2d22) на линии ti
 - Замечание: фикс шире, чем «запрет E3»: без файлов теряют источник и deck/model, т.е. E1/E2 → E0 (readiness non-LS кейсов 7–10 → 3–4). Решение Руководителя: подтвердить, что так и задумано.
 - `jobs_kind_check` (db/migrations/002_jobs_queue.sql) этим PR не затронут, не чинилось.
 
+## MOS-1 #52: ребейз на master с #43 (Claude, 14.10)
+- Ветка `claude/issue-52-20261014-0838`: коммит MOS-1 перенесён (cherry-pick) с ветки 13.10 на master после мержа #43. Конфликтов нет.
+- Pytest локально (без Postgres): 310 passed, 4 skipped, 29 subtests. Лог — в описании PR; Postgres-ветка проверяется в CI.
+- Не мержить: мерж делает человек в дневное окно. Порядок критического пути: #52 → #53 → #55, затем #54, #56, #57.
+- Не проверено: реальный вход через Google (в тестах замокан); значения `GOOGLE_CLIENT_ID/SECRET`, `SESSION_SECRET`, `AUTH_ALLOWLIST` в Render не задавались.
+
 ## S1 · утечка примерного текста гипотез в разбор (Claude, 14.10)
 - Ветка `claude/s1-hypothesis-template-leak`, draft PR; Refs #36. Найдено на живой синтетической сессии VC-994: в сценарии A поле «Новая гипотеза» было заполнено примером про «Гемабанк», текст ушёл на сервер и попал в слот business_model.pricing как источник основателя.
 - Код: `templates/index.html` — примерный текст в полях гипотез заменён подсказкой (placeholder); `app.py` — гипотеза сохраняется только в своём сценарии (A — текущая, B — новая, C — обе).
@@ -101,6 +116,13 @@ HQ-036 — линия A9 (#6 head 83ab1f7 + #11 head 90e2d22) на линии ti
 - Полный прогон после merge: 279 passed, 1 warning, 29 subtests passed, 0 skipped (Postgres-тесты выполнены). Лог — в описании PR #72.
 - Ничего не мержил в master. Ревью и мерж — MOS Tech; ready-to-merge 20.10.2026.
 
+## MOS-1 #52 · синхронизация с master 5dfc808 (Claude, 22.10)
+- Поручение Штаба 22.10 (ребейз). Сделан merge master в ветку (не rebase: история ветки уже на PR, force-push запрещён правилами). Конфликты: HANDOFF.md (оставлены обе части), app.py (импорты auth + s3_bp).
+- Поведение MOS-1 сохранено (Google OAuth + allowlist, owner/fund_staff, scope, audit_log, CSRF). Новое из master (S1: шкала E, утечка гипотез; S3 `/s3/*`; MOS-2 dealflow) не тронуто.
+- Новые маршруты S3 попали под RBAC: `create_brief/get_status/review/issue_json/issue_md` — owner/fund_staff + внешний Bearer; `sign` — owner + персональный Bearer из `S1_APPROVERS` (G-12 не ослаблен); `sign_screen` — только вошедшим.
+- Pytest локально (без Postgres): 370 passed, 4 skipped, 29 subtests. Лог — в описании PR.
+- Не проверено: реальный Google OAuth, Postgres-ветка (CI).
+
 ## 2026-10-16 · MOS Tech · #71
 - Д-93 в CLAUDE.md и docs/STATE.md приведён к Д-92/Д-42 по решению PM: мерж — MOS Tech после зелёного CI и PASS не-автора; Claude в master не мержит.
 
@@ -109,3 +131,17 @@ HQ-036 — линия A9 (#6 head 83ab1f7 + #11 head 90e2d22) на линии ti
 - По ревью: (1) стартап, созданный не импортом, со статусом, отличным от CSV, не меняется — `ApplyResult.conflicts` + раздел КОНФЛИКТ в отчёте apply; (2) ID с нераспознанной ссылкой блокируется (`bad_link_ids`, VC-005 больше не пишется); (3) тесты: CSV с BOM/CRLF, файл только с заголовком (3 источника), PG-тест на конфликт.
 - Тесты: 286 passed, 1 warning, 29 subtests passed, 0 skipped (Postgres выполнен). Лог — в описании PR / комментарии.
 - Не мержил, в master не пушил. Реальные заголовки CSV по-прежнему допущение.
+
+## MOS-1 #52 · правки по ревью Р-4 (Claude, 22.10)
+- Merge master (63f9000), конфликт только HANDOFF.md.
+- (1) `auth.current_user`: на каждом запросе email сессии сверяется с AUTH_ALLOWLIST; нет — сессия сбрасывается, audit `removed_from_allowlist`, ответ 403 (следующий запрос — 401).
+- (2) `auth.client_ip` = `request.remote_addr`; за прокси — `ProxyFix` по `TRUSTED_PROXY_COUNT` (по умолчанию 0; на Render задать 1 — это переменная окружения, делает MOS Tech).
+- (3) `APP_ENV=staging|production` без `SESSION_SECRET` — `RuntimeError` при импорте приложения.
+- (4) `/admin/audit?limit=`: максимум 500, не число — 400.
+- Тесты в `tests/test_auth.py`. pytest: 376 passed, 4 skipped, 1 warning, 29 subtests passed in 20.89s.
+
+## MOS-3 · merge master с MOS-1 #61 (Claude, 22.10, Refs #54)
+- В `claude/issue-54-20261014-1648` влит `origin/master` (6bcf282, MOS-1) merge-коммитом, без rebase и force-push. Конфликт только HANDOFF.md — оставлены обе части. Код импорта и код MOS-1 не менялись.
+- Пересечения таблиц нет: MOS-1 владеет `users`, `roles`, `role_grants`, `audit_log` (001); импорт пишет только `startups`, `deal_status_history`, `documents` (003). Дублирования нет.
+- pytest локально: 398 passed, 4 skipped, 1 warning, 29 subtests passed in 29.31s. 4 skipped — Postgres-тесты (БД в этом запуске нет), проверяет CI.
+- Не мержил, в master не пушил.
