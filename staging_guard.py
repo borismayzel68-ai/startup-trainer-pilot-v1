@@ -87,7 +87,7 @@ def mos1_user_loader():
 def init_staging(app, env, data_check=check_synthetic_data, user_loader=None) -> bool:
     @app.after_request
     def _noindex(resp):
-        resp.headers["X-Robots-Tag"] = NOINDEX
+        resp.headers.setdefault("X-Robots-Tag", NOINDEX)  # MOS-1 (auth) ставит свой заголовок первым — не перетираем
         return resp
 
     if (env.get("APP_ENV") or "").strip().lower() != "staging":

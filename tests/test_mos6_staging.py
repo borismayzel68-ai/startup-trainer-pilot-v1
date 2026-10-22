@@ -134,22 +134,12 @@ class RealAppTests(unittest.TestCase):
                 "print(c.get('/', base_url='https://localhost').status_code)")
         return subprocess.run([sys.executable, "-c", code], cwd=ROOT, env=env, capture_output=True, text=True)
 
-    def test_real_app_starts_with_example_env_when_mos1_present(self):
-        # В этой ветке #61 ещё не влит: заглушка auth в отдельном каталоге имитирует его контракт current_user().
-        import tempfile
-        with tempfile.TemporaryDirectory() as d:
-            Path(d, "auth.py").write_text("def current_user():\n    return None\n", encoding="utf-8")
-            p = self.run_app(dict(ENV, DATABASE_URL="sqlite:///:memory:", PYTHONPATH=d))
+    def test_real_app_starts_with_example_env_on_mos1_auth(self):
+        # #61 влит: используется настоящий auth.current_user, заглушки нет.
+        p = self.run_app(dict(ENV, DATABASE_URL="sqlite:///:memory:"))
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertIn("200 noindex", p.stdout)
         self.assertTrue(p.stdout.strip().endswith("302"))
-
-    def test_real_app_refuses_without_mos1_auth(self):
-        if (ROOT / "auth.py").exists():
-            self.skipTest("#61 влит: заглушка не нужна")
-        p = self.run_app(dict(ENV, DATABASE_URL="sqlite:///:memory:"))
-        self.assertNotEqual(p.returncode, 0)
-        self.assertIn("#61", p.stderr)
 
     def test_real_app_fails_without_secret(self):
         p = self.run_app({k: v for k, v in ENV.items() if k != "GOOGLE_CLIENT_SECRET"})
