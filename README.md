@@ -4,7 +4,11 @@ Private founder-facing pilot. Not an investment decision.
 
 ## Env
 - `OPENAI_API_KEY`
-- `OPENAI_MODEL` (default: `gpt-5.6`)
+- `OPENAI_MODEL` (default: `gpt-5.6`) — модель тренажёра (app.py)
+- `OPENAI_BASE_URL` — общий для app.py и S1 (MOS-7). Yandex AI Studio: `https://llm.api.cloud.yandex.net/v1`, модель `gpt://<folder_ID>/<model>`
+- `S1_LLM_MODEL_ID` — явная замена закреплённой модели S1 (TG-1; нужна при смене провайдера)
+- `LLM_JSON_FORMAT` (`json_object` | `json_schema`) — если провайдер не поддерживает json_object
+- Ключ и folder_id на Yandex Cloud — только через Lockbox (как в #57), в репозитории значений нет
 - `INVITE_CODE`
 - `ADMIN_KEY`
 - `SESSION_DATABASE_URL` (or Render-provided `DATABASE_URL`)

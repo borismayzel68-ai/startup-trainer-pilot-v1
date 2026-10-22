@@ -16,7 +16,7 @@ from typing import Callable, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
-from .config import LLM_MODEL_ID, LLM_TEMPERATURE, Settings
+from .config import LLM_TEMPERATURE, Settings
 
 log = logging.getLogger(__name__)
 T = TypeVar("T", bound=BaseModel)
@@ -39,7 +39,7 @@ class LLMClient:
     def __init__(self, settings: Settings, mock_responder: Callable[[str, str], dict] | None = None):
         self.s = settings
         self.provider = settings.llm_provider
-        self.model_name = LLM_MODEL_ID if self.provider == "openai" else "mock"
+        self.model_name = settings.openai_model if self.provider == "openai" else "mock"
         self.calls: list[dict] = []
         self._mock = mock_responder
         self._client = None
@@ -53,21 +53,41 @@ class LLMClient:
         elif self.provider != "mock":
             raise LLMError(f"Unknown LLM_PROVIDER={self.provider}")
 
-    def _raw(self, stage: str, system: str, user: str) -> str:
+    def _text_format(self, schema: type[BaseModel] | None) -> dict:
+        if self.s.llm_json_format == "json_schema" and schema is not None:
+            return {"format": {"type": "json_schema", "name": schema.__name__, "strict": False,
+                               "schema": schema.model_json_schema()}}
+        return {"format": {"type": "json_object"}}
+
+    def _raw(self, stage: str, system: str, user: str, schema: type[BaseModel] | None = None,
+             temperature: float | None = LLM_TEMPERATURE) -> str:
         if self.provider == "mock":
             if not self._mock:
                 raise LLMError("mock provider without responder")
             return json.dumps(self._mock(stage, user), ensure_ascii=False)
+        kwargs = {} if temperature is None else {"temperature": temperature}
         resp = self._client.responses.create(
-            model=LLM_MODEL_ID,
-            temperature=LLM_TEMPERATURE,
+            model=self.s.openai_model,
             input=[
                 {"role": "system", "content": [{"type": "input_text", "text": system}]},
                 {"role": "user", "content": [{"type": "input_text", "text": user}]},
             ],
-            text={"format": {"type": "json_object"}},
+            text=self._text_format(schema),
+            **kwargs,
         )
         return (resp.output_text or "").strip()
+
+    def complete_dict(self, stage: str, system: str, user: str) -> dict:
+        """Свободный JSON-объект без схемы (тренажёр app.py). Модель/base_url — те же, что у S1."""
+        raw = self._raw(stage, system, user, temperature=None)
+        self.calls.append({"stage": stage, "attempt": 1, "model": self.model_name})
+        try:
+            out = json.loads(_extract_json(raw))
+        except json.JSONDecodeError as e:
+            raise LLMError(f"stage {stage}: invalid JSON: {e}") from e
+        if not isinstance(out, dict):
+            raise LLMError(f"stage {stage}: JSON object expected")
+        return out
 
     def complete_json(self, stage: str, system: str, user: str, schema: type[T]) -> T:
         schema_hint = json.dumps(schema.model_json_schema(), ensure_ascii=False)
@@ -83,7 +103,7 @@ class LLMClient:
                    "system_prompt_sha256": hashlib.sha256(system_full.encode()).hexdigest(),
                    "prompt_sha256": hashlib.sha256(f"{system_full}\n\n{msg}".encode()).hexdigest()}
             self.calls.append(rec)
-            raw = self._raw(stage, system_full, msg)
+            raw = self._raw(stage, system_full, msg, schema)
             log.info("llm stage=%s attempt=%d model=%s prompt_sha256=%s %.1fs", stage, attempt,
                      self.model_name, rec["prompt_sha256"][:16], time.monotonic() - t0)
             try:

@@ -2,6 +2,22 @@
 
 Обновлять при каждом коммите.
 
+## MOS-7 — одна точка замены LLM + Yandex AI Studio, issue #68, ветка `claude/issue-68-20261022-0511` → master (Claude, 22.10)
+**Сделано**
+- `app.py` больше не создаёт свой `OpenAI(...)`: `call_json` идёт через `s1_intake.llm.LLMClient.complete_dict` (тот же `OPENAI_BASE_URL`, `OPENAI_API_KEY`, `S1_LLM_PROVIDER`). Модель тренажёра по-прежнему `OPENAI_MODEL`.
+- `LLMClient`: модель из `Settings.openai_model`; `LLM_JSON_FORMAT=json_schema` переключает `text.format` на json_schema из pydantic (на случай, если Yandex не примет json_object).
+- S1: модель закреплена (TG-1) — `OPENAI_MODEL`/`S1_OPENAI_MODEL` по-прежнему не действуют; для смены провайдера введена отдельная явная `S1_LLM_MODEL_ID`.
+- Тест `tests/test_mos7_llm_env.py`: base_url и модель из env в обоих местах. Тесты: 268 passed.
+
+**Не проверено / решения для MOS Tech**
+- Вызова реального Yandex AI Studio не было (нет ключа/сети). Работает ли `json_object` — не подтверждено; fallback `LLM_JSON_FORMAT=json_schema` готов.
+- Поведение app.py изменилось: теперь `text.format=json_object` (раньше формат не задавался). Все три промпта содержат слово JSON.
+- `S1_LLM_MODEL_ID` ослабляет TG-1 (смена модели без коммита) — нужно решение ревьюера.
+- Имена секретов Lockbox: `OPENAI_API_KEY` (ключ Yandex API), `OPENAI_BASE_URL`, `OPENAI_MODEL` (`gpt://<folder_ID>/<model>`), `S1_LLM_MODEL_ID`. Folder_id входит в строку модели → хранить в Lockbox. Значения не трогались.
+- Eval P-07 (приёмка) — отдельно, не в этом PR.
+
+---
+
 ## HQ-023 — S3 Эксперт (БП-07), issue #59, ветка `claude/issue-59-20261013-1241` → master (Claude, 13.10)
 **Сделано**
 - `s3_expert/engine.py` — чистая логика: проверка входа (пустое поле → вернуть пользователю), рамки (LS, один узкий вопрос, границы компетенции, запрет INVEST/PASS/оценки/мед.-юр. вывода → ОТКАЗ + предложение сузить), утверждения со статусами claim / со слов компании / неизвестно / конфликт (статуса «факт» нет), бриф по таблице БП-07, md + json.
