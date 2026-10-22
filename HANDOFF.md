@@ -3,6 +3,8 @@
 Обновлять при каждом коммите.
 
 ## HQ-062 — S3: плательщик (P-91), фильтр S3 в /s1/jobs, вход на /sign-screen; issue #65, ветка `claude/issue-65-20261022-0930` → master (Claude, 22.10)
+- 22.10 (Штаб): влит master (#61, #72, #75) обычным merge; конфликт был только в HANDOFF.md, сохранены обе части; `s1_intake/main.py` слился автоматически. pytest: 396 passed, 17 skipped.
+
 **Сделано**
 - P-91: `POST /s3/briefs` требует `payer` ∈ {`fund`, `brainbox_I`} (точное совпадение, регистр важен). nocvela, rounds и всё прочее → 422, запись не создаётся. Значение хранится в `data.s3.payer`, отдаётся в `GET /s3/briefs/<id>`; в хеш брифа/подпись не входит.
 - `/s1/jobs`: админ-токен видит только S1 (S3 отфильтрован); роль S3 (персональный подписант из `S3_OWNERS`, пусто → любой подписант) видит только S3; чужой подписант → 403, без входа → 401. `GET /s1/jobs/<id>` и артефакты для записи S3 → 404 (S3 только через `/s3/*`). Фильтр — `store.list(limit, s3="exclude"|"only"|"all")`.
@@ -19,6 +21,29 @@
 - CI с Postgres 16 здесь не запускался — смотреть прогон PR.
 
 ---
+
+## LSM v1 · ред. 2 — документ не снимает риск (Claude, 22.10) — Q-096, PR #75
+- Основание: замечание внешнего рецензента 17.10 («наличие документа не закрывает риск»), ДА Бориса 22.10 14:06 (РБ-071, вариант А).
+- Код: `scoring._ls_summary` — отбор барьеров по слабости (нет данных/E0–E2 → E3+ не FACT → FACT), до barriers_max; пункты с документом E3+ остаются с полем `note` «Документ есть; достаточность доказательства проверяет человек»; показ — в каноническом порядке v0.2; К7 — от самого слабого пункта. `founder_report.html` выводит `note`.
+- VC-997 после правки: К2 (E1), К1 (E3, пометка), К4 (E3, пометка), К5 (нет данных), К6 (E0); К3 (E3) не вошёл по лимиту 5.
+- Тесты: `LSMv1BarrierRanking` 5 (новый `test_document_does_not_close_risk`); отрицательный контроль: на ред. 1 (6cefc2d) падает 1/5. Полный прогон: 260 passed, 9 skipped, 29 subtests.
+- Ред. 2b (по приёмке Sonnet 22.10, риск 1): открытые пункты сверх лимита 5 не теряются — `ls.barriers_hidden` + строка в отчёте «Ещё открытые пункты, не вошедшие в список: …» (VC-997: К3). Формулировка К7 уточнена: «от первого по приоритету» (слабые, внутри — v0.2), не «самый слабый по уровню». Тест `test_overflow_items_not_silently_dropped`. Полный прогон: 261 passed, 9 skipped, 29 subtests.
+
+## LSM v1 · ранжирование LS-барьеров (Claude, 17.10) — Q-096
+- Ветка `claude/lsm-v1-barrier-ranking`, draft PR. Решение Бориса 16.10 21:02 (Р-1…Р-3): LSM v1 = LS-ветка внутри S1, приёмка на синтетическом VC-997 «ПО как медизделие».
+- Дефект (найден прогоном VC-997): `scoring._ls_block` сортировал вехи К1–К6 только по порядку v0.2; вехи с документом E3 занимали места, E0 «кто платит» (К6) отрезался лимитом barriers_max=5.
+- Код: `s1_intake/scoring.py` — сначала слабые (нет данных / E0–E2), затем E3+, затем FACT; число барьеров = число слабых (не меньше barriers_min). Веса, балл, методология не менялись.
+- Тесты: `tests/test_hq016_ls_stage.py::LSMv1BarrierRanking` (4). Отрицательный контроль: на старом коде падает 1 из 4. Полный прогон: 259 passed, 9 skipped, 29 subtests passed.
+- Не проверено: живой LLM (синтез «критичных барьеров» на mock-LLM содержит текст про CE/выручку из заглушки — на реальной модели проверить в QA-проходе 20.10, Q-094). Противоречие «ПО не МИ» ↔ назначение с диагностикой не детектируется кодом (только К7 «консультация по классу»).
+
+## MOS-1 Auth + RBAC (Claude, 13.10, Refs #52)
+- Ветка `claude/issue-52-20261013-0822` → PR в master (не мержить без ревью менеджера и без решения владельца; выпуск на живых пользователей утверждает только Борис).
+- Сделано: Google OAuth (OIDC) + `AUTH_ALLOWLIST` (`auth.py`), хранилище users/grants/audit (`auth_store.py`), миграция 001 финализирована (+owner, fund_staff, audit_log, идемпотентна), `require_role` на каждом маршруте (старт приложения падает при маршруте без декоратора), CSRF, noindex, `/admin?key=` и `ADMIN_KEY` удалены (404; админ-просмотр `/admin/sessions` и `/admin/audit` — только owner), `docs/ACCESS_MATRIX.md`, `tests/test_auth.py`.
+- S1 не сломан: Bearer-токены, ключ вебхука Tilda, подписанные ссылки и `X-Completion-Secret` сохранены как «внешняя проверка» (`external=`); сессия owner/fund_staff/investor проходит по ролям и scope (`job_id`).
+- Тесты: `RBAC` выключается для старых тестов флагом `app.config["AUTH_ENFORCED"]` в `tests/conftest.py` (не env); новые тесты помечены `auth_enforced`.
+- НЕ проверено: P0 #43 — смержен ли, проверить не удалось (нет доступа к gh); Postgres-ветка `AuthStore` и реальный Google OAuth локально не запускались (Postgres-тест пойдёт в CI; OAuth в тестах замокан).
+- Решения для владельца: (1) founder-ссылки S1 и вебхуки остаются на собственных токенах, а не на Google-входе; (2) founder теперь входит через Google — его email нужно добавить в `AUTH_ALLOWLIST` со scope = project_id; (3) старый invite-code по-прежнему нужен в `/api/start`.
+- Перед выкладкой: задать в Render `GOOGLE_CLIENT_ID/SECRET`, `SESSION_SECRET`, `AUTH_ALLOWLIST`, `AUTH_REDIRECT_URI`; убрать `ADMIN_KEY`. Секреты я не менял.
 
 ## HQ-023 — S3 Эксперт (БП-07), issue #59, ветка `claude/issue-59-20261013-1241` → master (Claude, 13.10)
 **Сделано**
@@ -92,6 +117,12 @@ HQ-036 — линия A9 (#6 head 83ab1f7 + #11 head 90e2d22) на линии ti
 - Замечание: фикс шире, чем «запрет E3»: без файлов теряют источник и deck/model, т.е. E1/E2 → E0 (readiness non-LS кейсов 7–10 → 3–4). Решение Руководителя: подтвердить, что так и задумано.
 - `jobs_kind_check` (db/migrations/002_jobs_queue.sql) этим PR не затронут, не чинилось.
 
+## MOS-1 #52: ребейз на master с #43 (Claude, 14.10)
+- Ветка `claude/issue-52-20261014-0838`: коммит MOS-1 перенесён (cherry-pick) с ветки 13.10 на master после мержа #43. Конфликтов нет.
+- Pytest локально (без Postgres): 310 passed, 4 skipped, 29 subtests. Лог — в описании PR; Postgres-ветка проверяется в CI.
+- Не мержить: мерж делает человек в дневное окно. Порядок критического пути: #52 → #53 → #55, затем #54, #56, #57.
+- Не проверено: реальный вход через Google (в тестах замокан); значения `GOOGLE_CLIENT_ID/SECRET`, `SESSION_SECRET`, `AUTH_ALLOWLIST` в Render не задавались.
+
 ## S1 · утечка примерного текста гипотез в разбор (Claude, 14.10)
 - Ветка `claude/s1-hypothesis-template-leak`, draft PR; Refs #36. Найдено на живой синтетической сессии VC-994: в сценарии A поле «Новая гипотеза» было заполнено примером про «Гемабанк», текст ушёл на сервер и попал в слот business_model.pricing как источник основателя.
 - Код: `templates/index.html` — примерный текст в полях гипотез заменён подсказкой (placeholder); `app.py` — гипотеза сохраняется только в своём сценарии (A — текущая, B — новая, C — обе).
@@ -107,5 +138,44 @@ HQ-036 — линия A9 (#6 head 83ab1f7 + #11 head 90e2d22) на линии ti
 ## 2026-10-14 · MOS Tech
 - Merged master into the #62 branch (MOS-2): HANDOFF.md conflict, both sections kept. No code changes.
 
+## MOS-3 импорт-CLI из CSV (Claude, 14.10, Refs #54)
+- Ветка `claude/issue-54-20261014-1648` → master, draft PR. Добавлено: `scripts/import_dealflow.py`, `dealflow/importer.py`, `docs/IMPORT_FORMAT.md`, `tests/test_mos3_import.py`, синтетические CSV в `tests/fixtures/import/`, правила в `.gitignore` (`imports/*.csv|json|md`, `import_report*`).
+- Dry-run по умолчанию (БД не трогается, подключение не нужно); `--apply` — одна транзакция, upsert startups/documents, смена статуса с reason=`import`. Дубли, конфликты, ID на проверке и ID без источника статуса не пишутся.
+- Тесты: 276 passed (Postgres-тесты выполнены). Лог — в описании PR.
+- Допущение (нужно подтвердить): реальных заголовков CSV у меня нет — набор колонок и синонимы в `docs/IMPORT_FORMAT.md` выбраны мной. Книги статуса не дают, ID только из книг остаются в отчёте.
+- Не сделано: portfolio_companies и cabinets при импорте не создаются (это #55).
+
+## MOS-3 · merge master в ветку #54 (Claude, 15.10, Refs #54)
+- В `claude/issue-54-20261014-1648` влит `origin/master` (merge, не rebase; +6 коммитов: S1 #66/#67 и др.). Конфликтов нет, кода импорта не менял.
+- Полный прогон после merge: 279 passed, 1 warning, 29 subtests passed, 0 skipped (Postgres-тесты выполнены). Лог — в описании PR #72.
+- Ничего не мержил в master. Ревью и мерж — MOS Tech; ready-to-merge 20.10.2026.
+
+## MOS-1 #52 · синхронизация с master 5dfc808 (Claude, 22.10)
+- Поручение Штаба 22.10 (ребейз). Сделан merge master в ветку (не rebase: история ветки уже на PR, force-push запрещён правилами). Конфликты: HANDOFF.md (оставлены обе части), app.py (импорты auth + s3_bp).
+- Поведение MOS-1 сохранено (Google OAuth + allowlist, owner/fund_staff, scope, audit_log, CSRF). Новое из master (S1: шкала E, утечка гипотез; S3 `/s3/*`; MOS-2 dealflow) не тронуто.
+- Новые маршруты S3 попали под RBAC: `create_brief/get_status/review/issue_json/issue_md` — owner/fund_staff + внешний Bearer; `sign` — owner + персональный Bearer из `S1_APPROVERS` (G-12 не ослаблен); `sign_screen` — только вошедшим.
+- Pytest локально (без Postgres): 370 passed, 4 skipped, 29 subtests. Лог — в описании PR.
+- Не проверено: реальный Google OAuth, Postgres-ветка (CI).
+
 ## 2026-10-16 · MOS Tech · #71
 - Д-93 в CLAUDE.md и docs/STATE.md приведён к Д-92/Д-42 по решению PM: мерж — MOS Tech после зелёного CI и PASS не-автора; Claude в master не мержит.
+
+## MOS-3 · ревью Р-4, merge master (Claude, 22.10, Refs #54)
+- В `claude/issue-54-20261014-1648` влит `origin/master` (merge). Конфликт только HANDOFF.md — оставлены обе секции.
+- По ревью: (1) стартап, созданный не импортом, со статусом, отличным от CSV, не меняется — `ApplyResult.conflicts` + раздел КОНФЛИКТ в отчёте apply; (2) ID с нераспознанной ссылкой блокируется (`bad_link_ids`, VC-005 больше не пишется); (3) тесты: CSV с BOM/CRLF, файл только с заголовком (3 источника), PG-тест на конфликт.
+- Тесты: 286 passed, 1 warning, 29 subtests passed, 0 skipped (Postgres выполнен). Лог — в описании PR / комментарии.
+- Не мержил, в master не пушил. Реальные заголовки CSV по-прежнему допущение.
+
+## MOS-1 #52 · правки по ревью Р-4 (Claude, 22.10)
+- Merge master (63f9000), конфликт только HANDOFF.md.
+- (1) `auth.current_user`: на каждом запросе email сессии сверяется с AUTH_ALLOWLIST; нет — сессия сбрасывается, audit `removed_from_allowlist`, ответ 403 (следующий запрос — 401).
+- (2) `auth.client_ip` = `request.remote_addr`; за прокси — `ProxyFix` по `TRUSTED_PROXY_COUNT` (по умолчанию 0; на Render задать 1 — это переменная окружения, делает MOS Tech).
+- (3) `APP_ENV=staging|production` без `SESSION_SECRET` — `RuntimeError` при импорте приложения.
+- (4) `/admin/audit?limit=`: максимум 500, не число — 400.
+- Тесты в `tests/test_auth.py`. pytest: 376 passed, 4 skipped, 1 warning, 29 subtests passed in 20.89s.
+
+## MOS-3 · merge master с MOS-1 #61 (Claude, 22.10, Refs #54)
+- В `claude/issue-54-20261014-1648` влит `origin/master` (6bcf282, MOS-1) merge-коммитом, без rebase и force-push. Конфликт только HANDOFF.md — оставлены обе части. Код импорта и код MOS-1 не менялись.
+- Пересечения таблиц нет: MOS-1 владеет `users`, `roles`, `role_grants`, `audit_log` (001); импорт пишет только `startups`, `deal_status_history`, `documents` (003). Дублирования нет.
+- pytest локально: 398 passed, 4 skipped, 1 warning, 29 subtests passed in 29.31s. 4 skipped — Postgres-тесты (БД в этом запуске нет), проверяет CI.
+- Не мержил, в master не пушил.

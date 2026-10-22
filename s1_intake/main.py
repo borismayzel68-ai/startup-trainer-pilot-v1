@@ -19,7 +19,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from flask import Blueprint, Flask, Response, current_app, jsonify, request
+from flask import Blueprint, Flask, Response, current_app, g, jsonify, request
 
 from .config import Settings, get_settings, load_methodology
 from .dialogue import (DialogueError, add_r2_item, attach_file, build_session, expire_overdue, r2_candidates,
@@ -248,6 +248,8 @@ def _s3_viewer() -> str | None:
 
 # ------------------------------------------------------------------ auth ----
 def _admin_ok() -> bool:
+    if g.get("rbac_session_ok"):  # MOS-1 (#52): сессия прошла require_role (роль + scope), маршрут её роль допускает
+        return True
     token = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
     expected = _state().settings.admin_token
     return bool(expected) and len(expected) >= 24 and hmac.compare_digest(token, expected)
