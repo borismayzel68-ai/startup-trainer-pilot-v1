@@ -100,3 +100,12 @@ HQ-036 — линия A9 (#6 head 83ab1f7 + #11 head 90e2d22) на линии ti
 - В `claude/issue-54-20261014-1648` влит `origin/master` (merge, не rebase; +6 коммитов: S1 #66/#67 и др.). Конфликтов нет, кода импорта не менял.
 - Полный прогон после merge: 279 passed, 1 warning, 29 subtests passed, 0 skipped (Postgres-тесты выполнены). Лог — в описании PR #72.
 - Ничего не мержил в master. Ревью и мерж — MOS Tech; ready-to-merge 20.10.2026.
+
+## 2026-10-16 · MOS Tech · #71
+- Д-93 в CLAUDE.md и docs/STATE.md приведён к Д-92/Д-42 по решению PM: мерж — MOS Tech после зелёного CI и PASS не-автора; Claude в master не мержит.
+
+## MOS-3 · ревью Р-4, merge master (Claude, 22.10, Refs #54)
+- В `claude/issue-54-20261014-1648` влит `origin/master` (merge). Конфликт только HANDOFF.md — оставлены обе секции.
+- По ревью: (1) стартап, созданный не импортом, со статусом, отличным от CSV, не меняется — `ApplyResult.conflicts` + раздел КОНФЛИКТ в отчёте apply; (2) ID с нераспознанной ссылкой блокируется (`bad_link_ids`, VC-005 больше не пишется); (3) тесты: CSV с BOM/CRLF, файл только с заголовком (3 источника), PG-тест на конфликт.
+- Тесты: 286 passed, 1 warning, 29 subtests passed, 0 skipped (Postgres выполнен). Лог — в описании PR / комментарии.
+- Не мержил, в master не пушил. Реальные заголовки CSV по-прежнему допущение.

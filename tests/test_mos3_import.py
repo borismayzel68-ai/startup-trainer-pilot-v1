@@ -41,6 +41,7 @@ def test_report_lists_duplicates_and_conflicts():
     assert len(rep["rows_without_id"]) == 1
     assert rep["unknown_zones"] == ["99 — SYNTHETIC ZONE"]
     assert [b["vc_id"] for b in rep["bad_links"]] == ["VC-005"]
+    assert rep["bad_link_ids"] == ["VC-005"] and "VC-005" in rep["blocked_ids"]
     assert rep["no_status_source"] == ["VC-176", "VC-182"]
     w = rep["watchlist"]
     assert w["VC-028"] == "ДУБЛЬ" and w["VC-085"] == "КОНФЛИКТ" and w["VC-103"] == "КОНФЛИКТ"
@@ -53,10 +54,10 @@ def test_report_lists_duplicates_and_conflicts():
 def test_clean_ids_and_statuses():
     rep = analyze(PATHS)
     plan = {p["vc_id"]: p for p in rep["to_apply"]}
-    assert set(plan) == {"VC-001", "VC-002", "VC-003", "VC-005", "IM-006"}
+    assert set(plan) == {"VC-001", "VC-002", "VC-003", "IM-006"}
     assert plan["VC-002"]["status"] == "DD" and plan["IM-006"]["status"] == "INVESTED"
     assert plan["VC-001"]["drive"] == [["SYNbookDDD444", "file"], ["SYNfolderAAA111", "folder"]]
-    for blocked in ("VC-028", "VC-085", "VC-103", "VC-104", "VC-170", "VC-176", "VC-182"):
+    for blocked in ("VC-005", "VC-028", "VC-085", "VC-103", "VC-104", "VC-170", "VC-176", "VC-182"):
         assert blocked in rep["blocked_ids"]
 
 
@@ -65,6 +66,32 @@ def test_missing_columns(tmp_path):
     p.write_text("foo,bar\n1,2\n", encoding="utf-8")
     with pytest.raises(ImportFormatError):
         analyze({"books": str(p)})
+
+
+HEADER = "VC ID,Название,Зона,Этап,Ссылка"
+ROW = "VC-901,Synth Crlf,00 — INBOX / НОВЫЕ,,https://drive.google.com/file/d/SYNcrlf901/view"
+
+
+@pytest.mark.parametrize("enc,nl", [("utf-8-sig", "\r\n"), ("utf-8", "\r\n"), ("utf-8-sig", "\n")])
+def test_bom_and_crlf(tmp_path, enc, nl):
+    p = tmp_path / "plan.csv"
+    p.write_bytes((HEADER + nl + ROW + nl).encode(enc))
+    rep = analyze({"migration_plan": str(p)})
+    assert rep["rows_by_source"]["migration_plan"] == 1
+    item = rep["to_apply"][0]
+    assert item["vc_id"] == "VC-901" and item["name"] == "Synth Crlf" and item["status"] == "NOT_SCREENED"
+    assert item["drive"] == [["SYNcrlf901", "file"]] and not rep["bad_links"]
+
+
+@pytest.mark.parametrize("source,header", [("migration_plan", HEADER), ("books", "VC ID,Название"),
+                                           ("core_dashboard", "VC ID,Название,SCREENING")])
+def test_header_only_file(tmp_path, source, header):
+    p = tmp_path / "empty.csv"
+    p.write_text(header + "\r\n", encoding="utf-8-sig")
+    rep = analyze({source: str(p)})
+    assert rep["rows_by_source"][source] == 0
+    assert rep["to_apply"] == [] and rep["blocked_ids"] == [] and rep["unique_ids"] == 0
+    assert "DRY-RUN" in render_markdown(rep)
 
 
 def _cli(*args, env=None):
@@ -123,10 +150,10 @@ class ImportPostgresTests(unittest.TestCase):
     def test_apply_idempotent_and_skips_blocked(self):
         before = self.counts()
         res = apply(self.conn, self.rep)
-        self.assertEqual(res.created, 5)
+        self.assertEqual(res.created, 4)
         self.assertEqual(res.documents_added, 4)
         after = self.counts()
-        self.assertEqual(after, (before[0] + 5, before[1] + 5, before[2] + 4))
+        self.assertEqual(after, (before[0] + 4, before[1] + 4, before[2] + 4))
         reasons = {r[0] for r in self.conn.execute(
             "SELECT h.reason FROM deal_status_history h JOIN startups s ON s.id=h.startup_id "
             "WHERE s.source='import' AND s.vc_id = ANY(%s)", ([p["vc_id"] for p in self.rep["to_apply"]],))}
@@ -135,5 +162,18 @@ class ImportPostgresTests(unittest.TestCase):
             "SELECT count(*) FROM startups WHERE vc_id IN ('VC-028','VC-085','VC-103','VC-104','VC-170','VC-176','VC-182')"
         ).fetchone()[0], 0)
         res2 = apply(self.conn, self.rep)
-        self.assertEqual((res2.created, res2.status_changed, res2.documents_added, res2.unchanged), (0, 0, 0, 5))
+        self.assertEqual((res2.created, res2.status_changed, res2.documents_added, res2.unchanged), (0, 0, 0, 4))
         self.assertEqual(self.counts(), after)
+
+    def test_existing_non_import_startup_is_conflict_not_overwritten(self):
+        from dealflow.status import create_startup
+        manual = next(p for p in self.rep["to_apply"] if p["status"] != "PASS")
+        create_startup(self.conn, manual["vc_id"], "Synth Manual", source="manual", status="PASS",
+                       reason="manual")
+        res = apply(self.conn, self.rep)
+        self.assertEqual(res.created, 3)
+        self.assertEqual([c["vc_id"] for c in res.conflicts], [manual["vc_id"]])
+        cur = self.conn.execute("SELECT current_status::text FROM startups WHERE vc_id=%s",
+                                (manual["vc_id"],)).fetchone()[0]
+        self.assertEqual(cur, "PASS")
+        self.assertIn("КОНФЛИКТ " + manual["vc_id"], render_markdown(self.rep, res))

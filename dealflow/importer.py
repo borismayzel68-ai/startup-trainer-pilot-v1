@@ -132,7 +132,7 @@ def analyze(paths: dict) -> dict:
         if r.vc_id:
             by_id[r.vc_id].append(r)
 
-    duplicates, conflicts, review, no_status, clean = [], [], [], [], {}
+    duplicates, conflicts, review, no_status, bad_link_ids, clean = [], [], [], [], [], {}
     for vid, rs in sorted(by_id.items()):
         per_src = defaultdict(list)
         for r in rs:
@@ -151,6 +151,9 @@ def analyze(paths: dict) -> dict:
             c["statuses"] = sorted(sts)
         if c:
             conflicts.append({"vc_id": vid, **c})
+            blocked = True
+        if any(r.bad_link for r in rs):
+            bad_link_ids.append(vid)
             blocked = True
         flagged = [r for r in rs if r.needs_review]
         if flagged:
@@ -193,6 +196,7 @@ def analyze(paths: dict) -> dict:
         "no_status_source": no_status,
         "unknown_zones": unknown_zones,
         "bad_links": bad_links,
+        "bad_link_ids": bad_link_ids,
         "watchlist": watch,
         "to_apply": plan,
         "blocked_ids": sorted(set(by_id) - set(clean)),
@@ -206,6 +210,7 @@ class ApplyResult:
     unchanged: int = 0
     documents_added: int = 0
     skipped_transitions: list = field(default_factory=list)
+    conflicts: list = field(default_factory=list)  # существующие стартапы не из импорта: статус не тронут
 
 
 def apply(conn, report: dict) -> ApplyResult:
@@ -213,16 +218,20 @@ def apply(conn, report: dict) -> ApplyResult:
     res = ApplyResult()
     with conn.transaction():
         for item in report["to_apply"]:
-            row = conn.execute("SELECT id, current_status::text FROM startups WHERE vc_id=%s FOR UPDATE",
+            row = conn.execute("SELECT id, current_status::text, source FROM startups WHERE vc_id=%s FOR UPDATE",
                                (item["vc_id"],)).fetchone()
             if row is None:
                 sid = create_startup(conn, item["vc_id"], item["name"], stage=item["stage"] or None,
                                      source="import", status=item["status"], reason="import")
                 res.created += 1
             else:
-                sid, cur = row
+                sid, cur, src = row
                 if cur == item["status"]:
                     res.unchanged += 1
+                elif src != "import":
+                    res.conflicts.append({"vc_id": item["vc_id"], "current": cur, "csv": item["status"],
+                                          "source": src})
+                    continue
                 else:
                     try:
                         validate_transition(cur, item["status"])
@@ -261,12 +270,15 @@ def render_markdown(rep: dict, applied: Optional[ApplyResult] = None) -> str:
     L += ["", f"## Строки без ID ({len(rep['rows_without_id'])})"]
     L += [f"- {r['source']}:{r['line']} {r['name']}" for r in rep["rows_without_id"]]
     L += ["", f"## Неизвестные зоны ({len(rep['unknown_zones'])})"] + [f"- {z}" for z in rep["unknown_zones"]]
-    L += ["", f"## Нераспознанные ссылки ({len(rep['bad_links'])})"]
+    L += ["", f"## Нераспознанные ссылки ({len(rep['bad_links'])}) — ID заблокированы"]
     L += [f"- {b['source']}:{b['line']} {b['vc_id']}" for b in rep["bad_links"]]
     if applied:
         L += ["", "## Результат apply", f"- создано: {applied.created}",
               f"- статус изменён: {applied.status_changed}", f"- без изменений: {applied.unchanged}",
               f"- документов добавлено: {applied.documents_added}",
-              f"- переходов пропущено: {len(applied.skipped_transitions)}"]
+              f"- переходов пропущено: {len(applied.skipped_transitions)}",
+              f"- конфликтов с записями не из импорта: {len(applied.conflicts)}"]
+        L += [f"  - КОНФЛИКТ {c['vc_id']}: в БД {c['current']} (source={c['source']}), в CSV {c['csv']}; статус не изменён"
+              for c in applied.conflicts]
         L += [f"  - {s['vc_id']}: {s['reason']}" for s in applied.skipped_transitions]
     return "\n".join(L) + "\n"
