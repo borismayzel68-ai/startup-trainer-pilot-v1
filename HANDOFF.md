@@ -104,6 +104,18 @@ HQ-036 — линия A9 (#6 head 83ab1f7 + #11 head 90e2d22) на линии ti
 ## 2026-10-14 · MOS Tech
 - Merged master into the #62 branch (MOS-2): HANDOFF.md conflict, both sections kept. No code changes.
 
+## MOS-3 импорт-CLI из CSV (Claude, 14.10, Refs #54)
+- Ветка `claude/issue-54-20261014-1648` → master, draft PR. Добавлено: `scripts/import_dealflow.py`, `dealflow/importer.py`, `docs/IMPORT_FORMAT.md`, `tests/test_mos3_import.py`, синтетические CSV в `tests/fixtures/import/`, правила в `.gitignore` (`imports/*.csv|json|md`, `import_report*`).
+- Dry-run по умолчанию (БД не трогается, подключение не нужно); `--apply` — одна транзакция, upsert startups/documents, смена статуса с reason=`import`. Дубли, конфликты, ID на проверке и ID без источника статуса не пишутся.
+- Тесты: 276 passed (Postgres-тесты выполнены). Лог — в описании PR.
+- Допущение (нужно подтвердить): реальных заголовков CSV у меня нет — набор колонок и синонимы в `docs/IMPORT_FORMAT.md` выбраны мной. Книги статуса не дают, ID только из книг остаются в отчёте.
+- Не сделано: portfolio_companies и cabinets при импорте не создаются (это #55).
+
+## MOS-3 · merge master в ветку #54 (Claude, 15.10, Refs #54)
+- В `claude/issue-54-20261014-1648` влит `origin/master` (merge, не rebase; +6 коммитов: S1 #66/#67 и др.). Конфликтов нет, кода импорта не менял.
+- Полный прогон после merge: 279 passed, 1 warning, 29 subtests passed, 0 skipped (Postgres-тесты выполнены). Лог — в описании PR #72.
+- Ничего не мержил в master. Ревью и мерж — MOS Tech; ready-to-merge 20.10.2026.
+
 ## MOS-1 #52 · синхронизация с master 5dfc808 (Claude, 22.10)
 - Поручение Штаба 22.10 (ребейз). Сделан merge master в ветку (не rebase: история ветки уже на PR, force-push запрещён правилами). Конфликты: HANDOFF.md (оставлены обе части), app.py (импорты auth + s3_bp).
 - Поведение MOS-1 сохранено (Google OAuth + allowlist, owner/fund_staff, scope, audit_log, CSRF). Новое из master (S1: шкала E, утечка гипотез; S3 `/s3/*`; MOS-2 dealflow) не тронуто.
@@ -114,6 +126,12 @@ HQ-036 — линия A9 (#6 head 83ab1f7 + #11 head 90e2d22) на линии ti
 ## 2026-10-16 · MOS Tech · #71
 - Д-93 в CLAUDE.md и docs/STATE.md приведён к Д-92/Д-42 по решению PM: мерж — MOS Tech после зелёного CI и PASS не-автора; Claude в master не мержит.
 
+## MOS-3 · ревью Р-4, merge master (Claude, 22.10, Refs #54)
+- В `claude/issue-54-20261014-1648` влит `origin/master` (merge). Конфликт только HANDOFF.md — оставлены обе секции.
+- По ревью: (1) стартап, созданный не импортом, со статусом, отличным от CSV, не меняется — `ApplyResult.conflicts` + раздел КОНФЛИКТ в отчёте apply; (2) ID с нераспознанной ссылкой блокируется (`bad_link_ids`, VC-005 больше не пишется); (3) тесты: CSV с BOM/CRLF, файл только с заголовком (3 источника), PG-тест на конфликт.
+- Тесты: 286 passed, 1 warning, 29 subtests passed, 0 skipped (Postgres выполнен). Лог — в описании PR / комментарии.
+- Не мержил, в master не пушил. Реальные заголовки CSV по-прежнему допущение.
+
 ## MOS-1 #52 · правки по ревью Р-4 (Claude, 22.10)
 - Merge master (63f9000), конфликт только HANDOFF.md.
 - (1) `auth.current_user`: на каждом запросе email сессии сверяется с AUTH_ALLOWLIST; нет — сессия сбрасывается, audit `removed_from_allowlist`, ответ 403 (следующий запрос — 401).
@@ -121,3 +139,9 @@ HQ-036 — линия A9 (#6 head 83ab1f7 + #11 head 90e2d22) на линии ti
 - (3) `APP_ENV=staging|production` без `SESSION_SECRET` — `RuntimeError` при импорте приложения.
 - (4) `/admin/audit?limit=`: максимум 500, не число — 400.
 - Тесты в `tests/test_auth.py`. pytest: 376 passed, 4 skipped, 1 warning, 29 subtests passed in 20.89s.
+
+## MOS-3 · merge master с MOS-1 #61 (Claude, 22.10, Refs #54)
+- В `claude/issue-54-20261014-1648` влит `origin/master` (6bcf282, MOS-1) merge-коммитом, без rebase и force-push. Конфликт только HANDOFF.md — оставлены обе части. Код импорта и код MOS-1 не менялись.
+- Пересечения таблиц нет: MOS-1 владеет `users`, `roles`, `role_grants`, `audit_log` (001); импорт пишет только `startups`, `deal_status_history`, `documents` (003). Дублирования нет.
+- pytest локально: 398 passed, 4 skipped, 1 warning, 29 subtests passed in 29.31s. 4 skipped — Postgres-тесты (БД в этом запуске нет), проверяет CI.
+- Не мержил, в master не пушил.
