@@ -210,3 +210,65 @@ class T8RoleConfig(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LSMv1BarrierRanking(unittest.TestCase):
+    """LSM v1 (решение Бориса 16.10, Q-096): E0-пробел не вытесняется вехами с документом E3."""
+
+    def _samd(self):
+        form = {**h._BASE, "tranid": "synthetic:VC-997", "jurisdiction": "РФ", "product_class": "SOFTWARE_POTENTIAL_MD",
+                "intended_use": "ПО с ИИ: анализ КТ лёгких, подсказка врачу (синтетика)", "ls_stage": "poc"}
+        cls = h.ls_classification([h._claim("C11", "ls_milestones_risks.k2_regulatory_path", 3, ["deck"],
+                                            "«ПО не является медизделием» (синтетика)")])
+        return h.run(form, cls)
+
+    def test_weak_before_evidenced_and_e0_payer_not_dropped(self):
+        res, pack, _ = self._samd()
+        bars = res.scores.ls["barriers"]
+        ks = [b["k"] for b in bars]
+        self.assertIn("К6", ks)                       # E0 «кто платит» — в барьерах
+        self.assertEqual(ks[0], "К2")                 # порядок v0.2 среди слабых сохранён
+        self.assertTrue(2 <= len(bars) <= 5)
+        order = ["К2", "К1", "К4", "К3", "К5", "К6"]
+        self.assertEqual(ks, [k for k in order if k in ks])   # показ — канонический порядок v0.2
+        weak = {b["k"] for b in bars if (b["level"] or 0) < 3}
+        self.assertTrue({"К2", "К5", "К6"} <= weak)             # все слабые отобраны раньше пунктов с документом
+        self.assertEqual(res.scores.ls["next_artifact"]["from"], "К2")
+
+    def test_document_does_not_close_risk(self):
+        """Рецензент 17.10: пункт с документом E3 не исчезает молча — остаётся с пометкой."""
+        res, pack, _ = self._samd()
+        bars = res.scores.ls["barriers"]
+        doc = [b for b in bars if (b["level"] or 0) >= 3]
+        self.assertTrue(doc)
+        for b in doc:
+            self.assertIn("проверяет человек", b["note"])
+            self.assertIn(b["note"], pack["founder_report_html"])
+        self.assertTrue(all(b["note"] is None for b in bars if (b["level"] or 0) < 3))
+
+    def test_overflow_items_not_silently_dropped(self):
+        """Приёмка 22.10: открытый пункт сверх лимита 5 называется в отчёте, а не исчезает."""
+        res, pack, _ = self._samd()
+        ls = res.scores.ls
+        shown = {b["k"] for b in ls["barriers"]}
+        hidden = ls["barriers_hidden"]
+        self.assertEqual({h["k"] for h in hidden}, {"К3"})
+        self.assertFalse(shown & {h["k"] for h in hidden})
+        self.assertIn("не вошедшие в список", pack["founder_report_html"])
+        self.assertIn(hidden[0]["label"], pack["founder_report_html"])
+
+    def test_deck_claim_never_lifts_regulatory_to_e3(self):
+        res, _, _ = self._samd()
+        k2 = [it for b in res.scores.blocks for it in b.items if it.key.endswith("k2_regulatory_path")][0]
+        self.assertLess(k2.best_level, 3)
+
+    def test_no_success_probabilities_for_devices(self):
+        _, pack, _ = self._samd()
+        html = pack["founder_report_html"] + pack["analyst_brief_html"]
+        for bad in ("вероятность успеха", "PoS", "LOA", "probability of success"):
+            self.assertNotIn(bad, html)
+
+    def test_pre_revenue_ls_not_zeroed(self):
+        res, _, _ = self._samd()
+        self.assertEqual(len(res.scores.ls["na_slots"]), 3)
+        self.assertGreater(res.scores.readiness, 0)
