@@ -16,6 +16,12 @@
 - Имена секретов Lockbox: `OPENAI_API_KEY` (ключ Yandex API), `OPENAI_BASE_URL`, `OPENAI_MODEL` (`gpt://<folder_ID>/<model>`), `S1_LLM_MODEL_ID`. Folder_id входит в строку модели → хранить в Lockbox. Значения не трогались.
 - Eval P-07 (приёмка) — отдельно, не в этом PR.
 
+**Правки по ревью Р-4 (Claude, 22.10)**
+- Замечание 1: добавлен `LLM_JSON_FORMAT=none` — `text.format` не передаётся, JSON достаётся через `_extract_json`; работает и для app.py (`complete_dict`), и для S1. По умолчанию `json_object` (как было). `json_schema` по-прежнему действует только для S1 (у `complete_dict` нет схемы → `json_object`); это зафиксировано в README, `.env.example`, docstring.
+- Замечание 2: тест `test_app_base_url_and_model_from_env` откатывает перезагруженный `app` в `finally` (исходные MODEL/client восстановлены). Новые тесты: оба режима (`json_object`/`json_schema` → json_object для complete_dict; `none` → без `text`).
+- Замечание 3: docstring `llm.py` обновлён (модель — из env; S1 по умолчанию закреплена, TG-1). Две переменные модели (`OPENAI_MODEL` / `S1_LLM_MODEL_ID`) остаются — решение ревьюера по TG-1 не принято.
+- Тесты: 270 passed, 1 warning. Не проверено: реальный вызов Yandex.
+
 ---
 
 ## HQ-023 — S3 Эксперт (БП-07), issue #59, ветка `claude/issue-59-20261013-1241` → master (Claude, 13.10)

@@ -1,7 +1,12 @@
 """LLM-слой: один метод complete_json(), возвращающий провалидированную Pydantic-модель.
 
-- OpenAI Responses API. TG-1: модель — фиксированный ID (config.LLM_MODEL_ID), temperature=0,
-  на каждый вызов пишется запись в self.calls: стадия, попытка, модель, temperature, sha256 промпта.
+- OpenAI Responses API (MOS-7: base_url, ключ и модель — из env через config.Settings; единая точка
+  замены LLM и для S1, и для тренажёра app.py). TG-1: модель S1 по умолчанию — фиксированный ID
+  (config.LLM_MODEL_ID), смена только явной S1_LLM_MODEL_ID; temperature=0 у S1. На каждый вызов пишется
+  запись в self.calls: стадия, попытка, модель, temperature, sha256 промпта.
+- Формат ответа (LLM_JSON_FORMAT): json_object (по умолчанию) | json_schema (только complete_json, где есть
+  схема; для complete_dict остаётся json_object) | none (text.format не передаётся, JSON достаётся через
+  _extract_json — для провайдеров без поддержки json_object).
 - JSON-mode + валидация Pydantic + 1 повтор с текстом ошибки валидации.
 - Mock-провайдер — детерминированные ответы для тестов и dry-run без ключа.
 """
@@ -53,7 +58,9 @@ class LLMClient:
         elif self.provider != "mock":
             raise LLMError(f"Unknown LLM_PROVIDER={self.provider}")
 
-    def _text_format(self, schema: type[BaseModel] | None) -> dict:
+    def _text_format(self, schema: type[BaseModel] | None) -> dict | None:
+        if self.s.llm_json_format == "none":
+            return None
         if self.s.llm_json_format == "json_schema" and schema is not None:
             return {"format": {"type": "json_schema", "name": schema.__name__, "strict": False,
                                "schema": schema.model_json_schema()}}
@@ -66,13 +73,15 @@ class LLMClient:
                 raise LLMError("mock provider without responder")
             return json.dumps(self._mock(stage, user), ensure_ascii=False)
         kwargs = {} if temperature is None else {"temperature": temperature}
+        text_format = self._text_format(schema)
+        if text_format is not None:
+            kwargs["text"] = text_format
         resp = self._client.responses.create(
             model=self.s.openai_model,
             input=[
                 {"role": "system", "content": [{"type": "input_text", "text": system}]},
                 {"role": "user", "content": [{"type": "input_text", "text": user}]},
             ],
-            text=self._text_format(schema),
             **kwargs,
         )
         return (resp.output_text or "").strip()

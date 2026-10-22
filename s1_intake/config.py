@@ -70,7 +70,7 @@ class Settings:
     # TG-1: модель по умолчанию зафиксирована в коде (точный ID снапшота); OPENAI_MODEL / S1_OPENAI_MODEL её НЕ меняют.
     # MOS-7: смена провайдера (Yandex AI Studio, `gpt://<folder_ID>/<model>`) — только явной переменной S1_LLM_MODEL_ID.
     openai_model: str = field(default_factory=lambda: _env("S1_LLM_MODEL_ID", LLM_MODEL_ID))
-    # json_object | json_schema (если провайдер не поддерживает json_object)
+    # json_object | json_schema (только вызовы со схемой) | none (без text.format, если провайдер не принимает json_object)
     llm_json_format: str = field(default_factory=lambda: _env("LLM_JSON_FORMAT", "json_object"))
     llm_timeout_s: float = field(default_factory=lambda: float(_env("S1_LLM_TIMEOUT_S", "180")))
 

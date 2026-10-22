@@ -1,6 +1,7 @@
 """MOS-7: base_url и модель берутся из env в обоих местах (app.py и s1_intake). Без сети."""
 import importlib
 import os
+import sys
 import unittest
 from unittest import mock
 
@@ -54,17 +55,45 @@ class LLMEnvTests(unittest.TestCase):
     def test_app_base_url_and_model_from_env(self):
         env = {"S1_LLM_PROVIDER": "openai", "OPENAI_API_KEY": "k", "OPENAI_BASE_URL": BASE,
                "OPENAI_MODEL": YA_MODEL}
-        with mock.patch.dict(os.environ, env):
-            import app as appmod
-            appmod = importlib.reload(appmod)
-            got = {}
-            appmod.client._client.responses.create = lambda **kw: (got.update(kw), FakeResp())[1]
-            out = appmod.call_json("Return JSON only", "x")
-            self.assertEqual(str(appmod.client._client.base_url).rstrip("/"), BASE)
-        self.assertEqual(appmod.MODEL, YA_MODEL)
+        import app as appmod
+        saved = dict(vars(appmod))
+        try:
+            with mock.patch.dict(os.environ, env):
+                importlib.reload(appmod)
+                got = {}
+                appmod.client._client.responses.create = lambda **kw: (got.update(kw), FakeResp())[1]
+                out = appmod.call_json("Return JSON only", "x")
+                self.assertEqual(str(appmod.client._client.base_url).rstrip("/"), BASE)
+                self.assertEqual(appmod.MODEL, YA_MODEL)
+        finally:
+            # откат: тот же объект модуля в sys.modules, исходные MODEL/client/функции
+            vars(appmod).clear()
+            vars(appmod).update(saved)
+            sys.modules["app"] = appmod
         self.assertEqual(got["model"], YA_MODEL)
         self.assertEqual(out["covered"], [])
         self.assertNotIn("temperature", got)
+        self.assertNotEqual(appmod.MODEL, YA_MODEL)
+
+    def test_complete_dict_default_formats_keep_json_object(self):
+        for fmt in ("json_object", "json_schema"):
+            with mock.patch.dict(os.environ, {"S1_LLM_PROVIDER": "openai", "LLM_JSON_FORMAT": fmt}):
+                c, got = captured_client(cfg.Settings())
+            self.assertEqual(c.complete_dict("t", "sys", "usr")["a"], 1)
+            self.assertEqual(got["text"]["format"], {"type": "json_object"}, fmt)
+
+    def test_format_none_omits_text_format(self):
+        class Wrapped:
+            output_text = 'Вот ответ: {"a": 1, "covered": []} готово'
+
+        with mock.patch.dict(os.environ, {"S1_LLM_PROVIDER": "openai", "LLM_JSON_FORMAT": "none"}):
+            c, got = captured_client(cfg.Settings())
+        c._client.responses.create = lambda **kw: (got.update(kw), Wrapped())[1]
+        self.assertEqual(c.complete_dict("t", "sys", "usr")["a"], 1)
+        self.assertNotIn("text", got)
+        got.clear()
+        self.assertEqual(c.complete_json("t", "sys", "usr", Out).a, 1)
+        self.assertNotIn("text", got)
 
     def test_json_schema_fallback(self):
         with mock.patch.dict(os.environ, {"S1_LLM_PROVIDER": "openai", "LLM_JSON_FORMAT": "json_schema"}):
