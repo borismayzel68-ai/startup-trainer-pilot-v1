@@ -14,6 +14,7 @@ import hashlib
 import hmac
 import json
 import logging
+import os
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -237,6 +238,14 @@ def _approver() -> str | None:
     return None
 
 
+def _s3_viewer() -> str | None:
+    """HQ-062: роль S3 — персональный подписант из S3_OWNERS (пусто → любой подписант S1).
+    Временная проверка до auth.current_user() из #61 (MOS-1): заменить только эту функцию."""
+    who = _approver()
+    owners = {x.strip() for x in os.environ.get("S3_OWNERS", "").split(",") if x.strip()}
+    return who if who and (not owners or who in owners) else None
+
+
 # ------------------------------------------------------------------ auth ----
 def _admin_ok() -> bool:
     token = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
@@ -292,10 +301,12 @@ def tilda_webhook():
 
 @bp.get("/jobs")
 def list_jobs():
-    if not _admin_ok():
-        return _err("unauthorized", 401)
     limit = min(int(request.args.get("limit", 50)), 500)
-    return jsonify(_state().store.list(limit))
+    if _admin_ok():  # HQ-062: админ видит S1, записи S3 — нет
+        return jsonify(_state().store.list(limit, s3="exclude"))
+    if _s3_viewer():  # роль S3 видит только S3
+        return jsonify(_state().store.list(limit, s3="only"))
+    return _err("forbidden" if _approver() else "unauthorized", 403 if _approver() else 401)
 
 
 @bp.get("/jobs/<job_id>")
@@ -303,7 +314,7 @@ def get_job(job_id):
     if not _admin_ok():
         return _err("unauthorized", 401)
     job = _state().store.get(job_id)
-    if not job:
+    if not job or job["data"].get("s3"):  # S3 — только через /s3/* (HQ-062)
         return _err("not found", 404)
     data = job.pop("data")
     brief = (data.get("readiness_pack") or {}).get("internal_analyst_brief") or {}
@@ -335,7 +346,7 @@ def get_artifact(job_id, artifact):
         return _err("not found", 404)
     job = _state().store.get(job_id)
     key, kind = _ARTIFACTS[artifact]
-    if not job or key not in job["data"]:
+    if not job or job["data"].get("s3") or key not in job["data"]:
         return _err("not found", 404)
     value = job["data"][key]
     if kind == "json":

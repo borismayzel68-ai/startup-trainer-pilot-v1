@@ -19,6 +19,8 @@ from . import engine as E
 
 bp = Blueprint("s3_expert", __name__, url_prefix="/s3")
 SIGNED = "s3_signed"
+# P-91: плательщик эксперта — договор эксперт↔фонд или расчётный канал S7. Nocvela не плательщик; Rounds вне денежных потоков.
+PAYERS = ("fund", "brainbox_I")
 
 
 def _owners() -> set[str]:
@@ -60,13 +62,15 @@ def create_brief():
     body = request.get_json(silent=True)
     if not isinstance(body, dict):
         return _err("bad payload", 400)
+    if body.get("payer") not in PAYERS:
+        return jsonify({"error": "payer must be one of: " + ", ".join(PAYERS), "payer": str(body.get("payer"))[:40]}), 422
     missing = E.validate_input(body)
     if missing:
         return jsonify({"status": "returned", "missing": missing,
                         "message": "Заполните поля и отправьте запрос заново: " + ", ".join(missing)}), 422
     brief = E.build_brief(body)
     store = _state().store
-    brief_id, _ = store.create_or_get("s3-" + uuid.uuid4().hex, "S3 brief", "", {"s3": {"brief": brief}})
+    brief_id, _ = store.create_or_get("s3-" + uuid.uuid4().hex, "S3 brief", "", {"s3": {"brief": brief, "payer": body["payer"]}})
     # статус ready_for_review: не 'received', чтобы S1 не подхватил запись как свою заявку при рестарте
     store.update(brief_id, status="ready_for_review")
     return jsonify({"id": brief_id, "state": E.STATE_AWAITING, "outcome": brief["outcome"], "class": brief["class"],
@@ -83,7 +87,8 @@ def get_status(brief_id):
         return _err("not found", 404)
     full = _with_sign(brief_id, s3["brief"])
     return jsonify({"id": brief_id, "state": full["sign"]["state"], "issued": full["sign"]["state"] == E.STATE_SIGNED,
-                    "signed_by": full["sign"]["by"], "signed_at": full["sign"]["at"]})
+                    "signed_by": full["sign"]["by"], "signed_at": full["sign"]["at"],
+                    "payer": s3.get("payer")})
 
 
 @bp.get("/briefs/<brief_id>/review")
@@ -175,5 +180,8 @@ document.getElementById('sign').onclick = async () => {
 
 @bp.get("/briefs/<brief_id>/sign-screen")
 def sign_screen(brief_id):
-    """Экран подписи «проверил, дата». Страница статическая и содержимого брифа не несёт — оно грузится с токеном."""
+    """Экран подписи «проверил, дата». Только с входом (HQ-062): без токена — 401, не-подписант — 403.
+    Страница статическая и содержимого брифа не несёт — оно грузится с токеном."""
+    if not _signer():
+        return _err("login required", 403 if (_admin_ok() or _approver()) else 401)
     return Response(_SIGN_PAGE, mimetype="text/html")
