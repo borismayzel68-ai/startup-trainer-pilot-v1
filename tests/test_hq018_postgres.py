@@ -61,7 +61,8 @@ class Hq018PostgresTests(unittest.TestCase):
             roles = {r[0] for r in c.execute("SELECT code FROM roles")}
             cols = {r[0] for r in c.execute(
                 "SELECT column_name FROM information_schema.columns WHERE table_name IN ('users','role_grants')")}
-        self.assertEqual(roles, {"founder", "investor", "expert", "signer", "clinic", "syndicator"})
+        self.assertEqual(roles, {"founder", "investor", "expert", "signer", "clinic", "syndicator",
+                                "owner", "fund_staff"})  # owner/fund_staff — миграция 004 (#55)
         self.assertFalse({c for c in cols if "tariff" in c or "subscription" in c or "plan" in c})
 
 
