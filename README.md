@@ -6,7 +6,7 @@ Private founder-facing pilot. Not an investment decision.
 - `OPENAI_API_KEY`
 - `OPENAI_MODEL` (default: `gpt-5.6`)
 - `INVITE_CODE`
-- `ADMIN_KEY`
+- `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` (Google OAuth), `SESSION_SECRET`, `AUTH_ALLOWLIST` (`email:role[:scope]`, comma-separated), optional `AUTH_REDIRECT_URI` — see `docs/ACCESS_MATRIX.md`. `ADMIN_KEY` and `/admin?key=` were removed (404); admin view is `/admin/sessions`, owner only.
 - `SESSION_DATABASE_URL` (or Render-provided `DATABASE_URL`)
 - `SESSION_RETENTION_DAYS` (default: `30`)
 - `TRAINER_EVENT_WEBHOOK` (Make webhook used by the A9 delivery worker)

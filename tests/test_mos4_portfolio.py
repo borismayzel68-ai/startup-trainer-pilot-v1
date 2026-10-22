@@ -161,20 +161,64 @@ def test_no_lp_fields_in_views_code_and_migration():
     assert not LP.search(sql)
 
 
-def test_http_default_is_forbidden_and_with_actor_works():
+@pytest.fixture
+def http(monkeypatch):
+    """Реальный вход MOS-1 (сессия + гранты в AuthStore), репозиторий — синтетика."""
     os.environ.setdefault("OPENAI_API_KEY", "test-key")
-    from app import app
+    os.environ.setdefault("SESSION_DATABASE_URL", "sqlite:///:memory:")
+    import app as appmod
+    from auth_store import AuthStore
     from portfolio import blueprint
-    cl = app.test_client()
-    blueprint.configure(lambda: None, FakeRepo)
-    assert cl.get("/portfolio").status_code == 403
-    blueprint.configure(lambda: ACTORS["inv_one"], FakeRepo)
-    try:
-        assert [r["vc_id"] for r in cl.get("/portfolio").get_json()] == ["SYN-002"]
-        assert cl.get("/portfolio/SYN-001").status_code == 403
-        assert cl.get("/portfolio/SYN-002").status_code == 200
-    finally:
-        blueprint.configure(lambda: None, lambda: None)
+    monkeypatch.setenv("AUTH_ALLOWLIST", "")
+    fresh, old = AuthStore("sqlite:///:memory:"), appmod.app.extensions["auth_store"]
+    appmod.app.extensions["auth_store"] = fresh
+    blueprint.configure(FakeRepo)
+
+    def client(email, grants):
+        os.environ["AUTH_ALLOWLIST"] = os.environ.get("AUTH_ALLOWLIST", "") + ",%s:%s" % (email, grants[0][0])
+        user = fresh.upsert_user(email, "Synthetic")
+        for role, scope in grants:
+            fresh.ensure_grant(user["id"], role, scope)
+        c = appmod.app.test_client()
+        with c.session_transaction() as s:
+            s["uid"] = user["id"]
+        return c
+    yield client, appmod.app.test_client()
+    blueprint.configure(None)
+    appmod.app.extensions["auth_store"] = old
+
+
+@pytest.mark.auth_enforced
+def test_http_roles_via_mos1_auth(http):
+    client, anon = http
+    assert anon.get("/portfolio").status_code == 401
+    assert client("o@example.test", [("owner", "*")]).get("/portfolio").status_code == 200
+    assert len(client("s@example.test", [("fund_staff", "*")]).get("/portfolio").get_json()) == 6
+    inv = client("i@example.test", [("investor", "SYN-002")])
+    assert [r["vc_id"] for r in inv.get("/portfolio").get_json()] == ["SYN-002"]
+    assert inv.get("/portfolio/SYN-001").status_code == 403
+    assert inv.get("/portfolio/SYN-002").status_code == 200
+    for role in ("founder", "expert"):
+        c = client("%s@example.test" % role, [(role, "SYN-001")])
+        assert c.get("/portfolio").status_code == 403
+        assert c.get("/portfolio/SYN-001").status_code == 403
+
+
+@pytest.mark.auth_enforced
+def test_http_scoped_staff_grant_is_not_full_access(http):
+    client, _ = http
+    c = client("ss@example.test", [("fund_staff", "CASE-A")])
+    assert c.get("/portfolio").status_code == 403
+
+
+def test_actor_from_grants():
+    from portfolio.blueprint import actor_from_user
+    assert actor_from_user(None) is None
+    assert actor_from_user({"grants": []}) is None
+    assert actor_from_user({"grants": [("owner", "*")]}).role == "owner"
+    assert actor_from_user({"grants": [("fund_staff", "X")]}) is None
+    a = actor_from_user({"grants": [("investor", "SYN-001"), ("investor", "SYN-002")]})
+    assert a.scopes == {"SYN-001", "SYN-002"}
 
 
 @unittest.skipUnless(PG_URL.startswith("postgresql://"), "HQ018_PG_URL не задан")

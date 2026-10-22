@@ -16,6 +16,10 @@ class Forbidden(PermissionError):
     pass
 
 
+class Unavailable(RuntimeError):
+    pass
+
+
 def _view(company: dict, snap: dict | None, today: date) -> dict:
     snap = snap or {}
     res = rag.evaluate(snap.get("runway_months"), snap.get("burn"), snap.get("plan_burn"),
