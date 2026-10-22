@@ -88,3 +88,6 @@ HQ-036 — линия A9 (#6 head 83ab1f7 + #11 head 90e2d22) на линии ti
 
 ## 2026-10-14 · MOS Tech
 - Merged master into the #62 branch (MOS-2): HANDOFF.md conflict, both sections kept. No code changes.
+
+## 2026-10-16 · MOS Tech · #71
+- Д-93 в CLAUDE.md и docs/STATE.md приведён к Д-92/Д-42 по решению PM: мерж — MOS Tech после зелёного CI и PASS не-автора; Claude в master не мержит.
