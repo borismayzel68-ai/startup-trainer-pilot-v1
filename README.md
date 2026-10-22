@@ -10,7 +10,7 @@ Private founder-facing pilot. Not an investment decision.
 - `LLM_JSON_FORMAT` (`json_object` | `json_schema` | `none`) — если провайдер не поддерживает json_object; `json_schema` действует только для S1 (есть схема), для тренажёра app.py запасной режим — `none` (без text.format, JSON извлекается из текста)
 - Ключ и folder_id на Yandex Cloud — только через Lockbox (как в #57), в репозитории значений нет
 - `INVITE_CODE`
-- `ADMIN_KEY`
+- `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` (Google OAuth), `SESSION_SECRET`, `AUTH_ALLOWLIST` (`email:role[:scope]`, comma-separated), optional `AUTH_REDIRECT_URI` — see `docs/ACCESS_MATRIX.md`. `ADMIN_KEY` and `/admin?key=` were removed (404); admin view is `/admin/sessions`, owner only.
 - `SESSION_DATABASE_URL` (or Render-provided `DATABASE_URL`)
 - `SESSION_RETENTION_DAYS` (default: `30`)
 - `TRAINER_EVENT_WEBHOOK` (Make webhook used by the A9 delivery worker)
