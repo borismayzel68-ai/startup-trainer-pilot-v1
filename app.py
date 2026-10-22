@@ -60,6 +60,9 @@ app.config["MAX_CONTENT_LENGTH"] = 20 * 1024 * 1024
 init_s1(app)
 # S3 · БП-07 (HQ-023): один вопрос → ответ → бриф, подпись владельца через механизм S1 (/s3/*). Отправки наружу нет.
 app.register_blueprint(s3_bp)
+# MOS-5 (#56): вид фонда (owner/fund_staff), /fund/*. Доступ по allowlist FUND_TOKENS, noindex.
+from fund_view.blueprint import bp as fund_bp  # noqa: E402
+app.register_blueprint(fund_bp)
 ALLOWED_STATUS = {"fact","hypothesis","missing","weak"}
 ALLOWED_REC = {"not_ready","iterate","ready_for_investor_conversation"}
 

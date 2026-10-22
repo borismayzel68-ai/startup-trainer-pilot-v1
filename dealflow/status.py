@@ -51,6 +51,10 @@ def change_status(conn, startup_id: int, to_status: str, *, reason: str = "", ch
     if row is None:
         raise LookupError(f"startup {startup_id} не найден")
     validate_transition(row[0], to_status)
+    if to_status in ("DD", "IC"):  # MOS-5: шлюзы Operating Manual, серверная проверка
+        from fund_view.service import load_snapshot
+        from fund_view.gates import check_transition
+        check_transition(to_status, load_snapshot(conn, startup_id))
     conn.execute("UPDATE startups SET current_status=%s, updated_at=now() WHERE id=%s",
                  (to_status, startup_id))
     conn.execute(

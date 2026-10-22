@@ -2,6 +2,33 @@
 
 Обновлять при каждом коммите.
 
+## MOS-5 (#56) — вид фонда, сокращённый объём по Д-92 (Claude, 22.10), ветка `claude/issue-56-20261022-0934` → master
+**Сделано (только вид фонда owner/fund_staff; вида инвестора/Артура нет)**
+- `db/migrations/004_fund_view.sql`: роли owner, fund_staff; `decision_snapshots`, `ic_decisions` (append-only), `audit_log` (append-only).
+- `fund_view/gates.py` + проверка в `dealflow/status.py:change_status`: переход в DD/IC без шлюзов Thesis / Buyer (кто И когда) / Engagement (FIXED) → `GateBlocked` (HTTP 409 с перечнем). Блок на сервере, в т.ч. при прямом вызове change_status.
+- `fund_view/service.py`: Decision Snapshot; FACT только `sign-fact` владельца, любая правка сбрасывает в hypothesis; Engagement фиксирует только owner; решения IC GO/PAUSE/STOP → `ic_decisions` + `deal_status_history` (PAUSE→ON_HOLD, STOP→PASS, GO из ON_HOLD→ACTIVE) + `audit_log`; чек-лист из `docs/standards/ARTUR_STANDARD.md` дословно (заголовки и пункты `- [ ]`), без файла — «стандарт не загружен».
+- `fund_view/blueprint.py` (`/fund/startups/<vc_id>/...`): snapshot (json/html), engagement, sign-fact, transition, ic-decision. noindex: `X-Robots-Tag`, meta; robots.txt уже был. Доступ — allowlist `FUND_TOKENS="токен=email;..."` + грант owner/fund_staff в role_grants; investor → 403.
+- Тест `test_hq018_postgres` обновлён: набор ролей теперь включает owner, fund_staff.
+
+**Остаток (не делалось по решению)**
+- Вид инвестора (Артур) — вне объёма по Д-92.
+- Еженедельный обзор G/Y/R по активным проектам.
+- Дашборд фонда #45 (воронка по enum, портфель RAG, next actions).
+
+**Точка замены auth (#61 не в master):** `fund_view/blueprint.py:resolve_actor()` — заменить на auth MOS-1. Сейчас Bearer-токен из env `FUND_TOKENS` (секретов в репо нет) → email → грант в role_grants.
+
+**Не проверено / ограничения**
+- Текста стандарта Артура в репо нет; содержание не выдумывалось. Разбор markdown — по заголовкам и `- [ ]`; формат реального файла может потребовать правки парсера.
+- Шлюзы проверяются в Python (change_status), не триггером БД: прямой SQL UPDATE startups их обойдёт.
+- «Участие ASF» = поле asf_engagement=FIXED, ставит owner; семантику уточнить с PM. Квартал решения — строка YYYY-Qn, повторное решение за тот же квартал не запрещено.
+- На Render/живых пользователях не запускалось.
+
+**Тесты:** 281 passed (17 новых: tests/test_mos5_fund_view.py), локально с Postgres.
+
+---
+
+# Предыдущее
+
 ## HQ-023 — S3 Эксперт (БП-07), issue #59, ветка `claude/issue-59-20261013-1241` → master (Claude, 13.10)
 **Сделано**
 - `s3_expert/engine.py` — чистая логика: проверка входа (пустое поле → вернуть пользователю), рамки (LS, один узкий вопрос, границы компетенции, запрет INVEST/PASS/оценки/мед.-юр. вывода → ОТКАЗ + предложение сузить), утверждения со статусами claim / со слов компании / неизвестно / конфликт (статуса «факт» нет), бриф по таблице БП-07, md + json.
