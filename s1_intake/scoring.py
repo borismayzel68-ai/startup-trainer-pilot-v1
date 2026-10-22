@@ -184,7 +184,7 @@ def _ls_summary(ctx: dict, m: dict, blocks_out: list[BlockScore], na: dict[str, 
     order = rule.get("barrier_order", [])
     milestones = [{"k": checklist[it.key]["ls_k"], "key": it.key, "label": it.label, "level": it.best_level,
                    "status": it.status.value, "applicability": it.applicability} for it in ms]
-    barriers, next_artifact = [], None
+    barriers, next_artifact, hidden = [], None, []
     if ms:
         # порядок v0.2: регуляторный трек, клинические данные, IP, производство, возмещение.
         # LSM v1 (16.10): сначала слабые (нет данных / E0–E2), потом подтверждённые документом (E3+), потом FACT;
@@ -203,7 +203,11 @@ def _ls_summary(ctx: dict, m: dict, blocks_out: list[BlockScore], na: dict[str, 
                      "status": it.status.value, "level": it.best_level,
                      "note": doc_note if (_evidenced(it) and it.status != Category.FACT) else None}
                     for it in ranked[:n]]
-        # Отбор — по слабости доказательства; показ — в каноническом порядке v0.2. К7 — от самого слабого пункта.
+        # Не вошедшие в лимит открытые пункты не теряются молча — список «не показаны» (ревью 22.10).
+        hidden = [{"k": checklist[it.key]["ls_k"], "label": it.label, "level": it.best_level}
+                  for it in ranked[n:] if it.status != Category.FACT]
+        # Отбор — по слабости доказательства; показ — в каноническом порядке v0.2.
+        # К7 — от первого по приоритету пункта (слабые, внутри — порядок v0.2).
         weakest = barriers[0]
         barriers.sort(key=lambda b: order.index(b["k"]))
         next_artifact = {"k7": "К7", "from": weakest["k"], "artifact": weakest["next_step"],
@@ -216,6 +220,7 @@ def _ls_summary(ctx: dict, m: dict, blocks_out: list[BlockScore], na: dict[str, 
         "applicable_weight": round(applicable_weight, 4), "excluded_blocks": excluded,
         "slots_scored": len(scored), "slots_applicable": len(applicable),
         "na_slots": na_rows, "milestones": milestones, "barriers": barriers, "next_artifact": next_artifact,
+        "barriers_hidden": hidden,
         "summary_line": f"Readiness {readiness}/100 · {len(scored)} из {len(applicable)} применимых слотов"
                         f" · не применимо по стадии: {na_list}",
     }

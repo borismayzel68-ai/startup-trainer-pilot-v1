@@ -246,6 +246,17 @@ class LSMv1BarrierRanking(unittest.TestCase):
             self.assertIn(b["note"], pack["founder_report_html"])
         self.assertTrue(all(b["note"] is None for b in bars if (b["level"] or 0) < 3))
 
+    def test_overflow_items_not_silently_dropped(self):
+        """Приёмка 22.10: открытый пункт сверх лимита 5 называется в отчёте, а не исчезает."""
+        res, pack, _ = self._samd()
+        ls = res.scores.ls
+        shown = {b["k"] for b in ls["barriers"]}
+        hidden = ls["barriers_hidden"]
+        self.assertEqual({h["k"] for h in hidden}, {"К3"})
+        self.assertFalse(shown & {h["k"] for h in hidden})
+        self.assertIn("не вошедшие в список", pack["founder_report_html"])
+        self.assertIn(hidden[0]["label"], pack["founder_report_html"])
+
     def test_deck_claim_never_lifts_regulatory_to_e3(self):
         res, _, _ = self._samd()
         k2 = [it for b in res.scores.blocks for it in b.items if it.key.endswith("k2_regulatory_path")][0]
