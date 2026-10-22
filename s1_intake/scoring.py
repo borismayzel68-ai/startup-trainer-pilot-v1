@@ -193,12 +193,20 @@ def _ls_summary(ctx: dict, m: dict, blocks_out: list[BlockScore], na: dict[str, 
             return (it.best_level or 0) >= 3
         ranked = sorted(ms, key=lambda it: (it.status == Category.FACT, _evidenced(it),
                                              order.index(checklist[it.key]["ls_k"])))
-        weak = [it for it in ranked if it.status != Category.FACT and not _evidenced(it)]
-        n = min(max(len(weak), int(rule["barriers_min"])), int(rule["barriers_max"]), len(ranked))
+        # 22.10 (замечание рецензента, ДА Бориса): документ не снимает риск сам. Пункты с документом E3+
+        # (не FACT) остаются в барьерах после слабых, с пометкой «достаточность проверяет человек».
+        open_items = [it for it in ranked if it.status != Category.FACT]
+        n = min(max(len(open_items), int(rule["barriers_min"])), int(rule["barriers_max"]), len(ranked))
+        doc_note = rule.get("barrier_doc_note", "Документ есть; достаточность доказательства проверяет человек")
         barriers = [{"k": checklist[it.key]["ls_k"], "key": it.key, "label": it.label,
                      "why": checklist[it.key]["why"], "next_step": checklist[it.key]["next_step"],
-                     "status": it.status.value, "level": it.best_level} for it in ranked[:n]]
-        next_artifact = {"k7": "К7", "from": barriers[0]["k"], "artifact": barriers[0]["next_step"],
+                     "status": it.status.value, "level": it.best_level,
+                     "note": doc_note if (_evidenced(it) and it.status != Category.FACT) else None}
+                    for it in ranked[:n]]
+        # Отбор — по слабости доказательства; показ — в каноническом порядке v0.2. К7 — от самого слабого пункта.
+        weakest = barriers[0]
+        barriers.sort(key=lambda b: order.index(b["k"]))
+        next_artifact = {"k7": "К7", "from": weakest["k"], "artifact": weakest["next_step"],
                          "mark": "рабочее, до пилота"}
     na_list = ", ".join(r["label"] for r in na_rows) or "—"
     return {

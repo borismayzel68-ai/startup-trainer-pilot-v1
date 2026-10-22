@@ -51,7 +51,7 @@
 {% if ls.barriers %}
 <h3>LS-барьеры</h3>
 {% for b in ls.barriers %}
-<div class="card warn"><b>{{ b.label }}</b><div class="small">{{ b.why }}</div></div>
+<div class="card warn"><b>{{ b.label }}</b><div class="small">{{ b.why }}</div>{% if b.note %}<div class="small muted">{{ b.note }}</div>{% endif %}</div>
 {% endfor %}
 {% endif %}
 {% if ls.next_artifact %}

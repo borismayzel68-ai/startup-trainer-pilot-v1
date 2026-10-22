@@ -227,9 +227,24 @@ class LSMv1BarrierRanking(unittest.TestCase):
         bars = res.scores.ls["barriers"]
         ks = [b["k"] for b in bars]
         self.assertIn("К6", ks)                       # E0 «кто платит» — в барьерах
-        self.assertTrue(all((b["level"] or 0) < 3 for b in bars))  # E3-вехи не выдаются за барьер
         self.assertEqual(ks[0], "К2")                 # порядок v0.2 среди слабых сохранён
         self.assertTrue(2 <= len(bars) <= 5)
+        order = ["К2", "К1", "К4", "К3", "К5", "К6"]
+        self.assertEqual(ks, [k for k in order if k in ks])   # показ — канонический порядок v0.2
+        weak = {b["k"] for b in bars if (b["level"] or 0) < 3}
+        self.assertTrue({"К2", "К5", "К6"} <= weak)             # все слабые отобраны раньше пунктов с документом
+        self.assertEqual(res.scores.ls["next_artifact"]["from"], "К2")
+
+    def test_document_does_not_close_risk(self):
+        """Рецензент 17.10: пункт с документом E3 не исчезает молча — остаётся с пометкой."""
+        res, pack, _ = self._samd()
+        bars = res.scores.ls["barriers"]
+        doc = [b for b in bars if (b["level"] or 0) >= 3]
+        self.assertTrue(doc)
+        for b in doc:
+            self.assertIn("проверяет человек", b["note"])
+            self.assertIn(b["note"], pack["founder_report_html"])
+        self.assertTrue(all(b["note"] is None for b in bars if (b["level"] or 0) < 3))
 
     def test_deck_claim_never_lifts_regulatory_to_e3(self):
         res, _, _ = self._samd()
