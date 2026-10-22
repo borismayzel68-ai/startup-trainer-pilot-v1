@@ -1,81 +1,36 @@
-# ПРЕДЛОЖЕНИЕ (MOS-6, Refs #57). Claude не может пушить в .github/workflows/ (нет права workflows).
-# После ревью MOS Tech перенести как .github/workflows/yc-deploy.yml.
-#
-# Деплой staging в Yandex Cloud (Serverless Containers + Container Registry). Только ручной запуск.
-# Пока секрет YC_SA_KEY пуст (ключ сервисного аккаунта будет после 20.10) — деплой-шаги ПРОПУСКАЮТСЯ, job зелёный.
-# ID облака/каталога/реестра — в Repository variables (Settings → Variables), в коде их нет:
-#   YC_CLOUD_ID, YC_FOLDER_ID, YC_REGISTRY_ID, YC_CONTAINER_NAME, YC_SERVICE_ACCOUNT_ID (SA, от имени которого работает контейнер)
-# Секрет: YC_SA_KEY — JSON-ключ сервисного аккаунта (роли: container-registry.images.pusher,
-#   serverless-containers.editor, iam.serviceAccounts.user). Секреты приложения — Yandex Lockbox, не GitHub.
-name: yc-deploy
-
+# ПРЕДЛОЖЕНИЕ (.proposed, MOS-6, Refs #57). Не активен: лежит вне .github/workflows (у Claude нет права workflows).
+# Решение о переносе в .github/workflows/deploy-staging.yml и о запуске принимает MOS Tech; ничего не выкатывается.
+# Правила: только ручной запуск; отдельный от tests.yml; prod-секреты есть ТОЛЬКО здесь, в job тестов их нет.
+# Секреты хранятся в GitHub Environment `staging` (с обязательным ревьюером). Значений в репо нет.
+name: deploy-staging
 on:
   workflow_dispatch:
-
 permissions:
   contents: read
-
-concurrency:
-  group: yc-deploy-staging
-  cancel-in-progress: false
-
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-    env:
-      YC_SA_KEY: ${{ secrets.YC_SA_KEY }}
-      YC_CLOUD_ID: ${{ vars.YC_CLOUD_ID }}
-      YC_FOLDER_ID: ${{ vars.YC_FOLDER_ID }}
-      YC_REGISTRY_ID: ${{ vars.YC_REGISTRY_ID }}
-      YC_CONTAINER_NAME: ${{ vars.YC_CONTAINER_NAME }}
-      YC_SERVICE_ACCOUNT_ID: ${{ vars.YC_SERVICE_ACCOUNT_ID }}
+    environment: staging
     steps:
-      - name: Проверка секрета
-        id: gate
-        run: |
-          if [ -n "$YC_SA_KEY" ]; then echo "enabled=true" >> "$GITHUB_OUTPUT"
-          else echo "enabled=false" >> "$GITHUB_OUTPUT"; echo "::notice::YC_SA_KEY пуст — деплой пропущен"; fi
-
       - uses: actions/checkout@v4
-        if: steps.gate.outputs.enabled == 'true'
-
-      - name: Проверка переменных
-        if: steps.gate.outputs.enabled == 'true'
+      - name: Install yc CLI
         run: |
-          for v in YC_CLOUD_ID YC_FOLDER_ID YC_REGISTRY_ID YC_CONTAINER_NAME YC_SERVICE_ACCOUNT_ID; do
-            [ -n "${!v}" ] || { echo "::error::не задана переменная $v"; exit 1; }
-          done
-
-      - name: Установка yc CLI и вход
-        if: steps.gate.outputs.enabled == 'true'
-        run: |
-          curl -sSL https://storage.yandexcloud.net/yandexcloud-yc/install.sh | bash -s -- -n -i "$HOME/yandex-cloud"
+          curl -sSL https://storage.yandexcloud.net/yandexcloud-yc/install.sh | bash -s -- -a
           echo "$HOME/yandex-cloud/bin" >> "$GITHUB_PATH"
-          printf '%s' "$YC_SA_KEY" > "$RUNNER_TEMP/sa-key.json"
-          "$HOME/yandex-cloud/bin/yc" config set service-account-key "$RUNNER_TEMP/sa-key.json"
-          "$HOME/yandex-cloud/bin/yc" config set cloud-id "$YC_CLOUD_ID"
-          "$HOME/yandex-cloud/bin/yc" config set folder-id "$YC_FOLDER_ID"
-
-      - name: Сборка и push образа
-        if: steps.gate.outputs.enabled == 'true'
+      - name: yc auth (ключ сервисного аккаунта деплоя)
+        env:
+          YC_SA_KEY_JSON: ${{ secrets.YC_SA_KEY_JSON }}
         run: |
-          yc container registry configure-docker
-          IMAGE="cr.yandex/${YC_REGISTRY_ID}/${YC_CONTAINER_NAME}:${GITHUB_SHA}"
-          docker build -t "$IMAGE" .
-          docker push "$IMAGE"
-          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
-
-      - name: Деплой ревизии
-        if: steps.gate.outputs.enabled == 'true'
-        run: |
-          # Секреты приложения (DATABASE_URL, GOOGLE_*, SESSION_SECRET, AUTH_ALLOWLIST, OPENAI_API_KEY) берутся из Lockbox:
-          # настраиваются отдельно командой yc serverless container revision deploy --secret ... (см. docs/DEPLOY.md).
-          yc serverless container revision deploy \
-            --container-name "$YC_CONTAINER_NAME" \
-            --image "$IMAGE" \
-            --service-account-id "$YC_SERVICE_ACCOUNT_ID" \
-            --cores 1 --memory 1GB --concurrency 8 --execution-timeout 180s \
-            --command sh \
-            --args "-c,python scripts/hq018_migrate.py && exec gunicorn -b 0.0.0.0:8080 --timeout 180 app:app" \
-            --environment APP_ENV=staging,STAGING_SYNTHETIC_ONLY=true,S1_LLM_PROVIDER=mock
+          printf '%s' "$YC_SA_KEY_JSON" > "$RUNNER_TEMP/sa-key.json"
+          yc config set service-account-key "$RUNNER_TEMP/sa-key.json"
+          yc config set folder-id "${{ secrets.YC_FOLDER_ID }}"
+      - name: Deploy (образ -> снимок БД -> миграции -> web)
+        env:
+          YC_FOLDER_ID: ${{ secrets.YC_FOLDER_ID }}
+          YC_REGISTRY_ID: ${{ secrets.YC_REGISTRY_ID }}
+          YC_NETWORK_ID: ${{ secrets.YC_NETWORK_ID }}
+          YC_RUNTIME_SA_ID: ${{ secrets.YC_RUNTIME_SA_ID }}
+          YC_PG_CLUSTER_ID: ${{ secrets.YC_PG_CLUSTER_ID }}
+          LOCKBOX_SECRET_ID: ${{ secrets.LOCKBOX_SECRET_ID }}
+          AUTH_REDIRECT_URI: ${{ secrets.AUTH_REDIRECT_URI }}
+        run: deploy/yc/deploy.sh

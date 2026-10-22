@@ -17,8 +17,8 @@ from session_store import DurableSessionStore, iso_z, utc_now
 from completion_event import build_completion_payload  # A9: доставка completion — через delivery_worker
 from founder_package import build_package, render_markdown, plan_ledger_write, verify_ledger, validate_package
 from s1_intake.main import init_s1
-from staging_guard import init_staging
 from s3_expert.blueprint import bp as s3_bp
+from staging_guard import init_staging
 
 app = Flask(__name__)
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
@@ -53,7 +53,7 @@ SESSIONS = DurableSessionStore(
     SESSION_DATABASE_URL,
     retention_days=SESSION_RETENTION_DAYS,
 )
-# MOS-6: закрытый staging (APP_ENV=staging): проверка env, вход по allowlist, noindex. Иначе — только noindex-заголовок.
+# MOS-6: закрытый staging (APP_ENV=staging): проверка env, замок по сессии MOS-1 (#61), только синтетика. Иначе — только noindex-заголовок.
 init_staging(app, os.environ)
 # A9 (#11): лимит размера запроса 20 МБ — на всё приложение, включая /s1/* (S1 принимает JSON-тела
 # и ссылки на файлы; сами файлы скачиваются парсером с отдельным лимитом S1_MAX_FILE_MB).
