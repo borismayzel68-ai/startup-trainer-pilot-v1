@@ -20,6 +20,6 @@ HQ018_PG_URL=postgresql://trainer:local-e1-only@127.0.0.1:5433/trainer_e1 python
 ```
 `tests/test_hq018_postgres.py` без `HQ018_PG_URL` пропускается (skip), остальные тесты не меняются.
 
-## Черновики миграций (только роли/доступ и очередь)
-- `db/migrations/001_roles_access.sql` — `users`, `roles` (6 ролей), `role_grants`. Полей тарифа/подписки нет.
+## Миграции (только роли/доступ и очередь)
+- `db/migrations/001_roles_access.sql` — `users`, `roles` (8 ролей, +owner, fund_staff), `role_grants`, `audit_log` (MOS-1, #52). Полей тарифа/подписки нет.
 - `db/migrations/002_jobs_queue.sql` — `jobs`: только `tilda_intake` и `final_analysis`, `UNIQUE(kind, dedup_key)`.
