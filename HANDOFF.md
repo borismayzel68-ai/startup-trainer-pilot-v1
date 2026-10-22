@@ -2,7 +2,6 @@
 
 Обновлять при каждом коммите.
 
-<<<<<<< HEAD
 ## MOS-4 — Портфель (паспорт, светофор S5, Д-68), issue #55, ветка `claude/issue-55-20261022-0511` → master (Claude, 22.10)
 **Сделано**
 - `db/migrations/004_portfolio_passport.sql`: роли `owner`, `fund_staff`; `portfolio_companies` + `holding_vehicle` (fund | partner_nominee), настраиваемые пороги runway (CHECK 6–18, red < yellow); таблица `portfolio_passport_snapshots` (cost, valuation basis/date, round, ownership %, runway, burn, plan_burn, next milestone что/когда/кто, loan income, дата последнего апдейта инвестору), append-only, UNIQUE (company, дата). LP-колонок нет.
@@ -11,14 +10,14 @@
 - `app.py`: зарегистрирован blueprint `/portfolio`.
 
 **Не сделано / допущения — важно**
-- В приложении нет сессионной авторизации по ролям. Blueprint получает актора и репозиторий через `portfolio.blueprint.configure(...)`; пока не вызван — всегда 403. Подключение к реальной авторизации — #49. Страницы HTML нет, только JSON.
+- 22.10 (merge master 34d43f4: MOS-1 #61 + MOS-3 #72): заглушка актора убрана. Маршруты `/portfolio` и `/portfolio/<vc_id>` защищены `auth.require_role(owner, fund_staff, investor)`; актор строится из грантов `auth.current_user()` (`blueprint.actor_from_user`): owner/fund_staff со scope `*` — весь портфель, investor — по своим scope (vc_id или `*`), founder/expert и fund_staff с узким scope — 403, без входа — 401. `configure()` теперь задаёт только репозиторий (по умолчанию Postgres по SESSION_DATABASE_URL; без него 503). Страницы HTML нет, только JSON (#49).
 - Интерпретации, которые надо подтвердить: отклонение burn считается по модулю (и недорасход тоже флаг); план = 0 или не задан → флаг не ставится; «обновление» = поле `last_investor_update` снапшота.
 - Спецификация SPEC v0.2 с Drive исполнителю недоступна; строил по тексту issue и комментариям. Формы ввода/импорта снапшотов нет (реальные данные — импортом вне репо).
-- noindex/robots/allowlist не менялись и не проверялись в этой задаче.
-- Тест `test_hq018_postgres` обновлён: набор ролей теперь включает owner и fund_staff.
+- Роли `owner`/`fund_staff` теперь добавляет и 001 (MOS-1); в 004 они остаются с ON CONFLICT DO NOTHING — безопасно.
+- Postgres-тесты (миграция 004, append-only) локально пропущены (нет HQ018_PG_URL), пойдут в CI.
 
-**Тесты:** 305 passed (41 новых: tests/test_mos4_portfolio.py, включая Postgres-тест миграции).
-=======
+**Тесты:** 443 passed, 4 skipped после merge master (HTTP-тесты портфеля — через реальный вход MOS-1).
+
 ## MOS-1 Auth + RBAC (Claude, 13.10, Refs #52)
 - Ветка `claude/issue-52-20261013-0822` → PR в master (не мержить без ревью менеджера и без решения владельца; выпуск на живых пользователей утверждает только Борис).
 - Сделано: Google OAuth (OIDC) + `AUTH_ALLOWLIST` (`auth.py`), хранилище users/grants/audit (`auth_store.py`), миграция 001 финализирована (+owner, fund_staff, audit_log, идемпотентна), `require_role` на каждом маршруте (старт приложения падает при маршруте без декоратора), CSRF, noindex, `/admin?key=` и `ADMIN_KEY` удалены (404; админ-просмотр `/admin/sessions` и `/admin/audit` — только owner), `docs/ACCESS_MATRIX.md`, `tests/test_auth.py`.
@@ -27,7 +26,6 @@
 - НЕ проверено: P0 #43 — смержен ли, проверить не удалось (нет доступа к gh); Postgres-ветка `AuthStore` и реальный Google OAuth локально не запускались (Postgres-тест пойдёт в CI; OAuth в тестах замокан).
 - Решения для владельца: (1) founder-ссылки S1 и вебхуки остаются на собственных токенах, а не на Google-входе; (2) founder теперь входит через Google — его email нужно добавить в `AUTH_ALLOWLIST` со scope = project_id; (3) старый invite-code по-прежнему нужен в `/api/start`.
 - Перед выкладкой: задать в Render `GOOGLE_CLIENT_ID/SECRET`, `SESSION_SECRET`, `AUTH_ALLOWLIST`, `AUTH_REDIRECT_URI`; убрать `ADMIN_KEY`. Секреты я не менял.
->>>>>>> origin/master
 
 ## HQ-023 — S3 Эксперт (БП-07), issue #59, ветка `claude/issue-59-20261013-1241` → master (Claude, 13.10)
 **Сделано**
