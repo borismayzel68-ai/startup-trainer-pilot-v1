@@ -2,10 +2,9 @@
 
 Обновлять при каждом коммите.
 
-<<<<<<< HEAD
 ## HQ-042 — S5 сверка с паспортом входа + триггер частичного выхода, issue #41, ветка `claude/issue-41-20261022-0932` (Claude, 22.10)
 **Сделано**
-- `portfolio_update/__init__.py` — отдельный модуль (паспорт портфеля MOS-4 / PR #80 в master не влит): `reconcile` (список расхождений changed / missing_in_update / not_in_passport), `mark_new_round` (флаг проверки частичного выхода, идемпотентно), `ask`/`answer` (модель вопросов и приём ответа, без отправки в мессенджер и без сети), доступ только роли фонда. Точка подключения: собрать `EntryPassport` из полей MOS-4.
+- `portfolio_update/__init__.py` — отдельный модуль (паспорт портфеля MOS-4 влит в master 23.10, модуль к нему пока не подключён): `reconcile` (список расхождений changed / missing_in_update / not_in_passport), `mark_new_round` (флаг проверки частичного выхода, идемпотентно), `ask`/`answer` (модель вопросов и приём ответа, без отправки в мессенджер и без сети), доступ только роли фонда. Точка подключения: собрать `EntryPassport` из полей MOS-4.
 - `docs/hq042_reconcile_example.md` — синтетический пример отчёта (сверяется тестом с `render_report`).
 - Тесты: `tests/test_hq042_s5_reconcile.py`. Весь прогон (до merge master): 273 passed; актуальный — в строке ниже.
 
@@ -13,14 +12,14 @@
 - 23.10 (Claude, Р-4): влит master после слияния #80 (MOS-4) и #34 обычным merge-коммитом; конфликт только в HANDOFF.md, сохранены записи обеих сторон, код не менялся. pytest: 461 passed, 4 skipped, 33 subtests (Postgres-тесты пропущены локально — нет HQ018_PG_URL).
 
 **Вопросы / NEEDS_EVIDENCE**
-- Состав полей паспорта входа в задаче не задан — поля в тестах условные (field_a…). Нужны поля из MOS-4.
+- Состав полей паспорта входа в задаче не задан — поля в тестах условные (field_a…). Поля паспорта теперь есть в `portfolio/` и `db/migrations/004_portfolio_passport.sql` (master) — сопоставить отдельной задачей.
 - Правила частичного выхода не заданы: флаг несёт `rules=NEEDS_EVIDENCE`, проверки по существу нет.
 - Какие роли = «роли фонда»: сейчас только `investor`. Входит ли `signer`? Решение PM.
 - Хранение в БД (миграции) не делалось: состояние в памяти; нужна схема после MOS-4.
 - Не подключено к app.py (нет HTTP-эндпоинтов); реальной отправки в мессенджер нет.
 
 ---
-=======
+
 ## MOS-4 — Портфель (паспорт, светофор S5, Д-68), issue #55, ветка `claude/issue-55-20261022-0511` → master (Claude, 22.10)
 **Сделано**
 - `db/migrations/004_portfolio_passport.sql`: роли `owner`, `fund_staff`; `portfolio_companies` + `holding_vehicle` (fund | partner_nominee), настраиваемые пороги runway (CHECK 6–18, red < yellow); таблица `portfolio_passport_snapshots` (cost, valuation basis/date, round, ownership %, runway, burn, plan_burn, next milestone что/когда/кто, loan income, дата последнего апдейта инвестору), append-only, UNIQUE (company, дата). LP-колонок нет.
@@ -37,7 +36,6 @@
 
 **Тесты:** 443 passed, 4 skipped после merge master (HTTP-тесты портфеля — через реальный вход MOS-1).
 - 22.10 (merge master 15adbca, LSM v1 #75): конфликт только в HANDOFF.md, сохранены обе части; код не менялся. Прогон: 449 passed, 4 skipped, 29 subtests.
->>>>>>> origin/master
 
 ## LSM v1 · ред. 2 — документ не снимает риск (Claude, 22.10) — Q-096, PR #75
 - Основание: замечание внешнего рецензента 17.10 («наличие документа не закрывает риск»), ДА Бориса 22.10 14:06 (РБ-071, вариант А).
