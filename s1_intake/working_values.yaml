@@ -13,10 +13,10 @@ r1_drug_hospital_question:              # З2, только ЛП, в преде�
   id: Q1.Z2
   signal: hospital_drug
 
-# HQ-035 · подпись факта (канон Р-5). Кто подписывает — не решено (G-13): только роли, без имён.
+# HQ-035 · подпись факта (канон Р-5). G-13 закрыт: FACT ставит только роль owner или назначенный им analyst; только роли, без имён.
 # Роль подписанта задаётся в окружении S1_APPROVER_ROLES «имя:роль;…» (имена — из S1_APPROVERS).
 fact_signoff:
-  signer_roles: [analyst]
+  signer_roles: [owner, analyst]
   public_labels: {FACT: "факт", FACT_CANDIDATE: "заявление с документом", FOUNDER_CLAIM: "заявление",
                   UNKNOWN: "нет данных", CONFLICT: "противоречие"}
 

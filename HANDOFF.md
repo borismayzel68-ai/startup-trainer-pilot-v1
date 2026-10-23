@@ -15,6 +15,23 @@
 ## Слияние master (15adbca, LSM v1 #75) в ветку MOS-6 (Claude, 23.10, Refs #57)
 - Merge master обычным merge-коммитом, без rebase и force-push; конфликт только HANDOFF.md, код не менялся. Разделы LSM v1 из master — ниже без изменений.
 
+## MOS-4 — Портфель (паспорт, светофор S5, Д-68), issue #55, ветка `claude/issue-55-20261022-0511` → master (Claude, 22.10)
+**Сделано**
+- `db/migrations/004_portfolio_passport.sql`: роли `owner`, `fund_staff`; `portfolio_companies` + `holding_vehicle` (fund | partner_nominee), настраиваемые пороги runway (CHECK 6–18, red < yellow); таблица `portfolio_passport_snapshots` (cost, valuation basis/date, round, ownership %, runway, burn, plan_burn, next milestone что/когда/кто, loan income, дата последнего апдейта инвестору), append-only, UNIQUE (company, дата). LP-колонок нет.
+- `portfolio/rag.py` — единственное место правил: runway красный < 9, жёлтый 9–12 (включительно), зелёный > 12; пороги 6–18 (иначе `InvalidThresholds`); burn: |burn−plan|/plan **> 20%** → флаг (в обе стороны, цвет не меняет); апдейт **> 14 дней** → просрочка (14 — ещё в срок; ни разу не было — просрочка). Причины текстом в `explanation()`.
+- `portfolio/access.py`, `service.py`, `blueprint.py`: список и карточка (с историей снапшотов и пометкой «деньги фонда, договор на партнёра» для partner_nominee). owner/fund_staff — всё; investor — только по scope (vc_id или `*`); founder/expert/без актора — 403.
+- `app.py`: зарегистрирован blueprint `/portfolio`.
+
+**Не сделано / допущения — важно**
+- 22.10 (merge master 34d43f4: MOS-1 #61 + MOS-3 #72): заглушка актора убрана. Маршруты `/portfolio` и `/portfolio/<vc_id>` защищены `auth.require_role(owner, fund_staff, investor)`; актор строится из грантов `auth.current_user()` (`blueprint.actor_from_user`): owner/fund_staff со scope `*` — весь портфель, investor — по своим scope (vc_id или `*`), founder/expert и fund_staff с узким scope — 403, без входа — 401. `configure()` теперь задаёт только репозиторий (по умолчанию Postgres по SESSION_DATABASE_URL; без него 503). Страницы HTML нет, только JSON (#49).
+- Интерпретации, которые надо подтвердить: отклонение burn считается по модулю (и недорасход тоже флаг); план = 0 или не задан → флаг не ставится; «обновление» = поле `last_investor_update` снапшота.
+- Спецификация SPEC v0.2 с Drive исполнителю недоступна; строил по тексту issue и комментариям. Формы ввода/импорта снапшотов нет (реальные данные — импортом вне репо).
+- Роли `owner`/`fund_staff` теперь добавляет и 001 (MOS-1); в 004 они остаются с ON CONFLICT DO NOTHING — безопасно.
+- Postgres-тесты (миграция 004, append-only) локально пропущены (нет HQ018_PG_URL), пойдут в CI.
+
+**Тесты:** 443 passed, 4 skipped после merge master (HTTP-тесты портфеля — через реальный вход MOS-1).
+- 22.10 (merge master 15adbca, LSM v1 #75): конфликт только в HANDOFF.md, сохранены обе части; код не менялся. Прогон: 449 passed, 4 skipped, 29 subtests.
+
 ## LSM v1 · ред. 2 — документ не снимает риск (Claude, 22.10) — Q-096, PR #75
 - Основание: замечание внешнего рецензента 17.10 («наличие документа не закрывает риск»), ДА Бориса 22.10 14:06 (РБ-071, вариант А).
 - Код: `scoring._ls_summary` — отбор барьеров по слабости (нет данных/E0–E2 → E3+ не FACT → FACT), до barriers_max; пункты с документом E3+ остаются с полем `note` «Документ есть; достаточность доказательства проверяет человек»; показ — в каноническом порядке v0.2; К7 — от самого слабого пункта. `founder_report.html` выводит `note`.
@@ -30,6 +47,9 @@
 - Не проверено: живой LLM (синтез «критичных барьеров» на mock-LLM содержит текст про CE/выручку из заглушки — на реальной модели проверить в QA-проходе 20.10, Q-094). Противоречие «ПО не МИ» ↔ назначение с диагностикой не детектируется кодом (только К7 «консультация по классу»).
 
 Остальной лог master (MOS-1, S3, S1, MOS-2, MOS-3 и др., строки 30–172 прежнего HANDOFF.md master) без изменений лежит в `docs/handoff/master-log-2026-10-22.md`.
+
+## Слияние master (#80, #34; 23.10 11:29) в ветку MOS-6 (Claude, 23.10, Refs #57)
+- Merge master обычным merge-коммитом, без rebase и force-push; конфликт только HANDOFF.md. Хвост лога master (в т. ч. правки HQ-035 из #34) — в docs/handoff/master-log-2026-10-22.md, записи обеих сторон сохранены.
 
 ## Правки по ревью PR #82 (Claude, 23.10, Refs #57)
 - PUBLIC_BASE_URL обязателен на staging, ограничен цикл ожидания бэкапа, тест bash -n, CLAUDE.md = master; подробности — docs/handoff/57.md.
