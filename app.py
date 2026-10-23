@@ -73,6 +73,9 @@ app.register_blueprint(s3_bp)
 # MOS-5 (#56): вид фонда (owner/fund_staff), /fund/*. Доступ через auth MOS-1 (owner, fund_staff), noindex.
 from fund_view.blueprint import bp as fund_bp  # noqa: E402
 app.register_blueprint(fund_bp)
+# MOS-4 (#55): портфель /portfolio; доступ — require_role из MOS-1 (owner/fund_staff/investor), scope проверяет сервис.
+from portfolio.blueprint import bp as portfolio_bp  # noqa: E402
+app.register_blueprint(portfolio_bp)
 ALLOWED_STATUS = {"fact","hypothesis","missing","weak"}
 ALLOWED_REC = {"not_ready","iterate","ready_for_investor_conversation"}
 
