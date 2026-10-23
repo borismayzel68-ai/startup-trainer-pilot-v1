@@ -51,8 +51,9 @@
 {% if ls.barriers %}
 <h3>LS-барьеры</h3>
 {% for b in ls.barriers %}
-<div class="card warn"><b>{{ b.label }}</b><div class="small">{{ b.why }}</div></div>
+<div class="card warn"><b>{{ b.label }}</b><div class="small">{{ b.why }}</div>{% if b.note %}<div class="small muted">{{ b.note }}</div>{% endif %}</div>
 {% endfor %}
+{% if ls.barriers_hidden %}<div class="small muted">Ещё открытые пункты, не вошедшие в список: {% for h in ls.barriers_hidden %}{{ h.label }}{% if not loop.last %}; {% endif %}{% endfor %}.</div>{% endif %}
 {% endif %}
 {% if ls.next_artifact %}
 <h3>Один следующий артефакт (К7)</h3>
