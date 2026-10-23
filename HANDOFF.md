@@ -76,6 +76,11 @@
 HQ-036 — линия A9 (#6 head 83ab1f7 + #11 head 90e2d22) на линии tilda (Refs #22), ветка `chore/hq-036-rebase-a9-on-tilda` от fix/hq-035-fact-ceiling (85d424a, верх линии tilda с HQ-035). PR → s1/tilda-readiness-pack.
 
 ## Сделано
+- Код ставит максимум FACT_CANDIDATE («заявление с документом»); verified_by от LLM обнуляется.
+- FACT — только POST /s1/jobs/<id>/slots/verify (персональный токен, роль из working_values.yaml fact_signoff.signer_roles = [owner, analyst]), пакетом на слот, журнал s1_fact_signoffs (кто, когда, роль, основание).
+- Тесты: tests/test_hq035_fact_signoff.py (ловушка, подпись → FACT + журнал, отказы). Баллы не изменились.
+- G-13 закрыт владельцем: FACT ставит только роль owner или назначенный им analyst (выданный аккаунт с ролью analyst). signer_roles = [owner, analyst], без имён. Тесты G13SignerRoleTests: чужая роль → 403, слот остаётся FACT_CANDIDATE; owner и analyst подписывают. Ловушку из Issue #21 не меняли.
+- Ревью — Claude; merge только после PASS от Claude (не GPT).
 - Влит 90e2d22 (содержит 83ab1f7) merge-коммитом, без rebase.
 - app.py: импорты объединены (s1 init_s1 + founder_package/iso_z/utc_now из A9; post_completion_json больше не импортируется — A9 доставляет completion через delivery_worker); лимит запроса 20 МБ (A9) и init_s1 (S1) — оба сохранены.
 - README.md: раздел S1 сохранён целиком; строка Worker: `python delivery_worker.py` из A9 — рядом с Build/Start.
@@ -85,11 +90,13 @@ HQ-036 — линия A9 (#6 head 83ab1f7 + #11 head 90e2d22) на линии ti
 - HQ-022: ветка от этой линии, только merge.
 
 ## Сломано или не проверено
+- Имена подписантов и их роли — только через окружение S1_APPROVERS / S1_APPROVER_ROLES; в репо не хранятся.
+
 - «CI прогон зелёный» (Issue #22): в репо нет тестового workflow (только claude.yml в PR #8) — пробел для PM.
 - delivery_worker вживую (Render worker) не запускался — только тесты.
 
 ## Последний коммит
-см. git log -1 (Merge A9 (#6+#11) в линию tilda)
+см. git log -1 (Merge master в fix/hq-035-fact-ceiling: HANDOFF.md объединён, signer_roles: [owner, analyst] сохранён)
 
 ## Слияние в master (Claude, 11.10)
 - Цепочка #28 (+#9) влита в s1/tilda-readiness-pack, затем master влит сюда для PR #7. Конфликт только в HANDOFF.md (add/add), оставлена версия линии tilda. Код не менялся.
