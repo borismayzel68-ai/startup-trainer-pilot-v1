@@ -70,6 +70,9 @@ app.config["MAX_CONTENT_LENGTH"] = 20 * 1024 * 1024
 init_s1(app)
 # S3 · БП-07 (HQ-023): один вопрос → ответ → бриф, подпись владельца через механизм S1 (/s3/*). Отправки наружу нет.
 app.register_blueprint(s3_bp)
+# MOS-4 (#55): портфель /portfolio; доступ — require_role из MOS-1 (owner/fund_staff/investor), scope проверяет сервис.
+from portfolio.blueprint import bp as portfolio_bp  # noqa: E402
+app.register_blueprint(portfolio_bp)
 ALLOWED_STATUS = {"fact","hypothesis","missing","weak"}
 ALLOWED_REC = {"not_ready","iterate","ready_for_investor_conversation"}
 
