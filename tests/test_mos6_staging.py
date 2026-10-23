@@ -1,6 +1,7 @@
 """MOS-6 · staging: старт с env, понятная ошибка без секрета, замок по сессии MOS-1 (#61), noindex, только синтетика.
 Только синтетические значения; сеть не используется (вход #61 подменён заглушкой сессии)."""
 import os
+import shutil
 import subprocess
 import sys
 import unittest
@@ -19,6 +20,7 @@ ENV = {
     "GOOGLE_CLIENT_SECRET": "synthetic-client-secret",
     "SESSION_SECRET": "s" * 40,
     "AUTH_ALLOWLIST": "Allowed.Synth@example.test:owner, other@example.test:fund_staff:*",
+    "PUBLIC_BASE_URL": "https://staging.example.test",
 }
 
 
@@ -127,7 +129,7 @@ class StagingTests(unittest.TestCase):
 
 class RealAppTests(unittest.TestCase):
     def run_app(self, extra):
-        env = {k: v for k, v in os.environ.items() if k not in sg.REQUIRED_ENV and k != "APP_ENV"}
+        env = {k: v for k, v in os.environ.items() if k not in sg.REQUIRED_ENV and k not in ("APP_ENV", "PUBLIC_BASE_URL")}
         env.update({"OPENAI_API_KEY": "test-key", "SESSION_DATABASE_URL": "sqlite:///:memory:"}, **extra)
         code = ("import app; c=app.app.test_client(); r=c.get('/health'); "
                 "print(r.status_code, r.headers.get('X-Robots-Tag')); "
@@ -145,6 +147,11 @@ class RealAppTests(unittest.TestCase):
         p = self.run_app({k: v for k, v in ENV.items() if k != "GOOGLE_CLIENT_SECRET"})
         self.assertNotEqual(p.returncode, 0)
         self.assertIn("GOOGLE_CLIENT_SECRET", p.stderr)
+
+    def test_real_app_fails_without_public_base_url(self):
+        p = self.run_app({k: v for k, v in ENV.items() if k != "PUBLIC_BASE_URL"})
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("PUBLIC_BASE_URL", p.stderr)
 
     def test_real_app_non_staging_has_noindex(self):
         p = self.run_app({})
@@ -358,6 +365,27 @@ class YandexCloudDeployTests(unittest.TestCase):
             t = f.read_text(encoding="utf-8")
             for key in ("SESSION_SECRET", "GOOGLE_CLIENT_SECRET", "AUTH_ALLOWLIST"):
                 self.assertNotRegex(t, key + r"=[^,\s\"$]")
+
+    def test_deploy_scripts_pass_public_base_url(self):
+        for name in ("deploy.sh", "rollback.sh"):
+            t = (ROOT / "deploy" / "yc" / name).read_text(encoding="utf-8")
+            self.assertIn("PUBLIC_BASE_URL=$PUBLIC_BASE_URL", t.replace('"', ""), name)
+        self.assertRegex((ROOT / ".env.example").read_text(encoding="utf-8"), r"(?m)^PUBLIC_BASE_URL=")
+
+    def test_backup_wait_is_bounded_and_fails_on_error_status(self):
+        t = (ROOT / "deploy" / "yc" / "deploy.sh").read_text(encoding="utf-8")
+        self.assertIn("seq 40", t)
+        self.assertIn("sleep 15", t)
+        self.assertNotIn("until [", t)
+        self.assertRegex(t, r"(?s)DONE\).*CREATING\).*\*\).*exit 1")
+
+    @unittest.skipUnless(shutil.which("bash"), "bash не найден")
+    def test_deploy_scripts_pass_bash_syntax_check(self):
+        scripts = sorted((ROOT / "deploy" / "yc").glob("*.sh"))
+        self.assertTrue(scripts)
+        for f in scripts:
+            r = subprocess.run(["bash", "-n", str(f)], capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, f"{f.name}: {r.stderr}")
 
     def test_env_example_names_only(self):
         for line in (ROOT / ".env.example").read_text(encoding="utf-8").splitlines():

@@ -44,6 +44,8 @@ MAX_COMPLETION_EVENT_BYTES = 64 * 1024
 PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "https://startup-trainer-a9-staging.onrender.com").rstrip("/")
 if os.environ.get("APP_ENV", "").strip().lower() in ("staging", "production") and not os.environ.get("SESSION_SECRET", "").strip():
     raise RuntimeError("SESSION_SECRET обязателен при APP_ENV=staging|production: без него сессии подписываются случайным ключом")
+if os.environ.get("APP_ENV", "").strip().lower() == "staging" and not os.environ.get("PUBLIC_BASE_URL", "").strip():
+    raise RuntimeError("PUBLIC_BASE_URL обязателен при APP_ENV=staging: иначе пакет основателю получит ссылки на Render")
 try:
     _PROXIES = max(0, int(os.environ.get("TRUSTED_PROXY_COUNT", "0")))
 except ValueError:
