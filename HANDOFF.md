@@ -23,13 +23,17 @@
 
 **Ревью PR #84 (Claude, 23.10):** CHANGES, см. комментарий в PR; в HANDOFF исправлено устаревшее описание миграции 004. pytest: 437 passed, 4 skipped.
 
+**Правка по ревью п.3 (Claude, 23.10):** `_guard` в `fund_view/blueprint.py` ловит `LookupError` (стартап пропал между `find_startup` и `change_status`/`record_decision`) → 404 `not_found` с rollback вместо 500. Тест `test_startup_vanished_after_lookup_gives_404` (transition, ic-decision; поиск подменён, соединение «без стартапа»).
+
+**Остаток после заморозки 29.10:** п.4 ревью — писать в `audit_log` `result='deny'` для отказов шлюза (409) и «только owner» (403); сейчас в журнале только успешные действия.
+
 **Не проверено / ограничения**
 - Текста стандарта Артура в репо нет; содержание не выдумывалось. Разбор markdown — по заголовкам и `- [ ]`; формат реального файла может потребовать правки парсера.
 - Шлюзы проверяются в Python (change_status), не триггером БД: прямой SQL UPDATE startups их обойдёт.
 - «Участие ASF» = поле asf_engagement=FIXED, ставит owner; семантику уточнить с PM. Квартал решения — строка YYYY-Qn, повторное решение за тот же квартал не запрещено.
 - На Render/живых пользователях не запускалось.
 
-**Тесты:** после слияния с master и перехода на MOS-1: 437 passed, 4 skipped (публичные маршруты), 29 subtests, весь pytest (в т.ч. 26 в tests/test_mos5_fund_view.py; Postgres-часть исполнялась, не пропущена).
+**Тесты:** после правки п.3 ревью (23.10): 439 passed, 4 skipped, 1 warning, 29 subtests (+2 теста 404). До неё, после слияния с master и перехода на MOS-1: 437 passed, 4 skipped (публичные маршруты), 29 subtests, весь pytest (в т.ч. 26 в tests/test_mos5_fund_view.py; Postgres-часть исполнялась, не пропущена).
 
 ---
 

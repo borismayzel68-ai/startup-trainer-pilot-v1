@@ -144,6 +144,44 @@ def test_case_scoped_fund_staff_grant_is_not_enough(mos1_store):
     assert c.get("/fund/startups/SYN-X/snapshot").status_code == 403
 
 
+class _GoneConn:
+    """Соединение, в котором стартапа уже нет: SELECT ... FOR UPDATE ничего не находит."""
+    rolled_back = False
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def rollback(self):
+        self.rolled_back = True
+
+    def execute(self, *a, **kw):
+        class _R:
+            fetchone = staticmethod(lambda: None)
+        return _R()
+
+
+@pytest.mark.auth_enforced
+@pytest.mark.parametrize("tail,body", [("transition", {"to_status": "DD"}),
+                                       ("ic-decision", {"quarter": "2026-Q4", "decision": "GO", "reason": "синтетика"})])
+def test_startup_vanished_after_lookup_gives_404(mos1_store, monkeypatch, tail, body):
+    conn = _GoneConn()
+    monkeypatch.setattr("fund_view.blueprint.connect", lambda: conn)
+    calls = []
+
+    def find_once(_conn, vc_id):  # первый поиск находит стартап, дальше он «пропал» (удалён параллельно)
+        calls.append(vc_id)
+        return {"id": 1, "vc_id": vc_id, "name": "Synth", "status": "ACTIVE"}
+    monkeypatch.setattr("fund_view.service.find_startup", find_once)
+    c = _login_client(mos1_store, f"owner-{uuid.uuid4().hex[:8]}@synthetic.test", "owner")
+    r = c.post(f"/fund/startups/SYN-GONE/{tail}", headers=c.csrf, json=body)
+    assert r.status_code == 404, r.get_data(as_text=True)
+    assert r.get_json()["code"] == "not_found"
+    assert calls == ["SYN-GONE"] and conn.rolled_back
+
+
 @pytest.mark.auth_enforced
 @unittest.skipUnless(PG_URL.startswith("postgresql://"), "HQ018_PG_URL не задан")
 class FundViewPostgresTests(unittest.TestCase):

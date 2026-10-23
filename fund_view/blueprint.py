@@ -65,6 +65,9 @@ def _guard(fn):
                 return _fail("стартап не найден", "not_found", 404)
             try:
                 return fn(conn, actor, st, *a, **kw)
+            except LookupError as exc:  # стартап пропал между find_startup и change_status/record_decision
+                conn.rollback()
+                return _fail(str(exc), "not_found", 404)
             except (S.FundError, InvalidTransition) as exc:
                 conn.rollback()
                 return _fail(str(exc), "bad_request", 400)
