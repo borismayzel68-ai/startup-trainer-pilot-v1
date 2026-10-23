@@ -6,7 +6,7 @@
 **Сделано**
 - `portfolio_update/__init__.py` — отдельный модуль (паспорт портфеля MOS-4 / PR #80 в master не влит): `reconcile` (список расхождений changed / missing_in_update / not_in_passport), `mark_new_round` (флаг проверки частичного выхода, идемпотентно), `ask`/`answer` (модель вопросов и приём ответа, без отправки в мессенджер и без сети), доступ только роли фонда. Точка подключения: собрать `EntryPassport` из полей MOS-4.
 - `docs/hq042_reconcile_example.md` — синтетический пример отчёта (сверяется тестом с `render_report`).
-- Тесты: `tests/test_hq042_s5_reconcile.py`. Весь прогон: 273 passed.
+- Тесты: `tests/test_hq042_s5_reconcile.py`. Весь прогон (до merge master): 273 passed; актуальный — в строке ниже.
 
 - 22.10 (Штаб): влит master (#61, #72, #75) обычным merge; конфликт был только в HANDOFF.md, сохранены обе части. pytest: 400 passed, 17 skipped.
 
