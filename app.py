@@ -73,6 +73,9 @@ init_s1(app)
 app.register_blueprint(s3_bp)
 # S2 · шлюз мандата фонда (#44): правила из s2_mandate/investment_policy.yaml, EXCEPTION решает человек (/s2/*).
 app.register_blueprint(s2_bp)
+# MOS-4 (#55): портфель /portfolio; доступ — require_role из MOS-1 (owner/fund_staff/investor), scope проверяет сервис.
+from portfolio.blueprint import bp as portfolio_bp  # noqa: E402
+app.register_blueprint(portfolio_bp)
 ALLOWED_STATUS = {"fact","hypothesis","missing","weak"}
 ALLOWED_REC = {"not_ready","iterate","ready_for_investor_conversation"}
 
