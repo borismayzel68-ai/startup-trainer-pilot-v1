@@ -38,7 +38,7 @@ class TrapTests(unittest.TestCase):
 
     def test_signer_list_has_roles_not_names(self):
         roles = base.M["working"]["fact_signoff"]["signer_roles"]
-        self.assertEqual(roles, ["analyst"])
+        self.assertEqual(sorted(roles), ["analyst", "owner"])  # G-13: только роли, без имён
 
 
 class SignoffEndpointTests(tg1.Tg1Base):
@@ -87,6 +87,44 @@ class SignoffEndpointTests(tg1.Tg1Base):
         low = next(k for k, v in it.items() if v["status"] == "FOUNDER_CLAIM")
         r = self.c.post(f"/s1/jobs/{jid}/slots/verify", headers=ALICE, json={"slot": low, "basis": "x"})
         self.assertEqual(r.status_code, 409)
+
+
+class G13SignerRoleTests(tg1.Tg1Base):
+    """G-13: verified_by — только роль owner или analyst; любая другая роль — отказ, слот остаётся FACT_CANDIDATE."""
+
+    def sign(self, roles):
+        self.s = dataclasses.replace(self.s, approver_roles=roles)
+        self.state.settings = self.s
+        jid = self.ready_job()
+        it = items(self.state.store.get(jid))
+        slot = next(k for k, v in it.items() if v["status"] == "FACT_CANDIDATE")
+        r = self.c.post(f"/s1/jobs/{jid}/slots/verify", headers=ALICE, json={"slot": slot, "basis": "синтетика G-13"})
+        return jid, slot, r
+
+    def test_non_signer_role_refused_slot_stays_candidate(self):
+        for role in ("operator", "founder", "admin", "viewer"):
+            with self.subTest(role=role):
+                jid, slot, r = self.sign({"alice": role})
+                self.assertEqual(r.status_code, 403)
+                self.assertEqual(items(self.state.store.get(jid))[slot]["status"], "FACT_CANDIDATE")
+                self.assertEqual(self.state.store.fact_signoffs(jid), [])
+
+    def _assert_signed(self, role):
+        jid, slot, r = self.sign({"alice": role})
+        self.assertEqual(r.status_code, 200, r.get_json())
+        job = tg1.base.S1EndToEndTests.wait(self, jid)
+        self.assertEqual(items(job)[slot]["status"], "FACT")
+        b3 = next(b for b in job["data"]["pack_blocks"] if b["n"] == 3)
+        facts = [c for c in b3["claims"] if c["class"] == "FACT"]
+        self.assertTrue(facts and all(c["verified_by"] == role for c in facts))
+        log = self.c.get(f"/s1/jobs/{jid}/fact-signoffs", headers=base.ADMIN).get_json()
+        self.assertEqual([(x["slot"], x["role"]) for x in log], [(slot, role)])
+
+    def test_owner_role_can_sign(self):
+        self._assert_signed("owner")
+
+    def test_analyst_role_can_sign(self):
+        self._assert_signed("analyst")
 
 
 if __name__ == "__main__":

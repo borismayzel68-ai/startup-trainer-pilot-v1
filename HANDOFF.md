@@ -5,13 +5,14 @@
 ## HQ-062 — S3: плательщик (P-91), фильтр S3 в /s1/jobs, вход на /sign-screen; issue #65, ветка `claude/issue-65-20261022-0930` → master (Claude, 22.10)
 - 23.10 (Claude, по поручению Штаба): исправлен блокер п.1 — сессия MOS-1 на sign-screen и в /s1/jobs; п.3 — TODO.
 - 23.10 (ревью Claude, PR #86): CHANGES — см. комментарий ревью; в HANDOFF исправлена устаревшая строка про отсутствие auth.py и число тестов.
+- 23.10 (Claude, по поручению Штаба, Р-4): влит master (#80 MOS-4 портфель, #34 HQ-035) обычным merge; конфликт только в HANDOFF.md, сохранены записи обеих сторон; код HQ-062 не менялся.
 - 22.10 (Штаб): влит master (#61, #72, #75) обычным merge; конфликт был только в HANDOFF.md, сохранены обе части; `s1_intake/main.py` слился автоматически. pytest: 396 passed, 17 skipped.
 
 **Сделано**
 - P-91: `POST /s3/briefs` требует `payer` ∈ {`fund`, `brainbox_I`} (точное совпадение, регистр важен). nocvela, rounds и всё прочее → 422, запись не создаётся. Значение хранится в `data.s3.payer`, отдаётся в `GET /s3/briefs/<id>`; в хеш брифа/подпись не входит.
 - `/s1/jobs`: админ-токен видит только S1 (S3 отфильтрован); роль S3 (персональный подписант из `S3_OWNERS`, пусто → любой подписант) видит только S3; чужой подписант → 403, без входа → 401. `GET /s1/jobs/<id>` и артефакты для записи S3 → 404 (S3 только через `/s3/*`). Фильтр — `store.list(limit, s3="exclude"|"only"|"all")`.
 - `/s3/briefs/<id>/sign-screen`: сессия owner/fund_staff (MOS-1) или Bearer подписанта; без входа 401, admin-Bearer/не-владелец/investor 403.
-- Тесты: `Hq062Tests` в tests/test_hq023_s3_expert.py; существующие тесты S3 подправлены под обязательный `payer` и вход на sign-screen. pytest 23.10 (ревью): 409 passed, 4 skipped.
+- Тесты: `Hq062Tests` в tests/test_hq023_s3_expert.py; существующие тесты S3 подправлены под обязательный `payer` и вход на sign-screen. pytest 23.10 (ревью): 409 passed, 4 skipped. После merge master (#80, #34): 462 passed, 4 skipped, 33 subtests.
 
 **MOS-1 (#61) подключён (23.10, блокер ревью п.1 закрыт).** `s1_intake/main.py::_staff_session()` — сессия прошла `require_role` и имеет роль owner/fund_staff. `_s3_viewer()` и `sign_screen` её принимают; Bearer-ветки не менялись. `/s1/jobs`: сессия owner/fund_staff видит S1 + S3 (`s3="all"`), investor по сессии и admin-Bearer — только S1, подписант по Bearer — только S3. `app.py` S1_POLICY: `s3_expert.sign_screen` получил `external="secret"`, иначе при включённом RBAC Bearer-подписант и admin-Bearer получали 401 до view (admin-Bearer теперь 403, как требовалось). Подпись `POST /s3/briefs/<id>/sign` — по-прежнему только персональный Bearer (G-12), сессия её не заменяет. Тесты: `tests/test_hq062_s3_session.py` (5, маркер `auth_enforced`; на коде до правки падают 3 из 5). pytest 23.10: 414 passed, 4 skipped, 29 subtests.
 
@@ -23,6 +24,22 @@
 - CI с Postgres 16 здесь не запускался — смотреть прогон PR.
 
 ---
+## MOS-4 — Портфель (паспорт, светофор S5, Д-68), issue #55, ветка `claude/issue-55-20261022-0511` → master (Claude, 22.10)
+**Сделано**
+- `db/migrations/004_portfolio_passport.sql`: роли `owner`, `fund_staff`; `portfolio_companies` + `holding_vehicle` (fund | partner_nominee), настраиваемые пороги runway (CHECK 6–18, red < yellow); таблица `portfolio_passport_snapshots` (cost, valuation basis/date, round, ownership %, runway, burn, plan_burn, next milestone что/когда/кто, loan income, дата последнего апдейта инвестору), append-only, UNIQUE (company, дата). LP-колонок нет.
+- `portfolio/rag.py` — единственное место правил: runway красный < 9, жёлтый 9–12 (включительно), зелёный > 12; пороги 6–18 (иначе `InvalidThresholds`); burn: |burn−plan|/plan **> 20%** → флаг (в обе стороны, цвет не меняет); апдейт **> 14 дней** → просрочка (14 — ещё в срок; ни разу не было — просрочка). Причины текстом в `explanation()`.
+- `portfolio/access.py`, `service.py`, `blueprint.py`: список и карточка (с историей снапшотов и пометкой «деньги фонда, договор на партнёра» для partner_nominee). owner/fund_staff — всё; investor — только по scope (vc_id или `*`); founder/expert/без актора — 403.
+- `app.py`: зарегистрирован blueprint `/portfolio`.
+
+**Не сделано / допущения — важно**
+- 22.10 (merge master 34d43f4: MOS-1 #61 + MOS-3 #72): заглушка актора убрана. Маршруты `/portfolio` и `/portfolio/<vc_id>` защищены `auth.require_role(owner, fund_staff, investor)`; актор строится из грантов `auth.current_user()` (`blueprint.actor_from_user`): owner/fund_staff со scope `*` — весь портфель, investor — по своим scope (vc_id или `*`), founder/expert и fund_staff с узким scope — 403, без входа — 401. `configure()` теперь задаёт только репозиторий (по умолчанию Postgres по SESSION_DATABASE_URL; без него 503). Страницы HTML нет, только JSON (#49).
+- Интерпретации, которые надо подтвердить: отклонение burn считается по модулю (и недорасход тоже флаг); план = 0 или не задан → флаг не ставится; «обновление» = поле `last_investor_update` снапшота.
+- Спецификация SPEC v0.2 с Drive исполнителю недоступна; строил по тексту issue и комментариям. Формы ввода/импорта снапшотов нет (реальные данные — импортом вне репо).
+- Роли `owner`/`fund_staff` теперь добавляет и 001 (MOS-1); в 004 они остаются с ON CONFLICT DO NOTHING — безопасно.
+- Postgres-тесты (миграция 004, append-only) локально пропущены (нет HQ018_PG_URL), пойдут в CI.
+
+**Тесты:** 443 passed, 4 skipped после merge master (HTTP-тесты портфеля — через реальный вход MOS-1).
+- 22.10 (merge master 15adbca, LSM v1 #75): конфликт только в HANDOFF.md, сохранены обе части; код не менялся. Прогон: 449 passed, 4 skipped, 29 subtests.
 
 ## LSM v1 · ред. 2 — документ не снимает риск (Claude, 22.10) — Q-096, PR #75
 - Основание: замечание внешнего рецензента 17.10 («наличие документа не закрывает риск»), ДА Бориса 22.10 14:06 (РБ-071, вариант А).
@@ -81,6 +98,11 @@
 HQ-036 — линия A9 (#6 head 83ab1f7 + #11 head 90e2d22) на линии tilda (Refs #22), ветка `chore/hq-036-rebase-a9-on-tilda` от fix/hq-035-fact-ceiling (85d424a, верх линии tilda с HQ-035). PR → s1/tilda-readiness-pack.
 
 ## Сделано
+- Код ставит максимум FACT_CANDIDATE («заявление с документом»); verified_by от LLM обнуляется.
+- FACT — только POST /s1/jobs/<id>/slots/verify (персональный токен, роль из working_values.yaml fact_signoff.signer_roles = [owner, analyst]), пакетом на слот, журнал s1_fact_signoffs (кто, когда, роль, основание).
+- Тесты: tests/test_hq035_fact_signoff.py (ловушка, подпись → FACT + журнал, отказы). Баллы не изменились.
+- G-13 закрыт владельцем: FACT ставит только роль owner или назначенный им analyst (выданный аккаунт с ролью analyst). signer_roles = [owner, analyst], без имён. Тесты G13SignerRoleTests: чужая роль → 403, слот остаётся FACT_CANDIDATE; owner и analyst подписывают. Ловушку из Issue #21 не меняли.
+- Ревью — Claude; merge только после PASS от Claude (не GPT).
 - Влит 90e2d22 (содержит 83ab1f7) merge-коммитом, без rebase.
 - app.py: импорты объединены (s1 init_s1 + founder_package/iso_z/utc_now из A9; post_completion_json больше не импортируется — A9 доставляет completion через delivery_worker); лимит запроса 20 МБ (A9) и init_s1 (S1) — оба сохранены.
 - README.md: раздел S1 сохранён целиком; строка Worker: `python delivery_worker.py` из A9 — рядом с Build/Start.
@@ -90,11 +112,13 @@ HQ-036 — линия A9 (#6 head 83ab1f7 + #11 head 90e2d22) на линии ti
 - HQ-022: ветка от этой линии, только merge.
 
 ## Сломано или не проверено
+- Имена подписантов и их роли — только через окружение S1_APPROVERS / S1_APPROVER_ROLES; в репо не хранятся.
+
 - «CI прогон зелёный» (Issue #22): в репо нет тестового workflow (только claude.yml в PR #8) — пробел для PM.
 - delivery_worker вживую (Render worker) не запускался — только тесты.
 
 ## Последний коммит
-см. git log -1 (Merge A9 (#6+#11) в линию tilda)
+см. git log -1 (Merge master в fix/hq-035-fact-ceiling: HANDOFF.md объединён, signer_roles: [owner, analyst] сохранён)
 
 ## Слияние в master (Claude, 11.10)
 - Цепочка #28 (+#9) влита в s1/tilda-readiness-pack, затем master влит сюда для PR #7. Конфликт только в HANDOFF.md (add/add), оставлена версия линии tilda. Код не менялся.
