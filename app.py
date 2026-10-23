@@ -750,7 +750,7 @@ S1_POLICY = {
     # S3 (HQ-023): подпись брифа по-прежнему только персональным Bearer из S1_APPROVERS (G-12); сессия заменяет лишь admin-токен
     **{"s3_expert." + n: _S1_ALL for n in (
         "create_brief", "get_status", "review", "issue_json", "issue_md")},
-    "s3_expert.sign_screen": (["owner", "fund_staff"], "*", None),  # статичная страница без данных: только вошедшим
+    "s3_expert.sign_screen": (["owner", "fund_staff"], "*", "secret"),  # статичная страница без данных; Bearer подписанта — проверка во view
     "s3_expert.sign": (["owner"], "*", "secret"),
 }
 auth.init_auth(app, SESSION_DATABASE_URL, S1_POLICY)

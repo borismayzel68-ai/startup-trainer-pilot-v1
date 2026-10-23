@@ -272,6 +272,8 @@ class ReadinessJobStore:
     def list(self, limit: int = 50, s3: str = "exclude") -> list[dict]:
         """HQ-062: s3="exclude" — записи S3 (data.s3) не отдаются; "only" — только они; "all" — без фильтра."""
         self.purge_expired()
+        # TODO(HQ-062, ревью 23.10 п.3): LIMIT снят — фильтр S3 идёт в Python по data_json; перенести фильтр в SQL
+        # (отдельная колонка/индекс) и вернуть LIMIT, когда число записей вырастет за пилот.
         rows = self._exec(f"{self._SELECT} ORDER BY created_at DESC", (), "all")
         out = []
         for r in rows:

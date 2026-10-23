@@ -238,9 +238,19 @@ def _approver() -> str | None:
     return None
 
 
+_STAFF_ROLES = frozenset({"owner", "fund_staff"})  # = auth.STAFF_ROLES (MOS-1)
+
+
+def _staff_session() -> bool:
+    """MOS-1 (#61): сессия прошла require_role и содержит роль owner/fund_staff (investor — нет)."""
+    return bool(g.get("rbac_session_ok")) and bool(set(g.get("rbac_roles") or ()) & _STAFF_ROLES)
+
+
 def _s3_viewer() -> str | None:
-    """HQ-062: роль S3 — персональный подписант из S3_OWNERS (пусто → любой подписант S1).
-    Временная проверка до auth.current_user() из #61 (MOS-1): заменить только эту функцию."""
+    """HQ-062: роль S3 — сессия owner/fund_staff (MOS-1) или персональный подписант из S3_OWNERS (пусто → любой
+    подписант S1). Bearer-ветка без изменений."""
+    if _staff_session():
+        return "session"
     who = _approver()
     owners = {x.strip() for x in os.environ.get("S3_OWNERS", "").split(",") if x.strip()}
     return who if who and (not owners or who in owners) else None
@@ -304,7 +314,9 @@ def tilda_webhook():
 @bp.get("/jobs")
 def list_jobs():
     limit = min(int(request.args.get("limit", 50)), 500)
-    if _admin_ok():  # HQ-062: админ видит S1, записи S3 — нет
+    if _staff_session():  # MOS-1: owner/fund_staff по сессии — S1 как раньше, плюс записи S3
+        return jsonify(_state().store.list(limit, s3="all"))
+    if _admin_ok():  # HQ-062: админ (Bearer) и investor по сессии видят S1, записи S3 — нет
         return jsonify(_state().store.list(limit, s3="exclude"))
     if _s3_viewer():  # роль S3 видит только S3
         return jsonify(_state().store.list(limit, s3="only"))

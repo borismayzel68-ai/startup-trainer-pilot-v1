@@ -13,7 +13,7 @@ import uuid
 
 from flask import Blueprint, Response, jsonify, request
 
-from s1_intake.main import _admin_ok, _approver, _err, _state
+from s1_intake.main import _admin_ok, _approver, _err, _staff_session, _state
 
 from . import engine as E
 
@@ -180,8 +180,9 @@ document.getElementById('sign').onclick = async () => {
 
 @bp.get("/briefs/<brief_id>/sign-screen")
 def sign_screen(brief_id):
-    """Экран подписи «проверил, дата». Только с входом (HQ-062): без токена — 401, не-подписант — 403.
-    Страница статическая и содержимого брифа не несёт — оно грузится с токеном."""
-    if not _signer():
+    """Экран подписи «проверил, дата». Только с входом (HQ-062): сессия owner/fund_staff (MOS-1) или Bearer подписанта;
+    без входа — 401, admin-Bearer и не-подписант — 403. Страница статическая и содержимого брифа не несёт.
+    Сама подпись (POST /sign) по-прежнему только персональным Bearer (G-12)."""
+    if not (_staff_session() or _signer()):
         return _err("login required", 403 if (_admin_ok() or _approver()) else 401)
     return Response(_SIGN_PAGE, mimetype="text/html")
