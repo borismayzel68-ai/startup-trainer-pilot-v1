@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 
@@ -28,8 +29,10 @@ def load_policy(path: str | None = None) -> dict:
 def validate_input(app: dict) -> list[str]:
     bad = [k for k in FIELDS if app.get(k) in (None, "")]
     v = app.get("check_rub")
-    if "check_rub" not in bad and (isinstance(v, bool) or not isinstance(v, (int, float)) or v <= 0):
+    if "check_rub" not in bad and (isinstance(v, bool) or not isinstance(v, (int, float))
+                                   or not math.isfinite(v) or v <= 0):
         bad.append("check_rub")
+    bad += [k for k in ("instrument", "sector") if k not in bad and not isinstance(app.get(k), str)]
     if "innovative" not in bad and not isinstance(app.get("innovative"), bool):
         bad.append("innovative")
     return bad

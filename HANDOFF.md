@@ -22,6 +22,12 @@
 
 **Merge master (23.10, 42ce831: MOS-4 #80 + HQ-035 #34):** конфликты в app.py и HANDOFF.md, обе части сохранены (регистрация `s2_bp` и `portfolio_bp`), код S2 не менялся.
 
+**Правки по ревью 23.10 (24.10, поручение Штаба-диспетчера, Refs #44)**
+- Исправлено: (1) `validate_input` — `instrument`/`sector` только `str`, `check_rub` конечное число (`math.isfinite`); список/объект/NaN/Infinity → 422, не 500. (2) Проверка создаётся сразу в `ready_for_review` (`store.create_or_get(..., status=)`, по умолчанию `received` — поведение S1/S3 не менялось), под `recoverable()` не попадает. (3) Решение по EXCEPTION атомарно: `store.log_decision_once` + UNIQUE-индекс `s1_approvals_s2_once` (job_id, report_sha256) для исходов S2; проигравший гонку → 409. (4) Границы теста целыми `5_900_000` / `10_100_000`. (5) Тест с `auth_enforced`: `create_check` без входа/роли investor → 401/403, `decide` с сессией (fund_staff, owner) без Bearer → 403.
+- Остаётся риск (не ломал общий механизм хранения): проверки S2 лежат в `s1_readiness_jobs`, поэтому видны в `/s1/jobs`; к ним применимы `/s1/jobs/<id>/approve`, `/rerun`, retention-purge (удаляет по сроку хранения). Надёжнее — отдельная таблица; отдельная задача.
+- Ждёт подтверждения фонда (вопрос к #44): equity/loan/safe → EXCEPTION, grant → NO_FIT, чек вне диапазона → NO_FIT, только ₽.
+- Отдельная задача после слияния: подключить шлюз к потоку заявки S1 и сделать проверку «до встречи» обязательной шагом.
+
 ## MOS-4 — Портфель (паспорт, светофор S5, Д-68), issue #55, ветка `claude/issue-55-20261022-0511` → master (Claude, 22.10)
 **Сделано**
 - `db/migrations/004_portfolio_passport.sql`: роли `owner`, `fund_staff`; `portfolio_companies` + `holding_vehicle` (fund | partner_nominee), настраиваемые пороги runway (CHECK 6–18, red < yellow); таблица `portfolio_passport_snapshots` (cost, valuation basis/date, round, ownership %, runway, burn, plan_burn, next milestone что/когда/кто, loan income, дата последнего апдейта инвестору), append-only, UNIQUE (company, дата). LP-колонок нет.

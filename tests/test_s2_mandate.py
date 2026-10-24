@@ -1,8 +1,11 @@
 """S2 · шлюз мандата фонда (#44). Данные синтетические. Правила — из investment_policy.yaml."""
+import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import test_s1_intake as base  # noqa: E402
@@ -21,10 +24,10 @@ def ev(**kw):
 
 class EngineTests(unittest.TestCase):
     def test_check_boundaries(self):
-        self.assertEqual(ev(check_rub=5.9 * M), E.NO_FIT)
+        self.assertEqual(ev(check_rub=5_900_000), E.NO_FIT)
         self.assertEqual(ev(check_rub=6 * M), E.FIT)
         self.assertEqual(ev(check_rub=10 * M), E.FIT)
-        self.assertEqual(ev(check_rub=10.1 * M), E.NO_FIT)
+        self.assertEqual(ev(check_rub=10_100_000), E.NO_FIT)
 
     def test_each_instrument(self):
         self.assertEqual(ev(instrument="convertible_loan"), E.FIT)
@@ -66,6 +69,11 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(E.validate_input({**GOOD, "sector": ""}), ["sector"])
         self.assertIn("check_rub", E.validate_input({**GOOD, "check_rub": -1}))
         self.assertIn("innovative", E.validate_input({**GOOD, "innovative": "yes"}))
+        for bad in (["equity"], {"a": 1}, 5):
+            self.assertEqual(E.validate_input({**GOOD, "instrument": bad}), ["instrument"])
+            self.assertEqual(E.validate_input({**GOOD, "sector": bad}), ["sector"])
+        for bad in (float("nan"), float("inf"), float("-inf")):
+            self.assertEqual(E.validate_input({**GOOD, "check_rub": bad}), ["check_rub"])
 
 
 class S2HttpTests(tg1.Tg1Base):
@@ -91,6 +99,31 @@ class S2HttpTests(tg1.Tg1Base):
         self.assertEqual(r.status_code, 422)
         self.assertEqual(r.get_json()["missing"], ["sector"])
         self.assertEqual(self.c.post("/s2/checks", json=GOOD).status_code, 401)
+
+    def test_bad_types_and_non_finite_return_422_not_500(self):
+        for kw in ({"instrument": ["equity"]}, {"instrument": {"a": 1}}, {"sector": ["medtech"]}):
+            r = self.c.post("/s2/checks", headers=base.ADMIN, json={**GOOD, **kw})
+            self.assertEqual(r.status_code, 422, kw)
+        for lit in ("NaN", "Infinity", "-Infinity"):
+            raw = '{"check_rub": %s, "instrument": "equity", "sector": "medtech", "innovative": true}' % lit
+            r = self.c.post("/s2/checks", headers=base.ADMIN, data=raw, content_type="application/json")
+            self.assertEqual(r.status_code, 422, lit)
+            self.assertEqual(r.get_json()["missing"], ["check_rub"])
+
+    def test_check_is_created_ready_for_review_not_received(self):
+        cid = self.create()["id"]
+        self.assertEqual(self.app.extensions["s1_intake"].store.get(cid)["status"], "ready_for_review")
+
+    def test_second_decision_is_409_and_store_is_atomic(self):
+        c = self.create(instrument="equity")
+        url = "/s2/checks/" + c["id"] + "/decision"
+        self.assertEqual(self.c.post(url, headers=tg1.ALICE, json={"decision": "approve"}).status_code, 200)
+        self.assertEqual(self.c.post(url, headers=tg1.BOB, json={"decision": "reject"}).status_code, 409)
+        # гонка: проверка _decision уже прошла, но запись второго подписанта отбивается UNIQUE в журнале
+        store = self.app.extensions["s1_intake"].store
+        self.assertTrue(store.log_decision_once("race", "alice", "h", "s2_exception_approved"))
+        self.assertFalse(store.log_decision_once("race", "bob", "h", "s2_exception_rejected"))
+        self.assertEqual(len(store.approvals("race")), 1)
 
     def test_exception_not_cleared_without_human_signature(self):
         c = self.create(instrument="equity")
@@ -119,6 +152,47 @@ class S2HttpTests(tg1.Tg1Base):
         r = self.c.post("/s2/checks/" + c["id"] + "/decision", headers=tg1.BOB, json={"decision": "reject"})
         self.assertEqual(r.get_json()["human_decision"]["decision"], "rejected")
         self.assertFalse(r.get_json()["cleared_for_meeting"])
+
+
+@pytest.fixture
+def rbac_client():
+    """Реальный вход MOS-1 (сессия + гранты), RBAC включён маркером auth_enforced."""
+    os.environ.setdefault("OPENAI_API_KEY", "test-key")
+    os.environ.setdefault("SESSION_DATABASE_URL", "sqlite:///:memory:")
+    import app as appmod
+    from auth_store import AuthStore
+    fresh, old = AuthStore("sqlite:///:memory:"), appmod.app.extensions["auth_store"]
+    appmod.app.extensions["auth_store"] = fresh
+
+    def client(email=None, role=None):
+        c = appmod.app.test_client()
+        if email:
+            os.environ["AUTH_ALLOWLIST"] = os.environ.get("AUTH_ALLOWLIST", "") + ",%s:%s" % (email, role)
+            user = fresh.upsert_user(email, "Synthetic")
+            fresh.ensure_grant(user["id"], role, "*")
+            with c.session_transaction() as s:
+                s["uid"] = user["id"]
+                s["csrf"] = "csrf-" + email
+            c.hdr = {"X-CSRF-Token": "csrf-" + email}
+        return c
+    yield client
+    appmod.app.extensions["auth_store"] = old
+
+
+@pytest.mark.auth_enforced
+def test_rbac_create_and_decide(rbac_client):
+    assert rbac_client().post("/s2/checks", json=GOOD).status_code in (401, 403)  # без входа и роли
+    assert (lambda c: c.post("/s2/checks", json=GOOD, headers=c.hdr))(rbac_client("inv@example.test", "investor")).status_code in (401, 403)
+    staff = rbac_client("s2staff@example.test", "fund_staff")
+    r = staff.post("/s2/checks", json={**GOOD, "instrument": "equity"}, headers=staff.hdr)
+    assert r.status_code == 201, r.get_json()
+    cid = r.get_json()["id"]
+    url = "/s2/checks/" + cid + "/decision"
+    assert staff.post(url, json={"decision": "approve"}, headers=staff.hdr).status_code == 403
+    owner = rbac_client("s2owner@example.test", "owner")  # сессия без персонального Bearer решение не подписывает
+    assert owner.post(url, json={"decision": "approve"}, headers=owner.hdr).status_code == 403
+    assert rbac_client().post(url, json={"decision": "approve"}).status_code in (401, 403)
+    assert not owner.get("/s2/checks/" + cid).get_json()["cleared_for_meeting"]
 
 
 if __name__ == "__main__":

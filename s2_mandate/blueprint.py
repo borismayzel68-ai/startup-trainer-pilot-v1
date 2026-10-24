@@ -46,8 +46,8 @@ def create_check():
         return jsonify({"status": "returned", "missing": missing}), 422
     rec = {"input": {k: body[k] for k in E.FIELDS}, **E.evaluate(body, E.load_policy())}
     store = _state().store
-    cid, _ = store.create_or_get("s2-" + uuid.uuid4().hex, "S2 mandate check", "", {"s2": {"check": rec}})
-    store.update(cid, status="ready_for_review")
+    cid, _ = store.create_or_get("s2-" + uuid.uuid4().hex, "S2 mandate check", "", {"s2": {"check": rec}},
+                                 status="ready_for_review")
     return jsonify(_view(cid, rec)), 201
 
 
@@ -73,7 +73,7 @@ def decide(check_id):
     choice = (request.get_json(silent=True) or {}).get("decision")
     if choice not in ("approve", "reject"):
         return _err("decision: approve|reject", 400)
-    if _decision(check_id, rec):
-        return _err("already decided", 409)
-    _state().store.log_approval(check_id, who, E.sha256(rec), APPROVED if choice == "approve" else REJECTED)
+    if _decision(check_id, rec) or not _state().store.log_decision_once(
+            check_id, who, E.sha256(rec), APPROVED if choice == "approve" else REJECTED):
+        return _err("already decided", 409)  # второй подписант (в т.ч. гонка) — UNIQUE в журнале
     return jsonify(_view(check_id, rec))
