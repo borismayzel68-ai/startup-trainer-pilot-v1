@@ -16,7 +16,7 @@ from session_store import DurableSessionStore, iso_z, utc_now
 from completion_event import build_completion_payload  # A9: доставка completion — через delivery_worker
 from founder_package import build_package, render_markdown, plan_ledger_write, verify_ledger, validate_package
 from s1_intake.config import Settings as LLMSettings
-from s1_intake.llm import LLMClient
+from s1_intake.llm import LLMClient, check_prod_config
 from s1_intake.main import init_s1
 from werkzeug.middleware.proxy_fix import ProxyFix
 import auth
@@ -47,6 +47,7 @@ MAX_COMPLETION_EVENT_BYTES = 64 * 1024
 PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "https://startup-trainer-a9-staging.onrender.com").rstrip("/")
 if os.environ.get("APP_ENV", "").strip().lower() in ("staging", "production") and not os.environ.get("SESSION_SECRET", "").strip():
     raise RuntimeError("SESSION_SECRET обязателен при APP_ENV=staging|production: без него сессии подписываются случайным ключом")
+check_prod_config(LLM_SETTINGS, os.environ.get("APP_ENV", ""))  # mock в проде — ошибка конфигурации при старте
 try:
     _PROXIES = max(0, int(os.environ.get("TRUSTED_PROXY_COUNT", "0")))
 except ValueError:

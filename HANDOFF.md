@@ -29,6 +29,10 @@
 - Слияние master 23.10 (Claude): влит origin/master (15adbca, LSM v1 #75), конфликт только в HANDOFF.md — сохранены оба раздела, код не менялся.
 - Слияние master 23.10 (Claude, #80 и #34): влит origin/master (42ce831), конфликт только в HANDOFF.md — сохранены записи обеих сторон; код не менялся.
 
+**Исправление замечаний ревью 23.10 (Claude, 24.10, поручение Штаба-диспетчера)**
+- Исправлено: (1) `LLMClient.calls` — `deque(maxlen=50)` (`CALLS_MAXLEN`), тест: 100 вызовов `complete_dict` → 50; (2) `check_prod_config` в `s1_intake/llm.py`, вызов в `app.py` после проверки SESSION_SECRET: `S1_LLM_PROVIDER=mock` при `APP_ENV=staging|production` → ошибка при старте; тест + строка в README; (3) README и `.env.example`: для Yandex до проверки реальным вызовом ставить `LLM_JSON_FORMAT=none` (умолчание `json_object` не менялось); (4) `OPENAI_API_KEY` в тестах — через `setUpModule`/`tearDownModule` (`mock.patch.dict`), не на уровне модуля.
+- Осталось: решение ревьюера по двум переменным модели (TG-1); реальный вызов Yandex не проверялся; зелёный CI на коммите.
+
 ---
 ## MOS-4 — Портфель (паспорт, светофор S5, Д-68), issue #55, ветка `claude/issue-55-20261022-0511` → master (Claude, 22.10)
 **Сделано**

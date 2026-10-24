@@ -5,16 +5,27 @@ import sys
 import unittest
 from unittest import mock
 
-os.environ.setdefault("OPENAI_API_KEY", "test-key")
-os.environ.setdefault("SESSION_DATABASE_URL", "sqlite:///:memory:")
-
 from pydantic import BaseModel
 
 from s1_intake import config as cfg
-from s1_intake.llm import LLMClient
+from s1_intake.llm import CALLS_MAXLEN, LLMClient, LLMError, check_prod_config
 
 BASE = "https://llm.api.cloud.yandex.net/v1"
 YA_MODEL = "gpt://b1gsynthetic/deepseek-v4-flash"
+
+
+_env_patch = None
+
+
+def setUpModule():
+    global _env_patch
+    _env_patch = mock.patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"})
+    _env_patch.start()
+    os.environ.setdefault("SESSION_DATABASE_URL", "sqlite:///:memory:")
+
+
+def tearDownModule():
+    _env_patch.stop()
 
 
 class Out(BaseModel):
@@ -101,6 +112,25 @@ class LLMEnvTests(unittest.TestCase):
         c.complete_json("t", "sys", "usr", Out)
         self.assertEqual(got["text"]["format"]["type"], "json_schema")
         self.assertIn("a", got["text"]["format"]["schema"]["properties"])
+
+    def test_calls_log_is_bounded(self):
+        with mock.patch.dict(os.environ, {"S1_LLM_PROVIDER": "openai"}):
+            c, _ = captured_client(cfg.Settings())
+        for _ in range(100):
+            c.complete_dict("t", "sys", "usr")
+        self.assertLessEqual(len(c.calls), CALLS_MAXLEN)
+        self.assertEqual(len(c.calls), CALLS_MAXLEN)
+
+    def test_mock_provider_rejected_in_prod(self):
+        with mock.patch.dict(os.environ, {"S1_LLM_PROVIDER": "mock"}):
+            st = cfg.Settings()
+        for env in ("production", "staging", " Production "):
+            with self.assertRaises(LLMError):
+                check_prod_config(st, env)
+        for env in ("", "dev", "test"):
+            check_prod_config(st, env)
+        with mock.patch.dict(os.environ, {"S1_LLM_PROVIDER": "openai"}):
+            check_prod_config(cfg.Settings(), "production")
 
 
 if __name__ == "__main__":

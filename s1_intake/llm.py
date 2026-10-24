@@ -3,7 +3,7 @@
 - OpenAI Responses API (MOS-7: base_url, ключ и модель — из env через config.Settings; единая точка
   замены LLM и для S1, и для тренажёра app.py). TG-1: модель S1 по умолчанию — фиксированный ID
   (config.LLM_MODEL_ID), смена только явной S1_LLM_MODEL_ID; temperature=0 у S1. На каждый вызов пишется
-  запись в self.calls: стадия, попытка, модель, temperature, sha256 промпта.
+  запись в self.calls (deque, последние CALLS_MAXLEN): стадия, попытка, модель, temperature, sha256 промпта.
 - Формат ответа (LLM_JSON_FORMAT): json_object (по умолчанию) | json_schema (только complete_json, где есть
   схема; для complete_dict остаётся json_object) | none (text.format не передаётся, JSON достаётся через
   _extract_json — для провайдеров без поддержки json_object).
@@ -17,6 +17,7 @@ import json
 import logging
 import re
 import time
+from collections import deque
 from typing import Callable, TypeVar
 
 from pydantic import BaseModel, ValidationError
@@ -27,8 +28,18 @@ log = logging.getLogger(__name__)
 T = TypeVar("T", bound=BaseModel)
 
 
+CALLS_MAXLEN = 50  # журнал вызовов ограничен: долгоживущий процесс app.py не копит записи без предела
+
+
 class LLMError(Exception):
     pass
+
+
+def check_prod_config(settings: Settings, app_env: str) -> None:
+    """APP_ENV=staging|production с mock-провайдером: тренажёр падал бы на первом вызове — ошибка при старте."""
+    if app_env.strip().lower() in ("staging", "production") and settings.llm_provider == "mock":
+        raise LLMError("S1_LLM_PROVIDER=mock недопустим при APP_ENV=staging|production: "
+                       "задайте S1_LLM_PROVIDER=openai (ключ OPENAI_API_KEY, при необходимости OPENAI_BASE_URL)")
 
 
 def _extract_json(txt: str) -> str:
@@ -45,7 +56,7 @@ class LLMClient:
         self.s = settings
         self.provider = settings.llm_provider
         self.model_name = settings.openai_model if self.provider == "openai" else "mock"
-        self.calls: list[dict] = []
+        self.calls: deque[dict] = deque(maxlen=CALLS_MAXLEN)
         self._mock = mock_responder
         self._client = None
         if self.provider == "openai":
