@@ -83,6 +83,9 @@ init_s1(app)
 app.register_blueprint(s3_bp)
 # S2 · шлюз мандата фонда (#44): правила из s2_mandate/investment_policy.yaml, EXCEPTION решает человек (/s2/*).
 app.register_blueprint(s2_bp)
+# S6 · «Периметр входа» (HQ-041, #37): блокирующий шлюз перед S2 (NEEDS_EVIDENCE); доступ — require_role MOS-1 (/s6/*).
+from s6_perimeter.blueprint import bp as s6_bp  # noqa: E402
+app.register_blueprint(s6_bp)
 # MOS-5 (#56): вид фонда (owner/fund_staff), /fund/*. Доступ через auth MOS-1 (owner, fund_staff), noindex.
 from fund_view.blueprint import bp as fund_bp  # noqa: E402
 app.register_blueprint(fund_bp)

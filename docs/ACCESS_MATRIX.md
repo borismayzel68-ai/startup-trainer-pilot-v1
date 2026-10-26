@@ -50,6 +50,8 @@ owner (Владелец фонда), fund_staff (Сотрудник фонда),
 | `/s1/jobs/<id>/approve`, `/call`, `/consents`, `/dialogue*`, `/dialogue-link`, `/free-link`, `/fact-signoffs`, `/rerun`, `/slots/verify`, `/teaser`, `/teaser/sign`, `/transfers`, `/vertical`, `/s1/transfers/<tid>/g4` | GET, POST | owner, fund_staff | `job_id` или `*` | secret (+ персональный токен для подписей) |
 | `/s1/dialogue/<id>`, `/s1/free/<id>`, `/s1/cabinet/<id>/consent`, `/revoke`, `/consents` | GET, POST | founder, owner, fund_staff | `job_id` или `*` | link |
 | `/s1/shared/<tid>` | GET | investor, owner, fund_staff | любой грант | link |
+| `/s6/gates`, `/s6/gates/<id>`, `/s6/gates/<id>/forward-to-s2` | GET, POST | owner, fund_staff | только `*` | — |
+| `/s6/gates/<id>/release` | POST | owner | только `*` | — (решение человека о снятии блокировки) |
 
 Отказ в любом маршруте: без входа — 401 (HTML-GET → redirect `/auth/login`), вошёл, но нет роли/scope или нет CSRF — 403.
 
