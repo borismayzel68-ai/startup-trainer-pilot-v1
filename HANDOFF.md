@@ -17,6 +17,7 @@
 | #22 | HQ-036 · линия tilda (A9 + S1) | [docs/handoff/22.md](docs/handoff/22.md) |
 | #33 | Чистка __pycache__ | [docs/handoff/33.md](docs/handoff/33.md) |
 | #36 | P0 #36 · S1 (шкала E, пакет основателю) | [docs/handoff/36.md](docs/handoff/36.md) |
+| #41 | HQ-042 · S5 сверка с паспортом входа (доработка ролей 26.10) | [docs/handoff/41.md](docs/handoff/41.md) |
 | #52, #54 | MOS-1 Auth+RBAC, MOS-3 импорт — полный лог HANDOFF.md из master 34d43f4 (перенесён без изменений) | [docs/handoff/master-log-2026-10-22.md](docs/handoff/master-log-2026-10-22.md) |
 | #53 | MOS-2 · схема dealflow | [docs/handoff/53.md](docs/handoff/53.md) |
 | #37 | HQ-041 · S6 «Периметр входа» (шлюз NEEDS_EVIDENCE) | [docs/handoff/37.md](docs/handoff/37.md) |
@@ -138,7 +139,7 @@
 **Вопросы / NEEDS_EVIDENCE**
 - Состав полей паспорта входа в задаче не задан — поля в тестах условные (field_a…). Поля паспорта теперь есть в `portfolio/` и `db/migrations/004_portfolio_passport.sql` (master) — сопоставить отдельной задачей.
 - Правила частичного выхода не заданы: флаг несёт `rules=NEEDS_EVIDENCE`, проверки по существу нет.
-- Какие роли = «роли фонда»: сейчас только `investor`. Входит ли `signer`? Решение PM.
+- Роли: приведены к `portfolio/access.py` 26.10 (см. docs/handoff/41.md).
 - Хранение в БД (миграции) не делалось: состояние в памяти; нужна схема после MOS-4.
 - Не подключено к app.py (нет HTTP-эндпоинтов); реальной отправки в мессенджер нет.
 
