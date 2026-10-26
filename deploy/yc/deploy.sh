@@ -73,7 +73,7 @@ yc serverless container revision deploy --container-name "$WEB" --image "$IMAGE"
   --command /app/deploy/yc/web-entrypoint.sh \
   --cores 1 --memory 1GB --concurrency 8 --execution-timeout 120s \
   --service-account-id "$YC_RUNTIME_SA_ID" --network-id "$YC_NETWORK_ID" \
-  --environment APP_ENV=staging,S1_LLM_PROVIDER=mock,AUTH_REDIRECT_URI="$AUTH_REDIRECT_URI",PUBLIC_BASE_URL="$PUBLIC_BASE_URL" \
+  --environment APP_ENV=staging,S1_LLM_PROVIDER=openai,AUTH_REDIRECT_URI="$AUTH_REDIRECT_URI",PUBLIC_BASE_URL="$PUBLIC_BASE_URL" \
   $(secret_args) >/dev/null
 # Публичный вызов нужен браузерам; доступ к страницам закрывает сам сервис (вход + allowlist).
 yc serverless container allow-unauthenticated-invoke --name "$WEB" >/dev/null
