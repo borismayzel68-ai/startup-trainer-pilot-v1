@@ -47,6 +47,32 @@
 - Осталось: решение ревьюера по двум переменным модели (TG-1); реальный вызов Yandex не проверялся; зелёный CI на коммите.
 
 ---
+## S2 — шлюз мандата фонда, issue #44, ветка `claude/issue-44-20261022-0512` → master (Claude, 22.10)
+**Сделано**
+- `s2_mandate/investment_policy.yaml` — единственный источник правил: чек 6–10 млн ₽ (границы включительно), инструменты (convertible_loan = preferred; equity/loan/safe → exception; grant → no_fit; неизвестный → exception), сектора life_sciences/medtech/biotech + инновационность. Всё помечено `status: hypothesis`; путь можно сменить через `S2_POLICY_PATH`.
+- `s2_mandate/engine.py` — чистая оценка → FIT / NO_FIT / EXCEPTION (NO_FIT > EXCEPTION > FIT), причины по каждому правилу. Порогов и списков в коде нет (тест по исходнику).
+- `s2_mandate/blueprint.py` — `POST /s2/checks` (admin), `GET /s2/checks/<id>`, `POST /s2/checks/<id>/decision` (approve|reject). Human Gate — механизм S1: персональный токен из `S1_APPROVERS`, журнал `s1_approvals` (outcome `s2_exception_approved|rejected`, хеш записи). Admin-токен решение принять не может (403). `cleared_for_meeting` для EXCEPTION = true только после approve человека. В `app.py` — только регистрация blueprint.
+- Отправки наружу нет. Данные только синтетические.
+
+**Не решено / проверить**
+- Какие инструменты кроме конвертируемого займа — «исключение», а какие «не подходит» (grant → NO_FIT) — моё допущение, нужно решение Бориса/фонда; правится в yaml.
+- Чек вне диапазона = NO_FIT (не EXCEPTION). Валюта — только ₽, без пересчёта.
+- Подключения к S1/Pack (вызов шлюза из потока заявки) нет — отдельная задача.
+
+**Merge master (22.10, 34d43f4: MOS-1 #61 + MOS-3 #72):** конфликты в app.py и HANDOFF.md разрешены, обе части сохранены. Собственной заглушки ролей в S2 не было (использовался `_admin_ok()` S1, который уже учитывает сессию MOS-1); добавлены политики RBAC в `S1_POLICY`: `create_check`/`get_check` — owner/fund_staff (scope `*`, external=secret), `decide` — owner + персональный Bearer из `S1_APPROVERS` (сессия сама решение не подписывает, как S3 sign).
+
+**Тесты:** после merge master 412 passed, 4 skipped (до merge 275 passed; новые: tests/test_s2_mandate.py — границы 5.9/6/10/10.1, каждый инструмент, сектор, EXCEPTION без подписи).
+
+**Merge master (23.10, 15adbca: LSM v1 #75):** конфликт только в HANDOFF.md, обе части сохранены, код не менялся.
+
+**Merge master (23.10, 42ce831: MOS-4 #80 + HQ-035 #34):** конфликты в app.py и HANDOFF.md, обе части сохранены (регистрация `s2_bp` и `portfolio_bp`), код S2 не менялся.
+
+**Правки по ревью 23.10 (24.10, поручение Штаба-диспетчера, Refs #44)**
+- Исправлено: (1) `validate_input` — `instrument`/`sector` только `str`, `check_rub` конечное число (`math.isfinite`); список/объект/NaN/Infinity → 422, не 500. (2) Проверка создаётся сразу в `ready_for_review` (`store.create_or_get(..., status=)`, по умолчанию `received` — поведение S1/S3 не менялось), под `recoverable()` не попадает. (3) Решение по EXCEPTION атомарно: `store.log_decision_once` + UNIQUE-индекс `s1_approvals_s2_once` (job_id, report_sha256) для исходов S2; проигравший гонку → 409. (4) Границы теста целыми `5_900_000` / `10_100_000`. (5) Тест с `auth_enforced`: `create_check` без входа/роли investor → 401/403, `decide` с сессией (fund_staff, owner) без Bearer → 403.
+- Остаётся риск (не ломал общий механизм хранения): проверки S2 лежат в `s1_readiness_jobs`, поэтому видны в `/s1/jobs`; к ним применимы `/s1/jobs/<id>/approve`, `/rerun`, retention-purge (удаляет по сроку хранения). Надёжнее — отдельная таблица; отдельная задача.
+- Ждёт подтверждения фонда (вопрос к #44): equity/loan/safe → EXCEPTION, grant → NO_FIT, чек вне диапазона → NO_FIT, только ₽.
+- Отдельная задача после слияния: подключить шлюз к потоку заявки S1 и сделать проверку «до встречи» обязательной шагом.
+
 ## MOS-4 — Портфель (паспорт, светофор S5, Д-68), issue #55, ветка `claude/issue-55-20261022-0511` → master (Claude, 22.10)
 **Сделано**
 - `db/migrations/004_portfolio_passport.sql`: роли `owner`, `fund_staff`; `portfolio_companies` + `holding_vehicle` (fund | partner_nominee), настраиваемые пороги runway (CHECK 6–18, red < yellow); таблица `portfolio_passport_snapshots` (cost, valuation basis/date, round, ownership %, runway, burn, plan_burn, next milestone что/когда/кто, loan income, дата последнего апдейта инвестору), append-only, UNIQUE (company, дата). LP-колонок нет.

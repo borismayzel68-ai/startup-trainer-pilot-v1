@@ -18,6 +18,7 @@ from founder_package import build_package, render_markdown, plan_ledger_write, v
 from s1_intake.config import Settings as LLMSettings
 from s1_intake.llm import LLMClient, check_prod_config
 from s1_intake.main import init_s1
+from s2_mandate.blueprint import bp as s2_bp
 from werkzeug.middleware.proxy_fix import ProxyFix
 import auth
 from auth import require_role, public, ANY_ROLE, STAFF_ROLES
@@ -80,6 +81,8 @@ app.config["MAX_CONTENT_LENGTH"] = 20 * 1024 * 1024
 init_s1(app)
 # S3 · БП-07 (HQ-023): один вопрос → ответ → бриф, подпись владельца через механизм S1 (/s3/*). Отправки наружу нет.
 app.register_blueprint(s3_bp)
+# S2 · шлюз мандата фонда (#44): правила из s2_mandate/investment_policy.yaml, EXCEPTION решает человек (/s2/*).
+app.register_blueprint(s2_bp)
 # MOS-4 (#55): портфель /portfolio; доступ — require_role из MOS-1 (owner/fund_staff/investor), scope проверяет сервис.
 from portfolio.blueprint import bp as portfolio_bp  # noqa: E402
 app.register_blueprint(portfolio_bp)
@@ -751,6 +754,9 @@ S1_POLICY = {
         "create_brief", "get_status", "review", "issue_json", "issue_md")},
     "s3_expert.sign_screen": (["owner", "fund_staff"], "*", None),  # статичная страница без данных: только вошедшим
     "s3_expert.sign": (["owner"], "*", "secret"),
+    # S2 (#44): создание/чтение проверки — owner/fund_staff или admin-токен; решение по EXCEPTION — только персональный Bearer (Human Gate)
+    "s2_mandate.create_check": _S1_ALL, "s2_mandate.get_check": _S1_ALL,
+    "s2_mandate.decide": (["owner"], "*", "secret"),
 }
 auth.init_auth(app, SESSION_DATABASE_URL, S1_POLICY)
 

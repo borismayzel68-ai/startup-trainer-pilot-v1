@@ -104,6 +104,9 @@ class ReadinessJobStore:
         # один и тот же отчёт (job + sha256) может быть отправлен только один раз
         self._exec("CREATE UNIQUE INDEX IF NOT EXISTS s1_approvals_sent_once ON s1_approvals "
                    "(job_id, report_sha256) WHERE outcome='sent'")
+        # S2 (#44): решение человека по EXCEPTION — одно на (проверка, хеш записи), гонка двух подписантов исключена
+        self._exec("CREATE UNIQUE INDEX IF NOT EXISTS s1_approvals_s2_once ON s1_approvals (job_id, report_sha256) "
+                   "WHERE outcome IN ('s2_exception_approved','s2_exception_rejected')")
 
     @staticmethod
     def _row(r) -> dict | None:
@@ -119,8 +122,11 @@ class ReadinessJobStore:
                "created_at, updated_at, expires_at, data_json FROM s1_readiness_jobs")
 
     # ----------------------------------------------------------------- API --
-    def create_or_get(self, submission_id: str, project_name: str, founder_email: str, data: dict) -> tuple[str, bool]:
+    def create_or_get(self, submission_id: str, project_name: str, founder_email: str, data: dict,
+                      status: str = "received") -> tuple[str, bool]:
         """(job_id, created). Повторная доставка того же tranid не создаёт дубль (UNIQUE + ON CONFLICT)."""
+        if status not in STATUSES:
+            raise ValueError(status)
         job_id = uuid.uuid4().hex[:16]
         now = _now()
         expires = (datetime.now(timezone.utc) + timedelta(days=self.retention_days)).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -129,7 +135,7 @@ class ReadinessJobStore:
             f"INSERT INTO s1_readiness_jobs (id, submission_id, status, project_name, founder_email, "
             f"created_at, updated_at, expires_at, data_json) VALUES ({p},{p},{p},{p},{p},{p},{p},{p},{p}) "
             f"ON CONFLICT (submission_id) DO NOTHING",
-            (job_id, submission_id, "received", project_name, founder_email, now, now, expires,
+            (job_id, submission_id, status, project_name, founder_email, now, now, expires,
              json.dumps(data, ensure_ascii=False, default=str)),
         )
         if inserted == 1:
@@ -164,6 +170,14 @@ class ReadinessJobStore:
         p = self.ph
         self._exec(f"INSERT INTO s1_approvals (job_id, approver, approved_at, report_sha256, outcome, detail) "
                    f"VALUES ({p},{p},{p},{p},{p},{p})", (job_id, approver, _now(), report_sha256, outcome, detail[:500]))
+
+    def log_decision_once(self, job_id: str, approver: str, report_sha256: str, outcome: str, detail: str = "") -> bool:
+        """S2: одно решение на (job, sha256) атомарно — UNIQUE-индекс s1_approvals_s2_once. Проигравший гонку → False."""
+        try:
+            self.log_approval(job_id, approver, report_sha256, outcome, detail)
+            return True
+        except Exception:  # noqa: BLE001 — решение уже записано (UNIQUE), как add_task_once
+            return False
 
     def approvals(self, job_id: str) -> list[dict]:
         rows = self._exec(f"SELECT approver, approved_at, report_sha256, outcome, detail FROM s1_approvals "
