@@ -1,0 +1,25 @@
+# S6 · «Периметр входа» (HQ-041, issue #37, канон Д-59 / D-013). Источник правил шлюза — этот конфиг, в коде порогов
+# и списков нет. Менять здесь или через S6_POLICY_PATH.
+# Канон Д-59 / D-013 задаёт только состав полей (юрлицо, форма сделки, чек, ковенанты, транши) и правило
+# «нет данных → NEEDS_EVIDENCE». Все значения ниже в каноне не подтверждены — ГИПОТЕЗА до решения фонда.
+status: hypothesis
+evidence_required: true            # у каждого поля нужна ссылка на документ-основание (непустая строка)
+legal_entity:
+  status: hypothesis
+  allowed_forms: [ООО, АО]         # организационно-правовая форма; значение вне списка → NEEDS_EVIDENCE
+deal_form:
+  status: hypothesis
+  allowed: [convertible_loan, equity, loan, safe]   # список инструментов совпадает с s2_mandate/investment_policy.yaml
+check_rub:                         # чек, ₽ (границы включительно); те же границы, что в мандате S2 (гипотеза)
+  status: hypothesis
+  min: 6000000
+  max: 10000000
+covenants:
+  status: hypothesis
+  min_count: 1                     # минимум ковенантов; каждый — объект с полем type
+  allowed_types: [information_rights, use_of_proceeds, negative_pledge, change_of_control]
+tranches:
+  status: hypothesis
+  min_count: 1
+  max_count: 5
+  sum_equals_check: true           # сумма траншей = чек
