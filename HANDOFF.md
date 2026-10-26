@@ -73,6 +73,48 @@
 - Ждёт подтверждения фонда (вопрос к #44): equity/loan/safe → EXCEPTION, grant → NO_FIT, чек вне диапазона → NO_FIT, только ₽.
 - Отдельная задача после слияния: подключить шлюз к потоку заявки S1 и сделать проверку «до встречи» обязательной шагом.
 
+## MOS-5 (#56) — вид фонда, сокращённый объём по Д-92 (Claude, 22.10), ветка `claude/issue-56-20261022-0934` → master
+**Сделано (только вид фонда owner/fund_staff; вида инвестора/Артура нет)**
+- `db/migrations/004_fund_view.sql`: `decision_snapshots`, `ic_decisions` (append-only). Роли и `audit_log` — в 001 (MOS-1), здесь не создаются.
+- `fund_view/gates.py` + проверка в `dealflow/status.py:change_status`: переход в DD/IC без шлюзов Thesis / Buyer (кто И когда) / Engagement (FIXED) → `GateBlocked` (HTTP 409 с перечнем). Блок на сервере, в т.ч. при прямом вызове change_status.
+- `fund_view/service.py`: Decision Snapshot; FACT только `sign-fact` владельца, любая правка сбрасывает в hypothesis; Engagement фиксирует только owner; решения IC GO/PAUSE/STOP → `ic_decisions` + `deal_status_history` (PAUSE→ON_HOLD, STOP→PASS, GO из ON_HOLD→ACTIVE) + `audit_log`; чек-лист из `docs/standards/ARTUR_STANDARD.md` дословно (заголовки и пункты `- [ ]`), без файла — «стандарт не загружен».
+- `fund_view/blueprint.py` (`/fund/startups/<vc_id>/...`): snapshot (json/html), engagement, sign-fact, transition, ic-decision. noindex: `X-Robots-Tag`, meta; robots.txt уже был. Доступ — auth MOS-1: `auth.require_role(("owner","fund_staff"), scope="*")` на всех 7 маршрутах `/fund/*`; investor → 403, без входа → 401.
+- Тест `test_hq018_postgres` обновлён: набор ролей теперь включает owner, fund_staff.
+
+**Остаток (не делалось по решению)**
+- Вид инвестора (Артур) — вне объёма по Д-92.
+- Еженедельный обзор G/Y/R по активным проектам.
+- Дашборд фонда #45 (воронка по enum, портфель RAG, next actions).
+
+**Слияние с master и auth MOS-1 (Claude, 22.10, поручение Бориса в PR #84)**
+- master влит в ветку обычным merge (без rebase/force-push); конфликт только в HANDOFF.md — сохранены обе части.
+- `resolve_actor()` теперь берёт `auth.current_user()` и гранты MOS-1; временный Bearer-доступ по env-токенам удалён из кода и документации.
+- `004_fund_view.sql`: убраны создание ролей и собственный `audit_log` — они в 001 (один `audit_log` на систему). `fund_view.service.audit` пишет в таблицу MOS-1 (actor=email, object=`startup:<id>`, detail=JSON). **Побочный эффект:** триггер append-only на `audit_log` из 004 убран (таблица общая, схему определяет MOS-1); `ic_decisions` остаётся append-only. Нужна ли неизменяемость `audit_log` — решение владельца.
+- Тесты HTTP — на реальную сессию MOS-1 (маркер `auth_enforced`): без входа 401, investor 403, fund_staff со scope кейса 403.
+
+**Ревью PR #84 (Claude, 23.10):** CHANGES, см. комментарий в PR; в HANDOFF исправлено устаревшее описание миграции 004. pytest: 437 passed, 4 skipped.
+
+**Правка по ревью п.3 (Claude, 23.10):** `_guard` в `fund_view/blueprint.py` ловит `LookupError` (стартап пропал между `find_startup` и `change_status`/`record_decision`) → 404 `not_found` с rollback вместо 500. Тест `test_startup_vanished_after_lookup_gives_404` (transition, ic-decision; поиск подменён, соединение «без стартапа»).
+
+**Остаток после заморозки 29.10:** п.4 ревью — писать в `audit_log` `result='deny'` для отказов шлюза (409) и «только owner» (403); сейчас в журнале только успешные действия.
+
+**Слияние master после #80 (MOS-4) и #34 (Claude, 23.10, поручение Штаба по Р-4)**
+- `origin/master` (42ce831) влит обычным merge, без rebase/force-push. Конфликты: `HANDOFF.md` (сохранены обе стороны) и `app.py` (оставлены обе регистрации: `fund_bp` и `portfolio_bp`). Код MOS-5 не менялся.
+- В `db/migrations` теперь два файла `004_*` (`004_fund_view.sql`, `004_portfolio_passport.sql`): таблицы не пересекаются, порядок по имени детерминирован; при желании переименовать в 005 — решение MOS Tech.
+- pytest целиком: 487 passed, 4 skipped, 1 warning, 33 subtests passed.
+
+**Не проверено / ограничения**
+- Текста стандарта Артура в репо нет; содержание не выдумывалось. Разбор markdown — по заголовкам и `- [ ]`; формат реального файла может потребовать правки парсера.
+- Шлюзы проверяются в Python (change_status), не триггером БД: прямой SQL UPDATE startups их обойдёт.
+- «Участие ASF» = поле asf_engagement=FIXED, ставит owner; семантику уточнить с PM. Квартал решения — строка YYYY-Qn, повторное решение за тот же квартал не запрещено.
+- На Render/живых пользователях не запускалось.
+
+**Тесты:** после правки п.3 ревью (23.10): 439 passed, 4 skipped, 1 warning, 29 subtests (+2 теста 404). До неё, после слияния с master и перехода на MOS-1: 437 passed, 4 skipped (публичные маршруты), 29 subtests, весь pytest (в т.ч. 26 в tests/test_mos5_fund_view.py; Postgres-часть исполнялась, не пропущена).
+
+---
+
+# Предыдущее
+
 ## MOS-4 — Портфель (паспорт, светофор S5, Д-68), issue #55, ветка `claude/issue-55-20261022-0511` → master (Claude, 22.10)
 **Сделано**
 - `db/migrations/004_portfolio_passport.sql`: роли `owner`, `fund_staff`; `portfolio_companies` + `holding_vehicle` (fund | partner_nominee), настраиваемые пороги runway (CHECK 6–18, red < yellow); таблица `portfolio_passport_snapshots` (cost, valuation basis/date, round, ownership %, runway, burn, plan_burn, next milestone что/когда/кто, loan income, дата последнего апдейта инвестору), append-only, UNIQUE (company, дата). LP-колонок нет.
