@@ -2,7 +2,6 @@ import os, io, json, uuid, time, re, hashlib, hmac
 from datetime import timedelta
 from flask import Flask, request, jsonify, render_template, session as browser_session, Response, g
 from pypdf import PdfReader
-from openai import OpenAI
 from routing_v2 import (
     JURISDICTIONS, PRODUCT_CLASSES, normalize_project_id, norm_jurisdiction,
     norm_product_class, parse_target_markets, route, vocab, profile_question,
@@ -16,6 +15,8 @@ from question_engine_v2 import (
 from session_store import DurableSessionStore, iso_z, utc_now
 from completion_event import build_completion_payload  # A9: доставка completion — через delivery_worker
 from founder_package import build_package, render_markdown, plan_ledger_write, verify_ledger, validate_package
+from s1_intake.config import Settings as LLMSettings
+from s1_intake.llm import LLMClient, check_prod_config
 from s1_intake.main import init_s1
 from werkzeug.middleware.proxy_fix import ProxyFix
 import auth
@@ -24,8 +25,11 @@ from s3_expert.blueprint import bp as s3_bp
 from staging_guard import init_staging
 
 app = Flask(__name__, static_folder=None)  # статики нет: маршрут /static не нужен
-client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+# MOS-7: одна точка замены LLM — s1_intake.llm.LLMClient (OPENAI_BASE_URL, OPENAI_API_KEY, модель из env).
+# Модель тренажёра: OPENAI_MODEL (по умолчанию gpt-5.6); S1 держит свою закреплённую модель (TG-1, S1_LLM_MODEL_ID).
 MODEL = os.environ.get("OPENAI_MODEL", "gpt-5.6")
+LLM_SETTINGS = LLMSettings(openai_model=MODEL)
+client = LLMClient(LLM_SETTINGS)
 TRAINER_VERSION = "s1-ext-pilot-v1.6-founder-package"
 TRAINER_EVENT_WEBHOOK = os.environ.get("TRAINER_EVENT_WEBHOOK", "").strip()
 WEBHOOK_TIMEOUT_SECONDS = float(
@@ -46,6 +50,7 @@ if os.environ.get("APP_ENV", "").strip().lower() in ("staging", "production") an
     raise RuntimeError("SESSION_SECRET обязателен при APP_ENV=staging|production: без него сессии подписываются случайным ключом")
 if os.environ.get("APP_ENV", "").strip().lower() == "staging" and not os.environ.get("PUBLIC_BASE_URL", "").strip():
     raise RuntimeError("PUBLIC_BASE_URL обязателен при APP_ENV=staging: иначе пакет основателю получит ссылки на Render")
+check_prod_config(LLM_SETTINGS, os.environ.get("APP_ENV", ""))  # mock в проде — ошибка конфигурации при старте
 try:
     _PROXIES = max(0, int(os.environ.get("TRUSTED_PROXY_COUNT", "0")))
 except ValueError:
@@ -105,21 +110,7 @@ def extract_pdf(file_storage):
     return text[:30000], manifest
 
 def call_json(system, user):
-    r = client.responses.create(
-        model=MODEL,
-        input=[
-            {"role":"system","content":[{"type":"input_text","text":system}]},
-            {"role":"user","content":[{"type":"input_text","text":user}]},
-        ],
-    )
-    txt = r.output_text.strip()
-    try:
-        return json.loads(txt)
-    except Exception:
-        m = re.search(r"\{[\s\S]*\}", txt)
-        if not m:
-            raise
-        return json.loads(m.group(0))
+    return client.complete_dict("trainer", system, user)
 
 def source_text(s):
     parts=[

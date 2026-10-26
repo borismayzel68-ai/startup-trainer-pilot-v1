@@ -4,7 +4,13 @@ Private founder-facing pilot. Not an investment decision.
 
 ## Env
 - `OPENAI_API_KEY`
-- `OPENAI_MODEL` (default: `gpt-5.6`)
+- `OPENAI_MODEL` (default: `gpt-5.6`) — модель тренажёра (app.py)
+- `OPENAI_BASE_URL` — общий для app.py и S1 (MOS-7). Yandex AI Studio: `https://llm.api.cloud.yandex.net/v1`, модель `gpt://<folder_ID>/<model>`
+- `S1_LLM_MODEL_ID` — явная замена закреплённой модели S1 (TG-1; нужна при смене провайдера)
+- `LLM_JSON_FORMAT` (`json_object` | `json_schema` | `none`) — если провайдер не поддерживает json_object; `json_schema` действует только для S1 (есть схема), для тренажёра app.py запасной режим — `none` (без text.format, JSON извлекается из текста)
+- По умолчанию `LLM_JSON_FORMAT=json_object` (для app.py раньше `text.format` не передавался). **Для Yandex до проверки реальным вызовом ставить `LLM_JSON_FORMAT=none`.**
+- `S1_LLM_PROVIDER` (`openai` | `mock`) — тренажёр app.py тоже идёт через LLMClient; `mock` только для тестов/dry-run, при `APP_ENV=staging|production` приложение не стартует (ошибка конфигурации)
+- Ключ и folder_id на Yandex Cloud — только через Lockbox (как в #57), в репозитории значений нет
 - `INVITE_CODE`
 - `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` (Google OAuth), `SESSION_SECRET`, `AUTH_ALLOWLIST` (`email:role[:scope]`, comma-separated), optional `AUTH_REDIRECT_URI` — see `docs/ACCESS_MATRIX.md`. `ADMIN_KEY` and `/admin?key=` were removed (404); admin view is `/admin/sessions`, owner only.
 - `SESSION_DATABASE_URL` (or Render-provided `DATABASE_URL`)
