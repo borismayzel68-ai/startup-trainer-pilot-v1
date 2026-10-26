@@ -8,6 +8,7 @@ import pytest
 os.environ.setdefault("OPENAI_API_KEY", "test-key")
 os.environ.setdefault("SESSION_DATABASE_URL", "sqlite:///:memory:")
 
+from portfolio.access import Actor  # noqa: E402
 from portfolio_update import PortfolioUpdates, reconcile  # noqa: E402
 from s6_perimeter import blueprint as B  # noqa: E402
 from s6_perimeter import engine as E  # noqa: E402
@@ -117,7 +118,7 @@ def test_s5_link_only_after_perimeter():
     rec = {"company_id": "SYN-1", "input": GOOD, **E.evaluate(GOOD, POLICY)}
     p = entry_passport("g1", rec, None)
     assert p.company_id == "SYN-1" and p.fields["deal_form"] == "convertible_loan"
-    assert reconcile(p, dict(p.fields), role="investor") == []
+    assert reconcile(p, dict(p.fields), actor=Actor("fund_staff")) == []
     assert isinstance(PortfolioUpdates().flags, (list, dict))
     with pytest.raises(E.GateBlocked):
         entry_passport("g2", {"company_id": "SYN-1", "input": {}}, None)
