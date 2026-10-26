@@ -4,16 +4,21 @@ import tempfile
 import threading
 import unittest
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from pathlib import Path
 
 from session_store import DurableSessionStore
+
+# Даты сессий — от сегодняшнего дня: с жёсткой датой 2026-09-26 записи истекли
+# через 30 дней хранения (26.10.2026) и get() стал возвращать None.
+DAY = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
 def sample_session(session_id="session-1"):
     return {
         "id": session_id,
         "project_id": "VC-178",
-        "created_at": "2026-09-26T07:00:00Z",
-        "updated_at": "2026-09-26T07:10:00Z",
+        "created_at": DAY + "T07:00:00Z",
+        "updated_at": DAY + "T07:10:00Z",
         "input_manifest": {
             "deck": {
                 "present": True,
@@ -57,8 +62,8 @@ class DurableSessionStoreTests(unittest.TestCase):
             "import sys;"
             "from session_store import DurableSessionStore;"
             "s={'id':'restart-1','project_id':'VC-178',"
-            "'created_at':'2026-09-26T07:00:00Z',"
-            "'updated_at':'2026-09-26T07:00:00Z'};"
+            "'created_at':'" + DAY + "T07:00:00Z',"
+            "'updated_at':'" + DAY + "T07:00:00Z'};"
             "DurableSessionStore(sys.argv[1]).save(s)"
         )
         reader = (
@@ -115,7 +120,7 @@ class DurableSessionStoreTests(unittest.TestCase):
         session = sample_session()
         store.save(session)
         session["qa"].append({"question":"Q2","answer":"A2"})
-        session["updated_at"] = "2026-09-26T07:20:00Z"
+        session["updated_at"] = DAY + "T07:20:00Z"
         store.save(session)
         self.assertEqual(len(store.values()), 1)
         self.assertEqual(len(store.get("session-1")["qa"]), 2)

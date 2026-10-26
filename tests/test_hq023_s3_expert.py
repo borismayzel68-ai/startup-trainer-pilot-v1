@@ -146,7 +146,7 @@ class S3HttpBase(tg1.Tg1Base):
         self.app.register_blueprint(s3_bp)
 
     def create(self, inp=None):
-        r = self.c.post("/s3/briefs", headers=base.ADMIN, json=inp or GOOD)
+        r = self.c.post("/s3/briefs", headers=base.ADMIN, json={"payer": "fund", **(inp or GOOD)})
         self.assertEqual(r.status_code, 201, r.get_json())
         return r.get_json()["id"]
 
@@ -154,11 +154,11 @@ class S3HttpBase(tg1.Tg1Base):
 class HumanGateTests(S3HttpBase):
     def test_empty_field_returns_422_and_creates_nothing(self):
         n = len(self.c.get("/s1/jobs", headers=base.ADMIN).get_json())
-        r = self.c.post("/s3/briefs", headers=base.ADMIN, json={**GOOD, "bounds": ""})
+        r = self.c.post("/s3/briefs", headers=base.ADMIN, json={**GOOD, "payer": "fund", "bounds": ""})
         self.assertEqual(r.status_code, 422)
         self.assertEqual(r.get_json()["missing"], ["границы компетенции"])
         self.assertEqual(len(self.c.get("/s1/jobs", headers=base.ADMIN).get_json()), n)
-        self.assertEqual(self.c.post("/s3/briefs", json=GOOD).status_code, 401)
+        self.assertEqual(self.c.post("/s3/briefs", json={**GOOD, "payer": "fund"}).status_code, 401)
 
     def test_unsigned_brief_is_awaiting_and_not_issued(self):
         bid = self.create()
@@ -232,11 +232,63 @@ class HumanGateTests(S3HttpBase):
 
     def test_sign_screen_is_static_without_brief_content(self):
         bid = self.create()
-        r = self.c.get(f"/s3/briefs/{bid}/sign-screen")
+        r = self.c.get(f"/s3/briefs/{bid}/sign-screen", headers=tg1.ALICE)
         self.assertEqual(r.status_code, 200)
         html = r.get_data(as_text=True)
         self.assertIn("Проверил", html)
         self.assertNotIn(GOOD["question"], html)
+
+
+class Hq062Tests(S3HttpBase):
+    """HQ-062: P-91 плательщик, фильтр S3 в /s1/jobs, вход на /sign-screen. Только синтетика."""
+
+    def post(self, payer):
+        body = dict(GOOD) if payer is None else {**GOOD, "payer": payer}
+        return self.c.post("/s3/briefs", headers=base.ADMIN, json=body)
+
+    def test_payer_fund_and_brainbox_accepted_and_stored(self):
+        for payer in ("fund", "brainbox_I"):
+            r = self.post(payer)
+            self.assertEqual(r.status_code, 201, r.get_json())
+            st = self.c.get(f"/s3/briefs/{r.get_json()['id']}", headers=base.ADMIN).get_json()
+            self.assertEqual(st["payer"], payer)
+
+    def test_payer_nocvela_rounds_and_others_rejected(self):
+        n = len(self.state.store.list(500, s3="only"))
+        for bad in ("nocvela", "Nocvela", "rounds", "Rounds", "", "BrainBox_I", "brainbox_i", None, 5, ["fund"]):
+            self.assertEqual(self.post(bad).status_code, 422, bad)
+        self.assertEqual(len(self.state.store.list(500, s3="only")), n)  # отказ — запись не создаётся
+
+    def test_s1_jobs_hides_s3_from_admin_and_outsiders(self):
+        bid = self.create()
+        self.assertEqual(self.c.get("/s1/jobs").status_code, 401)  # без входа
+        self.assertEqual(self.c.get("/s1/jobs", headers={"Authorization": "Bearer wrong"}).status_code, 401)
+        admin = self.c.get("/s1/jobs", headers=base.ADMIN)
+        self.assertEqual(admin.status_code, 200)
+        self.assertNotIn(bid, [j["id"] for j in admin.get_json()])
+        with mock.patch.dict("os.environ", {"S3_OWNERS": "bob"}):
+            self.assertEqual(self.c.get("/s1/jobs", headers=tg1.ALICE).status_code, 403)  # чужая роль
+        # прямой доступ к записи S3 через S1 закрыт
+        self.assertEqual(self.c.get(f"/s1/jobs/{bid}", headers=base.ADMIN).status_code, 404)
+        self.assertEqual(self.c.get(f"/s1/jobs/{bid}/readiness-pack.json", headers=base.ADMIN).status_code, 404)
+
+    def test_s1_jobs_shows_s3_to_s3_owner_only_s3(self):
+        bid = self.create()
+        with mock.patch.dict("os.environ", {"S3_OWNERS": "bob"}):
+            r = self.c.get("/s1/jobs", headers=tg1.BOB)
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual([j["id"] for j in r.get_json()], [bid])
+        self.assertNotIn("data", r.get_json()[0])
+
+    def test_sign_screen_requires_login(self):
+        bid = self.create()
+        url = f"/s3/briefs/{bid}/sign-screen"
+        self.assertEqual(self.c.get(url).status_code, 401)
+        self.assertEqual(self.c.get(url, headers={"Authorization": "Bearer wrong"}).status_code, 401)
+        self.assertEqual(self.c.get(url, headers=base.ADMIN).status_code, 403)  # admin не подписант
+        with mock.patch.dict("os.environ", {"S3_OWNERS": "bob"}):
+            self.assertEqual(self.c.get(url, headers=tg1.ALICE).status_code, 403)
+            self.assertEqual(self.c.get(url, headers=tg1.BOB).status_code, 200)
 
 
 class NoOutboundCodeTests(unittest.TestCase):

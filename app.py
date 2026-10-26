@@ -2,7 +2,6 @@ import os, io, json, uuid, time, re, hashlib, hmac
 from datetime import timedelta
 from flask import Flask, request, jsonify, render_template, session as browser_session, Response, g
 from pypdf import PdfReader
-from openai import OpenAI
 from routing_v2 import (
     JURISDICTIONS, PRODUCT_CLASSES, normalize_project_id, norm_jurisdiction,
     norm_product_class, parse_target_markets, route, vocab, profile_question,
@@ -16,15 +15,22 @@ from question_engine_v2 import (
 from session_store import DurableSessionStore, iso_z, utc_now
 from completion_event import build_completion_payload  # A9: доставка completion — через delivery_worker
 from founder_package import build_package, render_markdown, plan_ledger_write, verify_ledger, validate_package
+from s1_intake.config import Settings as LLMSettings
+from s1_intake.llm import LLMClient, check_prod_config
 from s1_intake.main import init_s1
+from s2_mandate.blueprint import bp as s2_bp
 from werkzeug.middleware.proxy_fix import ProxyFix
 import auth
 from auth import require_role, public, ANY_ROLE, STAFF_ROLES
 from s3_expert.blueprint import bp as s3_bp
+from staging_guard import init_staging
 
 app = Flask(__name__, static_folder=None)  # статики нет: маршрут /static не нужен
-client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+# MOS-7: одна точка замены LLM — s1_intake.llm.LLMClient (OPENAI_BASE_URL, OPENAI_API_KEY, модель из env).
+# Модель тренажёра: OPENAI_MODEL (по умолчанию gpt-5.6); S1 держит свою закреплённую модель (TG-1, S1_LLM_MODEL_ID).
 MODEL = os.environ.get("OPENAI_MODEL", "gpt-5.6")
+LLM_SETTINGS = LLMSettings(openai_model=MODEL)
+client = LLMClient(LLM_SETTINGS)
 TRAINER_VERSION = "s1-ext-pilot-v1.6-founder-package"
 TRAINER_EVENT_WEBHOOK = os.environ.get("TRAINER_EVENT_WEBHOOK", "").strip()
 WEBHOOK_TIMEOUT_SECONDS = float(
@@ -43,6 +49,9 @@ MAX_COMPLETION_EVENT_BYTES = 64 * 1024
 PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "https://startup-trainer-a9-staging.onrender.com").rstrip("/")
 if os.environ.get("APP_ENV", "").strip().lower() in ("staging", "production") and not os.environ.get("SESSION_SECRET", "").strip():
     raise RuntimeError("SESSION_SECRET обязателен при APP_ENV=staging|production: без него сессии подписываются случайным ключом")
+if os.environ.get("APP_ENV", "").strip().lower() == "staging" and not os.environ.get("PUBLIC_BASE_URL", "").strip():
+    raise RuntimeError("PUBLIC_BASE_URL обязателен при APP_ENV=staging: иначе пакет основателю получит ссылки на Render")
+check_prod_config(LLM_SETTINGS, os.environ.get("APP_ENV", ""))  # mock в проде — ошибка конфигурации при старте
 try:
     _PROXIES = max(0, int(os.environ.get("TRUSTED_PROXY_COUNT", "0")))
 except ValueError:
@@ -62,6 +71,8 @@ SESSIONS = DurableSessionStore(
     SESSION_DATABASE_URL,
     retention_days=SESSION_RETENTION_DAYS,
 )
+# MOS-6: закрытый staging (APP_ENV=staging): проверка env, замок по сессии MOS-1 (#61), только синтетика. Иначе — только noindex-заголовок.
+init_staging(app, os.environ)
 # A9 (#11): лимит размера запроса 20 МБ — на всё приложение, включая /s1/* (S1 принимает JSON-тела
 # и ссылки на файлы; сами файлы скачиваются парсером с отдельным лимитом S1_MAX_FILE_MB).
 app.config["MAX_CONTENT_LENGTH"] = 20 * 1024 * 1024
@@ -70,6 +81,11 @@ app.config["MAX_CONTENT_LENGTH"] = 20 * 1024 * 1024
 init_s1(app)
 # S3 · БП-07 (HQ-023): один вопрос → ответ → бриф, подпись владельца через механизм S1 (/s3/*). Отправки наружу нет.
 app.register_blueprint(s3_bp)
+# S2 · шлюз мандата фонда (#44): правила из s2_mandate/investment_policy.yaml, EXCEPTION решает человек (/s2/*).
+app.register_blueprint(s2_bp)
+# MOS-5 (#56): вид фонда (owner/fund_staff), /fund/*. Доступ через auth MOS-1 (owner, fund_staff), noindex.
+from fund_view.blueprint import bp as fund_bp  # noqa: E402
+app.register_blueprint(fund_bp)
 # MOS-4 (#55): портфель /portfolio; доступ — require_role из MOS-1 (owner/fund_staff/investor), scope проверяет сервис.
 from portfolio.blueprint import bp as portfolio_bp  # noqa: E402
 app.register_blueprint(portfolio_bp)
@@ -100,21 +116,7 @@ def extract_pdf(file_storage):
     return text[:30000], manifest
 
 def call_json(system, user):
-    r = client.responses.create(
-        model=MODEL,
-        input=[
-            {"role":"system","content":[{"type":"input_text","text":system}]},
-            {"role":"user","content":[{"type":"input_text","text":user}]},
-        ],
-    )
-    txt = r.output_text.strip()
-    try:
-        return json.loads(txt)
-    except Exception:
-        m = re.search(r"\{[\s\S]*\}", txt)
-        if not m:
-            raise
-        return json.loads(m.group(0))
+    return client.complete_dict("trainer", system, user)
 
 def source_text(s):
     parts=[
@@ -753,8 +755,11 @@ S1_POLICY = {
     # S3 (HQ-023): подпись брифа по-прежнему только персональным Bearer из S1_APPROVERS (G-12); сессия заменяет лишь admin-токен
     **{"s3_expert." + n: _S1_ALL for n in (
         "create_brief", "get_status", "review", "issue_json", "issue_md")},
-    "s3_expert.sign_screen": (["owner", "fund_staff"], "*", None),  # статичная страница без данных: только вошедшим
+    "s3_expert.sign_screen": (["owner", "fund_staff"], "*", "secret"),  # статичная страница без данных; Bearer подписанта — проверка во view
     "s3_expert.sign": (["owner"], "*", "secret"),
+    # S2 (#44): создание/чтение проверки — owner/fund_staff или admin-токен; решение по EXCEPTION — только персональный Bearer (Human Gate)
+    "s2_mandate.create_check": _S1_ALL, "s2_mandate.get_check": _S1_ALL,
+    "s2_mandate.decide": (["owner"], "*", "secret"),
 }
 auth.init_auth(app, SESSION_DATABASE_URL, S1_POLICY)
 

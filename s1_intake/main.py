@@ -14,6 +14,7 @@ import hashlib
 import hmac
 import json
 import logging
+import os
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -237,6 +238,24 @@ def _approver() -> str | None:
     return None
 
 
+_STAFF_ROLES = frozenset({"owner", "fund_staff"})  # = auth.STAFF_ROLES (MOS-1)
+
+
+def _staff_session() -> bool:
+    """MOS-1 (#61): сессия прошла require_role и содержит роль owner/fund_staff (investor — нет)."""
+    return bool(g.get("rbac_session_ok")) and bool(set(g.get("rbac_roles") or ()) & _STAFF_ROLES)
+
+
+def _s3_viewer() -> str | None:
+    """HQ-062: роль S3 — сессия owner/fund_staff (MOS-1) или персональный подписант из S3_OWNERS (пусто → любой
+    подписант S1). Bearer-ветка без изменений."""
+    if _staff_session():
+        return "session"
+    who = _approver()
+    owners = {x.strip() for x in os.environ.get("S3_OWNERS", "").split(",") if x.strip()}
+    return who if who and (not owners or who in owners) else None
+
+
 # ------------------------------------------------------------------ auth ----
 def _admin_ok() -> bool:
     if g.get("rbac_session_ok"):  # MOS-1 (#52): сессия прошла require_role (роль + scope), маршрут её роль допускает
@@ -294,10 +313,14 @@ def tilda_webhook():
 
 @bp.get("/jobs")
 def list_jobs():
-    if not _admin_ok():
-        return _err("unauthorized", 401)
     limit = min(int(request.args.get("limit", 50)), 500)
-    return jsonify(_state().store.list(limit))
+    if _staff_session():  # MOS-1: owner/fund_staff по сессии — S1 как раньше, плюс записи S3
+        return jsonify(_state().store.list(limit, s3="all"))
+    if _admin_ok():  # HQ-062: админ (Bearer) и investor по сессии видят S1, записи S3 — нет
+        return jsonify(_state().store.list(limit, s3="exclude"))
+    if _s3_viewer():  # роль S3 видит только S3
+        return jsonify(_state().store.list(limit, s3="only"))
+    return _err("forbidden" if _approver() else "unauthorized", 403 if _approver() else 401)
 
 
 @bp.get("/jobs/<job_id>")
@@ -305,7 +328,7 @@ def get_job(job_id):
     if not _admin_ok():
         return _err("unauthorized", 401)
     job = _state().store.get(job_id)
-    if not job:
+    if not job or job["data"].get("s3"):  # S3 — только через /s3/* (HQ-062)
         return _err("not found", 404)
     data = job.pop("data")
     brief = (data.get("readiness_pack") or {}).get("internal_analyst_brief") or {}
@@ -337,7 +360,7 @@ def get_artifact(job_id, artifact):
         return _err("not found", 404)
     job = _state().store.get(job_id)
     key, kind = _ARTIFACTS[artifact]
-    if not job or key not in job["data"]:
+    if not job or job["data"].get("s3") or key not in job["data"]:
         return _err("not found", 404)
     value = job["data"][key]
     if kind == "json":
