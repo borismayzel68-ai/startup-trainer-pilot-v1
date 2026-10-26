@@ -133,6 +133,28 @@
 
 ---
 
+## HQ-062 — S3: плательщик (P-91), фильтр S3 в /s1/jobs, вход на /sign-screen; issue #65, ветка `claude/issue-65-20261022-0930` → master (Claude, 22.10)
+- 23.10 (Claude, по поручению Штаба): исправлен блокер п.1 — сессия MOS-1 на sign-screen и в /s1/jobs; п.3 — TODO.
+- 23.10 (ревью Claude, PR #86): CHANGES — см. комментарий ревью; в HANDOFF исправлена устаревшая строка про отсутствие auth.py и число тестов.
+- 23.10 (Claude, по поручению Штаба, Р-4): влит master (#80 MOS-4 портфель, #34 HQ-035) обычным merge; конфликт только в HANDOFF.md, сохранены записи обеих сторон; код HQ-062 не менялся.
+- 22.10 (Штаб): влит master (#61, #72, #75) обычным merge; конфликт был только в HANDOFF.md, сохранены обе части; `s1_intake/main.py` слился автоматически. pytest: 396 passed, 17 skipped.
+
+**Сделано**
+- P-91: `POST /s3/briefs` требует `payer` ∈ {`fund`, `brainbox_I`} (точное совпадение, регистр важен). nocvela, rounds и всё прочее → 422, запись не создаётся. Значение хранится в `data.s3.payer`, отдаётся в `GET /s3/briefs/<id>`; в хеш брифа/подпись не входит.
+- `/s1/jobs`: админ-токен видит только S1 (S3 отфильтрован); роль S3 (персональный подписант из `S3_OWNERS`, пусто → любой подписант) видит только S3; чужой подписант → 403, без входа → 401. `GET /s1/jobs/<id>` и артефакты для записи S3 → 404 (S3 только через `/s3/*`). Фильтр — `store.list(limit, s3="exclude"|"only"|"all")`.
+- `/s3/briefs/<id>/sign-screen`: сессия owner/fund_staff (MOS-1) или Bearer подписанта; без входа 401, admin-Bearer/не-владелец/investor 403.
+- Тесты: `Hq062Tests` в tests/test_hq023_s3_expert.py; существующие тесты S3 подправлены под обязательный `payer` и вход на sign-screen. pytest 23.10 (ревью): 409 passed, 4 skipped. После merge master (#80, #34): 462 passed, 4 skipped, 33 subtests.
+
+**MOS-1 (#61) подключён (23.10, блокер ревью п.1 закрыт).** `s1_intake/main.py::_staff_session()` — сессия прошла `require_role` и имеет роль owner/fund_staff. `_s3_viewer()` и `sign_screen` её принимают; Bearer-ветки не менялись. `/s1/jobs`: сессия owner/fund_staff видит S1 + S3 (`s3="all"`), investor по сессии и admin-Bearer — только S1, подписант по Bearer — только S3. `app.py` S1_POLICY: `s3_expert.sign_screen` получил `external="secret"`, иначе при включённом RBAC Bearer-подписант и admin-Bearer получали 401 до view (admin-Bearer теперь 403, как требовалось). Подпись `POST /s3/briefs/<id>/sign` — по-прежнему только персональный Bearer (G-12), сессия её не заменяет. Тесты: `tests/test_hq062_s3_session.py` (5, маркер `auth_enforced`; на коде до правки падают 3 из 5). pytest 23.10: 414 passed, 4 skipped, 29 subtests.
+
+**Не проверено / важно**
+- sign-screen по сессии проверен тестами на мок-входе; реальный Google OAuth вручную не прогонялся. Страница подписи открыта по сессии, но сама подпись (POST /sign) требует Bearer — из браузера подписать по сессии нельзя (G-12, решение за владельцем).
+- Отдельная роль «S3-эксперт» не заведена (нет модели ролей до #61); сейчас роль = подписант из `S3_OWNERS`.
+- TODO (ревью 23.10 п.3, не делалось): `store.list` читает все строки и режет по limit в Python; перенести фильтр S3 в SQL и вернуть `LIMIT` (пометка в `s1_intake/store.py::list`). Для пилота объём мал.
+- payer — только ограничение значения (P-91), не платёжная логика и не привязка к договору/каналу S7.
+- CI с Postgres 16 здесь не запускался — смотреть прогон PR.
+
+---
 ## MOS-4 — Портфель (паспорт, светофор S5, Д-68), issue #55, ветка `claude/issue-55-20261022-0511` → master (Claude, 22.10)
 **Сделано**
 - `db/migrations/004_portfolio_passport.sql`: роли `owner`, `fund_staff`; `portfolio_companies` + `holding_vehicle` (fund | partner_nominee), настраиваемые пороги runway (CHECK 6–18, red < yellow); таблица `portfolio_passport_snapshots` (cost, valuation basis/date, round, ownership %, runway, burn, plan_burn, next milestone что/когда/кто, loan income, дата последнего апдейта инвестору), append-only, UNIQUE (company, дата). LP-колонок нет.

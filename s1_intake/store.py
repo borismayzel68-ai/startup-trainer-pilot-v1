@@ -283,14 +283,22 @@ class ReadinessJobStore:
     def get(self, job_id: str) -> dict | None:
         return self._row(self._exec(f"{self._SELECT} WHERE id={self.ph}", (job_id,), "one"))
 
-    def list(self, limit: int = 50) -> list[dict]:
+    def list(self, limit: int = 50, s3: str = "exclude") -> list[dict]:
+        """HQ-062: s3="exclude" — записи S3 (data.s3) не отдаются; "only" — только они; "all" — без фильтра."""
         self.purge_expired()
-        rows = self._exec(f"{self._SELECT} ORDER BY created_at DESC LIMIT {int(limit)}", (), "all")
+        # TODO(HQ-062, ревью 23.10 п.3): LIMIT снят — фильтр S3 идёт в Python по data_json; перенести фильтр в SQL
+        # (отдельная колонка/индекс) и вернуть LIMIT, когда число записей вырастет за пилот.
+        rows = self._exec(f"{self._SELECT} ORDER BY created_at DESC", (), "all")
         out = []
         for r in rows:
             d = self._row(r)
+            is_s3 = bool(d["data"].get("s3"))
+            if (s3 == "exclude" and is_s3) or (s3 == "only" and not is_s3):
+                continue
             d.pop("data")  # список — только метаданные
             out.append(d)
+            if len(out) >= int(limit):
+                break
         return out
 
     def recoverable(self, stale_before: str) -> list[str]:
