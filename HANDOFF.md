@@ -6,10 +6,9 @@
 - В одну ветку обычными merge-коммитами влиты PR #82 (MOS-6), #79 (MOS-7), #81 (S2 мандат), #84 (MOS-5), #85 (S5), #86 (S3 плательщик), #83 (STATE.md) — по порядку. Ни один PR не переписан.
 - Конфликты (3): app.py ×2 (#79 после #82: проверка PUBLIC_BASE_URL + check_prod_config — оставлены обе; #84 после #81: регистрация s2_bp + fund_bp — оставлены обе), HANDOFF.md ×1 (#81: сохранены обе части). Код ни одной стороны не удалён.
 - Ревью второй моделью (Claude Sonnet) 26.10: все 6 PR с кодом — PASS*, блокеров нет; некритичные замечания — в комментариях PR.
-- pytest локально (без Postgres): 551 passed, 27 skipped, 4 failed — те же 4 в tests/test_session_store.py падают и на чистом master в этой среде (sqlite в подпроцессе), к интеграции не относятся. Решает CI с Postgres 16.
 - Исправлено в интеграции (CI 26.10 был красный):
   1. tests/test_session_store.py — жёсткая дата 2026-09-26 + хранение 30 дней = записи истекли 26.10, get() → None (4 теста; ломало и master). Даты теперь от сегодняшнего дня.
-  2. Стык #82 × #79: MOS-7 запрещает S1_LLM_PROVIDER=mock на staging, а deploy.sh/rollback.sh MOS-6 ставили mock → staging упал бы при старте. deploy.sh/rollback.sh → openai; тесты RealAppTests запускают staging с openai (ключ синтетический); .env.example: для LLM на staging нужны OPENAI_API_KEY и OPENAI_BASE_URL в Lockbox.
+  2. Стык #82 × #79: MOS-7 запрещает S1_LLM_PROVIDER=mock на staging, а deploy.sh/rollback.sh MOS-6 ставили mock → staging упал бы при старте. deploy.sh/rollback.sh → openai, OPENAI_API_KEY и OPENAI_BASE_URL берутся из Lockbox (без них контейнер не стартует). check_prod_config: на staging OPENAI_BASE_URL обязателен и не api.openai.com (только Yandex AI Studio) — данные не уйдут в США при пустом секрете. Тест test_staging_requires_ru_base_url.
   pytest после правок (S1_LLM_PROVIDER=mock, как в CI): 555 passed, 27 skipped, 0 failed.
 - Известное, вне объёма: два файла миграций с номером 004 (004_fund_view, 004_portfolio_passport) — порядок применения детерминирован (sorted), таблицы независимы; переименование в 005 — отдельной задачей.
 

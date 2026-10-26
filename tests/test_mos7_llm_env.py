@@ -132,6 +132,15 @@ class LLMEnvTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {"S1_LLM_PROVIDER": "openai"}):
             check_prod_config(cfg.Settings(), "production")
 
+    def test_staging_requires_ru_base_url(self):
+        for base in ("", "https://api.openai.com/v1"):
+            with mock.patch.dict(os.environ, {"S1_LLM_PROVIDER": "openai", "OPENAI_BASE_URL": base}):
+                with self.assertRaises(LLMError):
+                    check_prod_config(cfg.Settings(), "staging")
+        with mock.patch.dict(os.environ, {"S1_LLM_PROVIDER": "openai",
+                                          "OPENAI_BASE_URL": "https://llm.api.cloud.yandex.net/v1"}):
+            check_prod_config(cfg.Settings(), "staging")
+
 
 if __name__ == "__main__":
     unittest.main()

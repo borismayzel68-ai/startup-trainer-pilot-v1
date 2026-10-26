@@ -131,7 +131,8 @@ class RealAppTests(unittest.TestCase):
     def run_app(self, extra):
         env = {k: v for k, v in os.environ.items() if k not in sg.REQUIRED_ENV and k not in ("APP_ENV", "PUBLIC_BASE_URL")}
         # MOS-7 (#79): mock-провайдер запрещён при APP_ENV=staging — как в deploy.sh, провайдер openai (ключ синтетический, сети нет).
-        env.update({"OPENAI_API_KEY": "test-key", "S1_LLM_PROVIDER": "openai", "SESSION_DATABASE_URL": "sqlite:///:memory:"}, **extra)
+        env.update({"OPENAI_API_KEY": "test-key", "S1_LLM_PROVIDER": "openai",
+                    "OPENAI_BASE_URL": "https://llm.api.cloud.yandex.net/v1", "SESSION_DATABASE_URL": "sqlite:///:memory:"}, **extra)
         code = ("import app; c=app.app.test_client(); r=c.get('/health'); "
                 "print(r.status_code, r.headers.get('X-Robots-Tag')); "
                 "print(c.get('/', base_url='https://localhost').status_code)")

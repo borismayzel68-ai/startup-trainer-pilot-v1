@@ -40,6 +40,13 @@ def check_prod_config(settings: Settings, app_env: str) -> None:
     if app_env.strip().lower() in ("staging", "production") and settings.llm_provider == "mock":
         raise LLMError("S1_LLM_PROVIDER=mock недопустим при APP_ENV=staging|production: "
                        "задайте S1_LLM_PROVIDER=openai (ключ OPENAI_API_KEY, при необходимости OPENAI_BASE_URL)")
+    # Staging — сервер в РФ (MOS-6): LLM только через явный OPENAI_BASE_URL не на api.openai.com,
+    # иначе при пустом секрете Lockbox данные тихо ушли бы в США.
+    base = (settings.openai_base_url or "").strip().lower()
+    if app_env.strip().lower() == "staging" and settings.llm_provider != "mock" and (
+            not base or "api.openai.com" in base):
+        raise LLMError("APP_ENV=staging: OPENAI_BASE_URL обязателен и не api.openai.com "
+                       "(Yandex AI Studio: https://llm.api.cloud.yandex.net/v1)")
 
 
 def _extract_json(txt: str) -> str:

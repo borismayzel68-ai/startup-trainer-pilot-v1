@@ -17,7 +17,7 @@ SECRET_VER=$(yc lockbox secret get --id "$LOCKBOX_SECRET_ID" --format json \
 
 # Все ключи секрета (имена без значений) подключаются как переменные окружения контейнера.
 secret_args() {
-  for k in DATABASE_URL SESSION_SECRET GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET AUTH_ALLOWLIST; do
+  for k in DATABASE_URL SESSION_SECRET GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET AUTH_ALLOWLIST OPENAI_API_KEY OPENAI_BASE_URL; do
     printf -- '--secret environment-variable=%s,id=%s,version-id=%s,key=%s\n' "$k" "$LOCKBOX_SECRET_ID" "$SECRET_VER" "$k"
   done
 }

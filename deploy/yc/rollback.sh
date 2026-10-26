@@ -8,7 +8,7 @@ TAG="${1:?укажите тег образа}"
 SECRET_VER=$(yc lockbox secret get --id "$LOCKBOX_SECRET_ID" --format json \
   | python3 -c 'import json,sys; print(json.load(sys.stdin)["current_version"]["id"])')
 ARGS=()
-for k in DATABASE_URL SESSION_SECRET GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET AUTH_ALLOWLIST; do
+for k in DATABASE_URL SESSION_SECRET GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET AUTH_ALLOWLIST OPENAI_API_KEY OPENAI_BASE_URL; do
   ARGS+=(--secret "environment-variable=$k,id=$LOCKBOX_SECRET_ID,version-id=$SECRET_VER,key=$k")
 done
 yc serverless container revision deploy --container-name mos-staging \

@@ -95,7 +95,7 @@ Worker: `python delivery_worker.py`
 
 ### 0. Секреты и роли (точный список, значений нет)
 **Yandex Lockbox** — один секрет `mos-staging` с ключами: `DATABASE_URL`, `SESSION_SECRET`, `GOOGLE_CLIENT_ID`,
-`GOOGLE_CLIENT_SECRET`, `AUTH_ALLOWLIST`; опционально `OPENAI_API_KEY`. Не секрет, обычная env ревизии: `AUTH_REDIRECT_URI`.
+`GOOGLE_CLIENT_SECRET`, `AUTH_ALLOWLIST`, `OPENAI_API_KEY`, `OPENAI_BASE_URL` (Yandex AI Studio; на staging обязателен и не api.openai.com — иначе старт падает). Не секрет, обычная env ревизии: `AUTH_REDIRECT_URI`.
 **GitHub Environment `staging`** (только для deploy-workflow, не для `tests.yml`): секрет `YC_SA_KEY_JSON` (авторизованный ключ
 SA деплоя); идентификаторы `YC_FOLDER_ID`, `YC_REGISTRY_ID`, `YC_NETWORK_ID`, `YC_RUNTIME_SA_ID`, `YC_PG_CLUSTER_ID`,
 `LOCKBOX_SECRET_ID`, `AUTH_REDIRECT_URI`.
