@@ -15,11 +15,16 @@ import hmac
 import json
 import logging
 import os
+import threading
+import time
+from collections import deque
+from urllib.parse import urlsplit
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from flask import Blueprint, Flask, Response, current_app, g, jsonify, request
+import httpx
+from flask import Blueprint, Flask, Response, current_app, g, jsonify, request, session as browser_session
 
 from .config import Settings, get_settings, load_methodology
 from .dialogue import (DialogueError, add_r2_item, attach_file, build_session, expire_overdue, r2_candidates,
@@ -881,3 +886,72 @@ def rerun(job_id):
         return _err("job not found or still in progress", 409)
     st.pool.submit(_process_job, current_app._get_current_object(), job_id)
     return jsonify({"ok": True})
+
+
+# ================================================================ Q-316 =====
+FEEDBACK_MAX_TEXT = 2000
+FEEDBACK_MAX_CONTACT = 200
+FEEDBACK_RATE_LIMIT = 5        # обращений
+FEEDBACK_RATE_WINDOW = 60.0    # за секунд, на одну сессию
+FEEDBACK_WEBHOOK_TIMEOUT = 5   # секунд
+_feedback_hits: dict[str, deque] = {}
+_feedback_lock = threading.Lock()
+
+
+def _feedback_rate_key() -> str:
+    """Сессия пользователя (uid после входа или csrf-токен сессии); без сессии — адрес клиента."""
+    raw = browser_session.get("uid") or browser_session.get("csrf") or request.remote_addr or "anon"
+    return hashlib.sha256(str(raw).encode()).hexdigest()[:16]
+
+
+def _feedback_allowed(key: str) -> bool:
+    now = time.monotonic()
+    with _feedback_lock:
+        hits = _feedback_hits.setdefault(key, deque())
+        while hits and now - hits[0] > FEEDBACK_RATE_WINDOW:
+            hits.popleft()
+        if len(hits) >= FEEDBACK_RATE_LIMIT:
+            return False
+        hits.append(now)
+        return True
+
+
+def _feedback_path(raw) -> str | None:
+    """Путь/экран без параметров запроса и фрагмента."""
+    return urlsplit(str(raw or request.referrer or "")).path[:200] or None
+
+
+def _send_feedback_webhook(payload: dict) -> None:
+    url = os.environ.get("FEEDBACK_WEBHOOK_URL", "").strip()
+    if not url:
+        return
+    try:
+        httpx.post(url, json=payload, timeout=FEEDBACK_WEBHOOK_TIMEOUT).raise_for_status()
+    except Exception as e:  # noqa: BLE001 — пользователю всё равно «принято»; адрес в лог не пишем
+        log.warning("feedback webhook failed for %s: %s", payload.get("number"), type(e).__name__)
+
+
+@bp.post("/feedback")
+def feedback_submit():
+    """Кнопка «Сообщить о проблеме» кабинета S1: сохранить, присвоить ОС-N, при наличии FEEDBACK_WEBHOOK_URL — отправить."""
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return _err("bad payload", 400)
+    text, contact = str(body.get("text") or "").strip(), str(body.get("contact") or "").strip()
+    if not text:
+        return _err("text required", 400)
+    if len(text) > FEEDBACK_MAX_TEXT:
+        return _err(f"text longer than {FEEDBACK_MAX_TEXT} chars", 400)
+    if len(contact) > FEEDBACK_MAX_CONTACT:
+        return _err(f"contact longer than {FEEDBACK_MAX_CONTACT} chars", 400)
+    key = _feedback_rate_key()
+    if not _feedback_allowed(key):
+        return _err("too many requests", 429)
+    roles = sorted(g.get("rbac_roles") or ())
+    sid = str(body.get("session_id") or "").strip()[:64] or key
+    item = _state().store.add_feedback(
+        "S1", ",".join(roles) or None, _feedback_path(body.get("path")), sid,
+        _state().settings.code_sha or None, text, contact or None)
+    _send_feedback_webhook(item)
+    return jsonify({"ok": True, "number": item["number"],
+                    "message": f"Спасибо, получили. Номер обращения {item['number']}"}), 201

@@ -25,6 +25,7 @@
 | #52, #54 | MOS-1 Auth+RBAC, MOS-3 импорт — полный лог HANDOFF.md из master 34d43f4 (перенесён без изменений) | [docs/handoff/master-log-2026-10-22.md](docs/handoff/master-log-2026-10-22.md) |
 | #53 | MOS-2 · схема dealflow | [docs/handoff/53.md](docs/handoff/53.md) |
 | #37 | HQ-041 · S6 «Периметр входа» (шлюз NEEDS_EVIDENCE); 26.10: `POST /s2/checks` только через пройденный S6; 27.10: merge master (после #90); 27.10: атомарный захват шлюза (CAS), forward_to_s2 и POST /s2/checks на одном захвате, повтор → 409, pytest 675 passed | [docs/handoff/37.md](docs/handoff/37.md) |
+| #93 | Q-316 · кнопка «Сообщить о проблеме» (S1); новая таблица s1_feedback — ревью MOS Tech; pytest 685 passed | [docs/handoff/93.md](docs/handoff/93.md) |
 | #57 | MOS-6 · staging | [docs/handoff/57.md](docs/handoff/57.md) |
 | #59 | HQ-023 · S3 Эксперт (БП-07) | [docs/handoff/59.md](docs/handoff/59.md) |
 

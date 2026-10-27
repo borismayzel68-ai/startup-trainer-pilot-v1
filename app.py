@@ -754,6 +754,8 @@ S1_POLICY = {
     **{"s1_intake." + n: _S1_LINK for n in (
         "founder_dialogue", "founder_dialogue_answer", "free_public",
         "cabinet_consent", "cabinet_revoke", "cabinet_consents")},
+    # Q-316: «Сообщить о проблеме» — любой вошедший пользователь кабинета; CSRF проверяет require_role
+    "s1_intake.feedback_submit": (sorted(auth.ANY_ROLE), None, None),
     "s1_intake.shared_open": (["investor", "owner", "fund_staff"], None, "link"),
     # S3 (HQ-023): подпись брифа по-прежнему только персональным Bearer из S1_APPROVERS (G-12); сессия заменяет лишь admin-токен
     **{"s3_expert." + n: _S1_ALL for n in (

@@ -15,6 +15,9 @@ textarea{min-height:110px}button{cursor:pointer;background:#111;color:white;bord
 .hidden{display:none}.tag{display:inline-block;padding:5px 9px;background:#eee;border-radius:999px;font-size:12px}
 .msg{white-space:pre-wrap;line-height:1.45}.q{font-size:20px;font-weight:700}.error{color:#a00}
 ul{padding-left:22px}
+#fbBtn{position:fixed;right:16px;bottom:16px;width:auto;z-index:50;box-shadow:0 2px 8px rgba(0,0,0,.3)}
+#fbBox{position:fixed;right:16px;bottom:70px;width:min(380px,calc(100% - 32px));z-index:50;background:white;border:1px solid #bbb;border-radius:16px;padding:16px;box-shadow:0 4px 16px rgba(0,0,0,.25)}
+#fbBox textarea{min-height:90px}#fbBox label{display:block;margin-top:8px}
 </style>
 </head>
 <body>
@@ -157,5 +160,27 @@ async function sendFeedback(){
  await fetch('/api/session/'+sid+'/feedback',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:t})});
  alert('Спасибо. Обратная связь сохранена.');
 }
+</script>
+<button id="fbBtn" type="button">Сообщить о проблеме</button>
+<div id="fbBox" class="hidden" role="dialog" aria-label="Сообщить о проблеме">
+<p class="muted"><b>Не вводите персональные данные пациентов и закрытые сведения</b></p>
+<label for="fbText">Что случилось</label>
+<textarea id="fbText" maxlength="2000"></textarea>
+<label for="fbContact">Как с вами связаться (необязательно)</label>
+<input id="fbContact" maxlength="200">
+<p id="fbMsg" class="msg"></p>
+<button id="fbSend" type="button">Отправить</button>
+</div>
+<script>
+(function(){var $=function(i){return document.getElementById(i)},box=$("fbBox"),msg=$("fbMsg");
+$("fbBtn").onclick=function(){box.classList.toggle("hidden");};
+$("fbSend").onclick=function(){var text=$("fbText").value.trim();msg.className="msg";
+if(!text){msg.className="msg error";msg.textContent="Опишите, что случилось.";return;}
+fetch("/s1/feedback",{method:"POST",headers:{"Content-Type":"application/json"},
+body:JSON.stringify({text:text,contact:$("fbContact").value,path:location.pathname})})
+.then(function(r){return r.json().then(function(j){return[r.ok,j]})})
+.then(function(x){if(x[0]){msg.textContent=x[1].message;$("fbText").value="";}
+else{msg.className="msg error";msg.textContent=x[1].error==="too many requests"?"Слишком часто, попробуйте через минуту.":"Не удалось отправить, проверьте текст.";}})
+.catch(function(){msg.className="msg error";msg.textContent="Не удалось отправить.";});};})();
 </script>
 </body></html>
