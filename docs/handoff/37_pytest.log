@@ -1,3 +1,8 @@
+    warnings.warn(
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-668 passed, 4 skipped, 1 warning, 33 subtests passed in 35.83s
+=========================== short test summary info ============================
+FAILED tests/test_delivery_worker.py::DeliveryWorkerTests::test_early_make_2xx_without_completed_receipt_is_retried - TypeError: 'NoneType' object is not subscriptable
+FAILED tests/test_delivery_worker.py::DeliveryWorkerTests::test_stale_session_save_cannot_roll_back_delivery_status - AssertionError: False is not true
+FAILED tests/test_delivery_worker.py::DeliveryWorkerTests::test_success_marks_outbox_and_session - TypeError: 'NoneType' object is not subscriptable
+3 failed, 665 passed, 4 skipped, 1 warning, 33 subtests passed in 38.30s

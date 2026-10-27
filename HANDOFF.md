@@ -20,7 +20,7 @@
 | #41 | HQ-042 · S5 сверка с паспортом входа (доработка ролей 26.10) | [docs/handoff/41.md](docs/handoff/41.md) |
 | #52, #54 | MOS-1 Auth+RBAC, MOS-3 импорт — полный лог HANDOFF.md из master 34d43f4 (перенесён без изменений) | [docs/handoff/master-log-2026-10-22.md](docs/handoff/master-log-2026-10-22.md) |
 | #53 | MOS-2 · схема dealflow | [docs/handoff/53.md](docs/handoff/53.md) |
-| #37 | HQ-041 · S6 «Периметр входа» (шлюз NEEDS_EVIDENCE); 26.10: `POST /s2/checks` только через пройденный S6 | [docs/handoff/37.md](docs/handoff/37.md) |
+| #37 | HQ-041 · S6 «Периметр входа» (шлюз NEEDS_EVIDENCE); 26.10: `POST /s2/checks` только через пройденный S6; 27.10: merge master (после #90), pytest 665 passed / 3 failed (test_delivery_worker, падают и на master) | [docs/handoff/37.md](docs/handoff/37.md) |
 | #57 | MOS-6 · staging | [docs/handoff/57.md](docs/handoff/57.md) |
 | #59 | HQ-023 · S3 Эксперт (БП-07) | [docs/handoff/59.md](docs/handoff/59.md) |
 
