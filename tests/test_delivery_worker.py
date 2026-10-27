@@ -17,7 +17,9 @@ from delivery_worker import deliver_one
 from session_store import DurableSessionStore, iso_z
 
 
-T0 = datetime(2026, 9, 26, 20, 0, tzinfo=timezone.utc)
+# T0 — от текущего часа: с жёсткой датой 2026-09-26 сессии истекли через
+# 30 дней хранения (с 26.10.2026), store.get() возвращал None. Как в test_session_store.py.
+T0 = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
 
 
 def identity(session_id):
