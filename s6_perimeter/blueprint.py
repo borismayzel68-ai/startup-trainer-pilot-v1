@@ -11,6 +11,7 @@ import auth
 from s1_intake.main import _state
 from s2_mandate import engine as S2
 
+from . import claim as CLAIM
 from . import engine as E
 
 bp = Blueprint("s6_perimeter", __name__, url_prefix="/s6")
@@ -41,14 +42,18 @@ def _view(gate_id: str, rec: dict, release: dict | None, s2_id: str | None) -> d
     return {"id": gate_id, **rec, "released_by_owner": release, "admitted_to_s2": admitted, "s2_check_id": s2_id}
 
 
+class GateUsed(Exception):
+    """Шлюз уже использован или занят параллельным вызовом. Ответ на повтор — 409, как у POST /s2/checks."""
+
+
 def forward_to_s2(gate_id: str, sector, innovative) -> tuple[dict, int]:
     """Единственный путь заявки из S6 в S2 — и для HTTP, и для прямого вызова. GateBlocked, если периметр не пройден."""
     rec, release, s2_id = _load(gate_id)
     if rec is None:
         raise LookupError(gate_id)
     E.admit(gate_id, rec, release)
-    if s2_id:
-        return {"s2_check_id": s2_id, "already": True}, 200
+    if s2_id or CLAIM.used_by((((_state().store.get(gate_id) or {}).get("data") or {}).get("s6")) or {}):
+        raise GateUsed(gate_id)
     inp = rec["input"]
     s2_app = {"check_rub": inp["check_rub"]["value"], "instrument": inp["deal_form"]["value"],
               "sector": sector, "innovative": innovative}
@@ -56,10 +61,16 @@ def forward_to_s2(gate_id: str, sector, innovative) -> tuple[dict, int]:
     if missing:
         return {"status": "returned", "missing": missing}, 422
     s2_rec = {"input": {k: s2_app[k] for k in S2.FIELDS}, **S2.evaluate(s2_app, S2.load_policy()), "s6_gate": gate_id}
-    store = _state().store
-    cid, _ = store.create_or_get("s2-" + uuid.uuid4().hex, "S2 mandate check", "", {"s2": {"check": s2_rec}},
-                                 status="ready_for_review")
-    store.update(gate_id, data_patch={"s6": {"gate": rec, "release": release, "s2_check_id": cid}})
+    store, token = _state().store, uuid.uuid4().hex
+    if not CLAIM.claim(store, gate_id, token):  # тот же атомарный захват, что у POST /s2/checks
+        raise GateUsed(gate_id)
+    try:
+        cid, _ = store.create_or_get("s2-" + uuid.uuid4().hex, "S2 mandate check", "", {"s2": {"check": s2_rec}},
+                                     status="ready_for_review")
+        CLAIM.settle(store, gate_id, token, cid)
+    except Exception:
+        CLAIM.abandon(store, gate_id, token)
+        raise
     return {"s2_check_id": cid, "result": s2_rec["result"]}, 201
 
 
@@ -107,8 +118,9 @@ def release_gate(gate_id):
     if not isinstance(reason, str) or not reason.strip():
         return _err("reason обязателен", 400)
     release = {"by": _actor(), "reason": reason.strip(), "sha256": E.sha256(rec)}
-    _state().store.update(gate_id, data_patch={"s6": {"gate": rec, "release": release, "s2_check_id": s2_id}})
-    return jsonify(_view(gate_id, rec, release, s2_id))
+    if not CLAIM.set_release(_state().store, gate_id, release):  # условная запись: ссылку S2 не затирает
+        return _err("already released", 409)
+    return jsonify(_view(gate_id, rec, release, _load(gate_id)[2]))
 
 
 @bp.post("/gates/<gate_id>/forward-to-s2")
@@ -119,6 +131,8 @@ def forward_gate(gate_id):
         out, status = forward_to_s2(gate_id, body.get("sector"), body.get("innovative"))
     except LookupError:
         return _err("not found", 404)
+    except GateUsed:
+        return _err(CLAIM.USED_MSG + gate_id, 409)
     except E.GateBlocked as exc:
         return _err(str(exc), 409, gate_status=E.NEEDS_EVIDENCE, problems=exc.problems)
     return jsonify(out), status

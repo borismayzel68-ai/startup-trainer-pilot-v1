@@ -280,6 +280,25 @@ class ReadinessJobStore:
         cols = ", ".join(f"{k}={self.ph}" for k in fields)
         self._exec(f"UPDATE s1_readiness_jobs SET {cols} WHERE id={self.ph}", (*fields.values(), job_id))
 
+    def update_data_if(self, job_id: str, mutate, attempts: int = 50) -> bool:
+        """Атомарная условная правка data: compare-and-set по прочитанному data_json
+        (UPDATE ... WHERE id=? AND data_json=<прочитанное>) — работает одинаково на SQLite и PostgreSQL,
+        между воркерами и потоками. mutate(data) -> новый data либо None (условие не выполнено → False, ничего не пишем).
+        Если запись изменили между чтением и записью (rowcount 0) — читаем заново и повторяем."""
+        p = self.ph
+        for _ in range(attempts):
+            row = self._exec(f"SELECT data_json FROM s1_readiness_jobs WHERE id={p}", (job_id,), "one")
+            if not row:
+                return False
+            new = mutate(json.loads(row[0] or "{}"))
+            if new is None:
+                return False
+            payload = json.dumps(new, ensure_ascii=False, default=str)
+            if self._exec(f"UPDATE s1_readiness_jobs SET data_json={p}, updated_at={p} WHERE id={p} AND data_json={p}",
+                          (payload, _now(), job_id, row[0])) == 1:
+                return True
+        raise RuntimeError("update_data_if: слишком много конфликтов записи")
+
     def get(self, job_id: str) -> dict | None:
         return self._row(self._exec(f"{self._SELECT} WHERE id={self.ph}", (job_id,), "one"))
 

@@ -3,6 +3,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 import pytest
@@ -12,10 +13,31 @@ import test_s1_intake as base  # noqa: E402
 import test_tg1_human_gate as tg1  # noqa: E402
 from s2_mandate import engine as E  # noqa: E402
 from s2_mandate.blueprint import bp as s2_bp  # noqa: E402
+from s6_perimeter import engine as S6  # noqa: E402
 
 M = 1_000_000
 GOOD = {"check_rub": 8 * M, "instrument": "convertible_loan", "sector": "medtech", "innovative": True}
 POLICY = E.load_policy()
+
+
+def s6_fields(check_rub=8 * M, instrument="convertible_loan"):
+    """Синтетический пройденный периметр S6 под заявку S2 (сумма траншей = чек)."""
+    return {
+        "legal_entity": {"value": {"name": "Synth Bio", "form": "ООО"}, "evidence": "SYN-DOC-1"},
+        "deal_form": {"value": instrument, "evidence": "SYN-DOC-2"},
+        "check_rub": {"value": check_rub, "evidence": "SYN-DOC-3"},
+        "covenants": {"value": [{"type": "information_rights"}], "evidence": "SYN-DOC-4"},
+        "tranches": {"value": [{"amount_rub": check_rub}], "evidence": "SYN-DOC-5"},
+    }
+
+
+def make_gate(store, fields=None, release=None, **kw):
+    """Фикстура: шлюз S6 в хранилище (как /s6/gates, но без входа). Возвращает gate_id."""
+    fields = fields if fields is not None else s6_fields(**kw)
+    rec = {"company_id": "synthetic", "input": fields, **S6.evaluate(fields, S6.load_policy()), "created_by": "fixture"}
+    gid, _ = store.create_or_get("s6-" + os.urandom(8).hex(), "S6 perimeter gate", "", {"s6": {"gate": rec, **(
+        {"release": release} if release else {})}}, status="ready_for_review")
+    return gid
 
 
 def ev(**kw):
@@ -81,8 +103,17 @@ class S2HttpTests(tg1.Tg1Base):
         super().setUp()
         self.app.register_blueprint(s2_bp)
 
+    @property
+    def store(self):
+        return self.app.extensions["s1_intake"].store
+
+    def gate(self, **kw):
+        return make_gate(self.store, **kw)
+
     def create(self, **kw):
-        r = self.c.post("/s2/checks", headers=base.ADMIN, json={**GOOD, **kw})
+        body = {**GOOD, **kw}
+        gid = self.gate(check_rub=body["check_rub"], instrument=body["instrument"])
+        r = self.c.post("/s2/checks", headers=base.ADMIN, json={**body, "s6_gate_id": gid})
         self.assertEqual(r.status_code, 201, r.get_json())
         return r.get_json()
 
@@ -99,6 +130,190 @@ class S2HttpTests(tg1.Tg1Base):
         self.assertEqual(r.status_code, 422)
         self.assertEqual(r.get_json()["missing"], ["sector"])
         self.assertEqual(self.c.post("/s2/checks", json=GOOD).status_code, 401)
+
+    def post(self, gate_id=None, **kw):
+        body = {**GOOD, **kw}
+        if gate_id is not None:
+            body["s6_gate_id"] = gate_id
+        return self.c.post("/s2/checks", headers=base.ADMIN, json=body)
+
+    def test_s6_gate_required_admin_does_not_bypass(self):
+        for gid in ("", 5, None):
+            self.assertEqual(self.c.post("/s2/checks", headers=base.ADMIN, json={**GOOD, "s6_gate_id": gid}).status_code, 409)
+        r = self.post()
+        self.assertEqual(r.status_code, 409)
+        self.assertIn("s6_gate_id", r.get_json()["error"])
+        r = self.post("s6-nonexistent")
+        self.assertEqual(r.status_code, 409)
+        self.assertIn("не найден", r.get_json()["error"])
+        self.assertEqual(len(self._s2_records()), 0)  # записей S2 нет (list() data не отдаёт — читаем через get)
+
+    def test_s6_gate_needs_evidence_is_409_no_record(self):
+        bad = s6_fields()
+        del bad["covenants"]
+        gid = make_gate(self.store, fields=bad)
+        r = self.post(gid)
+        self.assertEqual(r.status_code, 409)
+        self.assertIn("covenants", r.get_json()["error"])
+        self.assertNotIn("s2_check_id", self.store.get(gid)["data"]["s6"])
+        # result в хранилище подделан — допуска всё равно нет (admit пересчитывает)
+        s6 = self.store.get(gid)["data"]["s6"]
+        self.store.update(gid, data_patch={"s6": {**s6, "gate": {**s6["gate"], "result": S6.PASS}}})
+        self.assertEqual(self.post(gid).status_code, 409)
+
+    def test_s6_passed_gate_is_201_and_linked(self):
+        gid = self.gate()
+        r = self.post(gid)
+        self.assertEqual(r.status_code, 201, r.get_json())
+        body = r.get_json()
+        self.assertEqual(body["s6_gate"], gid)
+        self.assertEqual(self.store.get(gid)["data"]["s6"]["s2_check_id"], body["id"])
+
+    def test_s6_gate_is_single_use(self):
+        gid = self.gate()
+        self.assertEqual(self.post(gid).status_code, 201)
+        r = self.post(gid)
+        self.assertEqual(r.status_code, 409)
+        self.assertIn("уже использован", r.get_json()["error"])
+
+    def test_s6_owner_release_with_matching_sha_admits(self):
+        bad = s6_fields()
+        del bad["tranches"]
+        gid = make_gate(self.store, fields=bad)
+        rec = self.store.get(gid)["data"]["s6"]["gate"]
+        wrong = {"by": "owner@example.test", "reason": "r", "sha256": "0" * 64}
+        s6 = self.store.get(gid)["data"]["s6"]
+        self.store.update(gid, data_patch={"s6": {**s6, "release": wrong}})
+        self.assertEqual(self.post(gid).status_code, 409)  # sha256 не совпадает
+        ok = {**wrong, "sha256": S6.sha256(rec)}
+        self.store.update(gid, data_patch={"s6": {**s6, "release": ok}})
+        self.assertEqual(self.post(gid).status_code, 201)
+
+    def test_s6_foreign_or_changed_gate_is_409(self):
+        gid = self.gate(check_rub=7 * M)  # шлюз другой заявки: чек не совпадает
+        r = self.post(gid, check_rub=8 * M)
+        self.assertEqual(r.status_code, 409)
+        self.assertIn("не совпадает", r.get_json()["error"])
+        self.assertEqual(self.post(self.gate(instrument="equity")).status_code, 409)  # форма сделки другая
+        # данные шлюза изменены после снятия owner: release привязан к старому хешу
+        bad = s6_fields()
+        del bad["tranches"]
+        g2 = make_gate(self.store, fields=bad)
+        s6 = self.store.get(g2)["data"]["s6"]
+        release = {"by": "owner@example.test", "reason": "r", "sha256": S6.sha256(s6["gate"])}
+        changed = {**s6["gate"], "input": {**s6["gate"]["input"], "check_rub": {"value": 9 * M, "evidence": "SYN"}}}
+        self.store.update(g2, data_patch={"s6": {"gate": changed, "release": release}})
+        self.assertEqual(self.post(g2, check_rub=9 * M).status_code, 409)
+        # не шлюз S6 (id заявки S1/S2) — тоже 409
+        c = self.create()
+        self.assertEqual(self.post(c["id"]).status_code, 409)
+
+    def test_forward_to_s2_still_works(self):
+        from s6_perimeter.blueprint import forward_to_s2
+        with self.app.app_context():
+            out, status = forward_to_s2(self.gate(), "medtech", True)
+        self.assertEqual(status, 201)
+        self.assertEqual(out["result"], E.FIT)
+
+    # --- атомарный захват шлюза S6 (ревью #91): гонки ---
+    def _race(self, *calls):
+        """Запускает вызовы одновременно; claim() каждого ждёт остальных на барьере — все прошли проверки
+        «шлюз свободен» и состязаются ровно за захват."""
+        import threading
+        from s6_perimeter import claim as CLAIM
+        real, barrier, out = CLAIM.claim, threading.Barrier(len(calls), timeout=10), [None] * len(calls)
+
+        def gated(*a, **kw):
+            barrier.wait()
+            return real(*a, **kw)
+
+        def run(i, fn):
+            with self.app.app_context():
+                out[i] = fn()
+
+        with mock.patch.object(CLAIM, "claim", gated):
+            ts = [threading.Thread(target=run, args=(i, fn)) for i, fn in enumerate(calls)]
+            [t.start() for t in ts]
+            [t.join(30) for t in ts]
+        return out
+
+    def _s2_records(self):
+        full = (self.store.get(j["id"]) for j in self.store.list(limit=1000, s3="all"))  # list() отдаёт без data
+        return [j for j in full if (j["data"] or {}).get("s2")]
+
+    def test_parallel_post_same_gate_one_record_one_409(self):
+        gid = self.gate()
+        post = lambda: self.app.test_client().post("/s2/checks", headers=base.ADMIN, json={**GOOD, "s6_gate_id": gid}).status_code
+        codes = self._race(post, post)
+        self.assertEqual(sorted(codes), [201, 409])
+        self.assertEqual(len(self._s2_records()), 1)
+        self.assertEqual(self.store.get(gid)["data"]["s6"]["s2_check_id"], self._s2_records()[0]["id"])
+        self.assertNotIn("s2_claim", self.store.get(gid)["data"]["s6"])
+
+    def test_parallel_many_posts_exactly_one_record(self):
+        gid = self.gate()
+        post = lambda: self.app.test_client().post("/s2/checks", headers=base.ADMIN, json={**GOOD, "s6_gate_id": gid}).status_code
+        codes = self._race(*[post] * 6)
+        self.assertEqual(sorted(codes), [201] + [409] * 5)
+        self.assertEqual(len(self._s2_records()), 1)
+
+    def test_race_forward_to_s2_and_post_one_record(self):
+        from s6_perimeter.blueprint import GateUsed, forward_to_s2
+        gid = self.gate()
+
+        def post():
+            return self.app.test_client().post("/s2/checks", headers=base.ADMIN, json={**GOOD, "s6_gate_id": gid}).status_code
+
+        def fwd():
+            try:
+                return forward_to_s2(gid, "medtech", True)[1]
+            except GateUsed:
+                return 409
+
+        codes = self._race(post, fwd)
+        self.assertEqual(sorted(codes), [201, 409])
+        self.assertEqual(len(self._s2_records()), 1)
+        self.assertEqual(self.store.get(gid)["data"]["s6"]["s2_check_id"], self._s2_records()[0]["id"])
+
+    def test_forward_repeat_is_409_like_post(self):
+        from s6_perimeter.blueprint import GateUsed, forward_to_s2
+        gid = self.gate()
+        with self.app.app_context():
+            self.assertEqual(forward_to_s2(gid, "medtech", True)[1], 201)
+            with self.assertRaises(GateUsed):
+                forward_to_s2(gid, "medtech", True)
+        self.assertEqual(self.post(gid).status_code, 409)
+        self.assertEqual(len(self._s2_records()), 1)
+
+    def test_failed_record_creation_rolls_back_claim(self):
+        gid = self.gate()
+        with mock.patch.object(type(self.store), "create_or_get", side_effect=RuntimeError("db down")):
+            self.assertEqual(self.post(gid).status_code, 500)
+        self.assertNotIn("s2_claim", self.store.get(gid)["data"]["s6"])
+        self.assertEqual(len(self._s2_records()), 0)
+        self.assertEqual(self.post(gid).status_code, 201)  # шлюз снова свободен
+
+    def test_release_does_not_clobber_s2_link(self):
+        from s6_perimeter import claim as CLAIM
+        gid = self.gate()
+        self.assertEqual(self.post(gid).status_code, 201)
+        link = self.store.get(gid)["data"]["s6"]["s2_check_id"]
+        self.assertTrue(CLAIM.set_release(self.store, gid, {"by": "o", "reason": "r", "sha256": "x"}))
+        s6 = self.store.get(gid)["data"]["s6"]
+        self.assertEqual(s6["s2_check_id"], link)  # ссылка S2 на месте
+        self.assertFalse(CLAIM.set_release(self.store, gid, {"by": "o2", "reason": "r", "sha256": "y"}))  # второй раз — нет
+        self.assertEqual(self.store.get(gid)["data"]["s6"]["release"]["by"], "o")
+
+    def test_legacy_s2_record_without_s6_gate_reads_as_before(self):
+        rec = {"input": {k: GOOD[k] for k in E.FIELDS}, **E.evaluate(GOOD, E.load_policy())}  # без ключа s6_gate
+        cid, _ = self.store.create_or_get("s2-legacy", "S2 mandate check", "", {"s2": {"check": rec}},
+                                          status="ready_for_review")
+        r = self.c.get("/s2/checks/" + cid, headers=base.ADMIN)
+        self.assertEqual(r.status_code, 200)
+        body = r.get_json()
+        self.assertEqual(body["id"], cid)
+        self.assertNotIn("s6_gate", body)
+        self.assertTrue(body["cleared_for_meeting"])
 
     def test_bad_types_and_non_finite_return_422_not_500(self):
         for kw in ({"instrument": ["equity"]}, {"instrument": {"a": 1}}, {"sector": ["medtech"]}):
@@ -181,10 +396,13 @@ def rbac_client():
 
 @pytest.mark.auth_enforced
 def test_rbac_create_and_decide(rbac_client):
+    gate_body = {"company_id": "synthetic", "fields": s6_fields(instrument="equity")}
     assert rbac_client().post("/s2/checks", json=GOOD).status_code in (401, 403)  # без входа и роли
     assert (lambda c: c.post("/s2/checks", json=GOOD, headers=c.hdr))(rbac_client("inv@example.test", "investor")).status_code in (401, 403)
     staff = rbac_client("s2staff@example.test", "fund_staff")
-    r = staff.post("/s2/checks", json={**GOOD, "instrument": "equity"}, headers=staff.hdr)
+    assert staff.post("/s2/checks", json={**GOOD, "instrument": "equity"}, headers=staff.hdr).status_code == 409  # без S6
+    gid = staff.post("/s6/gates", json=gate_body, headers=staff.hdr).get_json()["id"]
+    r = staff.post("/s2/checks", json={**GOOD, "instrument": "equity", "s6_gate_id": gid}, headers=staff.hdr)
     assert r.status_code == 201, r.get_json()
     cid = r.get_json()["id"]
     url = "/s2/checks/" + cid + "/decision"
