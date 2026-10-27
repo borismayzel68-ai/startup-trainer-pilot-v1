@@ -101,6 +101,13 @@ class ReadinessJobStore:
                 job_id TEXT NOT NULL, slot TEXT NOT NULL, signer TEXT NOT NULL, role TEXT NOT NULL,
                 signed_at TEXT NOT NULL, basis TEXT NOT NULL
             )""")
+        # Q-316: обращения «Сообщить о проблеме» (номер ОС-<id>); только введённое пользователем + служебные поля
+        pk = "BIGSERIAL PRIMARY KEY" if self.backend == "postgres" else "INTEGER PRIMARY KEY AUTOINCREMENT"
+        self._exec(f"""
+            CREATE TABLE IF NOT EXISTS s1_feedback (
+                id {pk}, cabinet TEXT NOT NULL, role TEXT, path TEXT, session_id TEXT, build TEXT,
+                text TEXT NOT NULL, contact TEXT, created_at TEXT NOT NULL
+            )""")
         # один и тот же отчёт (job + sha256) может быть отправлен только один раз
         self._exec("CREATE UNIQUE INDEX IF NOT EXISTS s1_approvals_sent_once ON s1_approvals "
                    "(job_id, report_sha256) WHERE outcome='sent'")
@@ -122,6 +129,29 @@ class ReadinessJobStore:
                "created_at, updated_at, expires_at, data_json FROM s1_readiness_jobs")
 
     # ----------------------------------------------------------------- API --
+    def add_feedback(self, cabinet: str, role: str | None, path: str | None, session_id: str | None,
+                     build: str | None, text: str, contact: str | None) -> dict:
+        """Q-316: сохраняет обращение; номер ОС-<id> выдаёт БД (автоинкремент — без гонок)."""
+        p, now = self.ph, _now()
+        row = self._exec(
+            f"INSERT INTO s1_feedback (cabinet, role, path, session_id, build, text, contact, created_at) "
+            f"VALUES ({p},{p},{p},{p},{p},{p},{p},{p}) RETURNING id",
+            (cabinet, role, path, session_id, build, text, contact, now), fetch="one")
+        return {"number": f"ОС-{row[0]}", "cabinet": cabinet, "role": role, "path": path, "session_id": session_id,
+                "created_at": now, "build": build, "text": text, "contact": contact}
+
+    def get_feedback(self, number: str) -> dict | None:
+        if not number.startswith("ОС-") or not number[3:].isdigit():
+            return None
+        r = self._exec(f"SELECT id, cabinet, role, path, session_id, build, text, contact, created_at "
+                       f"FROM s1_feedback WHERE id={self.ph}", (int(number[3:]),), fetch="one")
+        if not r:
+            return None
+        keys = ("id", "cabinet", "role", "path", "session_id", "build", "text", "contact", "created_at")
+        d = dict(zip(keys, r))
+        d["number"] = f"ОС-{d.pop('id')}"
+        return d
+
     def create_or_get(self, submission_id: str, project_name: str, founder_email: str, data: dict,
                       status: str = "received") -> tuple[str, bool]:
         """(job_id, created). Повторная доставка того же tranid не создаёт дубль (UNIQUE + ON CONFLICT)."""
