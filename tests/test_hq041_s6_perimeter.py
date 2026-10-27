@@ -202,7 +202,7 @@ def test_pass_goes_to_s2(clients, role):
     r = c.post(f"/s6/gates/{g['id']}/forward-to-s2", headers=c.csrf, json={"sector": "medtech", "innovative": True})
     assert r.status_code == 201 and r.get_json()["result"] == "FIT"
     again = c.post(f"/s6/gates/{g['id']}/forward-to-s2", headers=c.csrf, json={"sector": "medtech", "innovative": True})
-    assert again.status_code == 200 and again.get_json()["s2_check_id"] == r.get_json()["s2_check_id"]
+    assert again.status_code == 409  # повтор — 409, как у POST /s2/checks (один захват шлюза на оба пути)
 
 
 @pytest.mark.auth_enforced

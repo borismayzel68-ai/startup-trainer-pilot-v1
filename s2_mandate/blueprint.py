@@ -9,6 +9,7 @@ from flask import Blueprint, jsonify, request
 
 from s1_intake.main import _admin_ok, _approver, _err, _state
 
+from s6_perimeter import claim as CLAIM
 from s6_perimeter import engine as S6
 
 from . import engine as E
@@ -53,8 +54,8 @@ def _gate_problem(gate_id, body: dict) -> str | None:
     inp = rec["input"]
     if body["check_rub"] != inp["check_rub"]["value"] or body["instrument"] != inp["deal_form"]["value"]:
         return "заявка не совпадает с данными шлюза S6 (check_rub, instrument)"
-    if s6.get("s2_check_id"):
-        return "шлюз S6 уже использован: " + s6["s2_check_id"]
+    if CLAIM.used_by(s6):
+        return CLAIM.USED_MSG + CLAIM.used_by(s6)
     return None
 
 
@@ -73,11 +74,16 @@ def create_check():
     if why:
         return _err(why, 409)
     rec = {"input": {k: body[k] for k in E.FIELDS}, **E.evaluate(body, E.load_policy()), "s6_gate": gate_id}
-    store = _state().store
-    cid, _ = store.create_or_get("s2-" + uuid.uuid4().hex, "S2 mandate check", "", {"s2": {"check": rec}},
-                                 status="ready_for_review")
-    s6 = store.get(gate_id)["data"]["s6"]
-    store.update(gate_id, data_patch={"s6": {**s6, "s2_check_id": cid}})
+    store, token = _state().store, uuid.uuid4().hex
+    if not CLAIM.claim(store, gate_id, token):  # атомарно: из параллельных вызовов шлюз займёт один
+        return _err(CLAIM.USED_MSG + "параллельным вызовом", 409)
+    try:
+        cid, _ = store.create_or_get("s2-" + uuid.uuid4().hex, "S2 mandate check", "", {"s2": {"check": rec}},
+                                     status="ready_for_review")
+        CLAIM.settle(store, gate_id, token, cid)
+    except Exception:
+        CLAIM.abandon(store, gate_id, token)  # запись не создана — шлюз снова свободен
+        raise
     return jsonify(_view(cid, rec)), 201
 
 

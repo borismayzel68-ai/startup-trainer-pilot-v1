@@ -3,6 +3,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 import pytest
@@ -145,7 +146,7 @@ class S2HttpTests(tg1.Tg1Base):
         r = self.post("s6-nonexistent")
         self.assertEqual(r.status_code, 409)
         self.assertIn("не найден", r.get_json()["error"])
-        self.assertEqual(len([j for j in self.store.list() if (j["data"] or {}).get("s2")]), 0)  # записей S2 нет
+        self.assertEqual(len(self._s2_records()), 0)  # записей S2 нет (list() data не отдаёт — читаем через get)
 
     def test_s6_gate_needs_evidence_is_409_no_record(self):
         bad = s6_fields()
@@ -213,6 +214,106 @@ class S2HttpTests(tg1.Tg1Base):
             out, status = forward_to_s2(self.gate(), "medtech", True)
         self.assertEqual(status, 201)
         self.assertEqual(out["result"], E.FIT)
+
+    # --- атомарный захват шлюза S6 (ревью #91): гонки ---
+    def _race(self, *calls):
+        """Запускает вызовы одновременно; claim() каждого ждёт остальных на барьере — все прошли проверки
+        «шлюз свободен» и состязаются ровно за захват."""
+        import threading
+        from s6_perimeter import claim as CLAIM
+        real, barrier, out = CLAIM.claim, threading.Barrier(len(calls), timeout=10), [None] * len(calls)
+
+        def gated(*a, **kw):
+            barrier.wait()
+            return real(*a, **kw)
+
+        def run(i, fn):
+            with self.app.app_context():
+                out[i] = fn()
+
+        with mock.patch.object(CLAIM, "claim", gated):
+            ts = [threading.Thread(target=run, args=(i, fn)) for i, fn in enumerate(calls)]
+            [t.start() for t in ts]
+            [t.join(30) for t in ts]
+        return out
+
+    def _s2_records(self):
+        full = (self.store.get(j["id"]) for j in self.store.list(limit=1000, s3="all"))  # list() отдаёт без data
+        return [j for j in full if (j["data"] or {}).get("s2")]
+
+    def test_parallel_post_same_gate_one_record_one_409(self):
+        gid = self.gate()
+        post = lambda: self.app.test_client().post("/s2/checks", headers=base.ADMIN, json={**GOOD, "s6_gate_id": gid}).status_code
+        codes = self._race(post, post)
+        self.assertEqual(sorted(codes), [201, 409])
+        self.assertEqual(len(self._s2_records()), 1)
+        self.assertEqual(self.store.get(gid)["data"]["s6"]["s2_check_id"], self._s2_records()[0]["id"])
+        self.assertNotIn("s2_claim", self.store.get(gid)["data"]["s6"])
+
+    def test_parallel_many_posts_exactly_one_record(self):
+        gid = self.gate()
+        post = lambda: self.app.test_client().post("/s2/checks", headers=base.ADMIN, json={**GOOD, "s6_gate_id": gid}).status_code
+        codes = self._race(*[post] * 6)
+        self.assertEqual(sorted(codes), [201] + [409] * 5)
+        self.assertEqual(len(self._s2_records()), 1)
+
+    def test_race_forward_to_s2_and_post_one_record(self):
+        from s6_perimeter.blueprint import GateUsed, forward_to_s2
+        gid = self.gate()
+
+        def post():
+            return self.app.test_client().post("/s2/checks", headers=base.ADMIN, json={**GOOD, "s6_gate_id": gid}).status_code
+
+        def fwd():
+            try:
+                return forward_to_s2(gid, "medtech", True)[1]
+            except GateUsed:
+                return 409
+
+        codes = self._race(post, fwd)
+        self.assertEqual(sorted(codes), [201, 409])
+        self.assertEqual(len(self._s2_records()), 1)
+        self.assertEqual(self.store.get(gid)["data"]["s6"]["s2_check_id"], self._s2_records()[0]["id"])
+
+    def test_forward_repeat_is_409_like_post(self):
+        from s6_perimeter.blueprint import GateUsed, forward_to_s2
+        gid = self.gate()
+        with self.app.app_context():
+            self.assertEqual(forward_to_s2(gid, "medtech", True)[1], 201)
+            with self.assertRaises(GateUsed):
+                forward_to_s2(gid, "medtech", True)
+        self.assertEqual(self.post(gid).status_code, 409)
+        self.assertEqual(len(self._s2_records()), 1)
+
+    def test_failed_record_creation_rolls_back_claim(self):
+        gid = self.gate()
+        with mock.patch.object(type(self.store), "create_or_get", side_effect=RuntimeError("db down")):
+            self.assertEqual(self.post(gid).status_code, 500)
+        self.assertNotIn("s2_claim", self.store.get(gid)["data"]["s6"])
+        self.assertEqual(len(self._s2_records()), 0)
+        self.assertEqual(self.post(gid).status_code, 201)  # шлюз снова свободен
+
+    def test_release_does_not_clobber_s2_link(self):
+        from s6_perimeter import claim as CLAIM
+        gid = self.gate()
+        self.assertEqual(self.post(gid).status_code, 201)
+        link = self.store.get(gid)["data"]["s6"]["s2_check_id"]
+        self.assertTrue(CLAIM.set_release(self.store, gid, {"by": "o", "reason": "r", "sha256": "x"}))
+        s6 = self.store.get(gid)["data"]["s6"]
+        self.assertEqual(s6["s2_check_id"], link)  # ссылка S2 на месте
+        self.assertFalse(CLAIM.set_release(self.store, gid, {"by": "o2", "reason": "r", "sha256": "y"}))  # второй раз — нет
+        self.assertEqual(self.store.get(gid)["data"]["s6"]["release"]["by"], "o")
+
+    def test_legacy_s2_record_without_s6_gate_reads_as_before(self):
+        rec = {"input": {k: GOOD[k] for k in E.FIELDS}, **E.evaluate(GOOD, E.load_policy())}  # без ключа s6_gate
+        cid, _ = self.store.create_or_get("s2-legacy", "S2 mandate check", "", {"s2": {"check": rec}},
+                                          status="ready_for_review")
+        r = self.c.get("/s2/checks/" + cid, headers=base.ADMIN)
+        self.assertEqual(r.status_code, 200)
+        body = r.get_json()
+        self.assertEqual(body["id"], cid)
+        self.assertNotIn("s6_gate", body)
+        self.assertTrue(body["cleared_for_meeting"])
 
     def test_bad_types_and_non_finite_return_422_not_500(self):
         for kw in ({"instrument": ["equity"]}, {"instrument": {"a": 1}}, {"sector": ["medtech"]}):
