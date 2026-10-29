@@ -51,7 +51,7 @@ owner (Владелец фонда), fund_staff (Сотрудник фонда),
 | `/s1/dialogue/<id>`, `/s1/free/<id>`, `/s1/cabinet/<id>/consent`, `/revoke`, `/consents` | GET, POST | founder, owner, fund_staff | `job_id` или `*` | link |
 | `/s1/shared/<tid>` | GET | investor, owner, fund_staff | любой грант | link |
 | `/s6/gates`, `/s6/gates/<id>`, `/s6/gates/<id>/forward-to-s2` | GET, POST | owner, fund_staff | только `*` | — |
-| `POST /s2/checks` | POST | как раньше (admin-токен / сессия) **+ `s6_gate_id` пройденного шлюза S6**; без него → 409, admin-токен не обходит | — | — |
+| `POST /s2/checks` | POST | owner, fund_staff или admin-токен, и только пройденный S6. Нет id → 409. Периметр NEEDS_EVIDENCE → **403 blocked** и запись deny в `audit_log` для всех ролей, включая admin и owner. Исключение — явное решение человека (`s6.human_waiver` в аудит-логе), не поле release в JSON | — | secret |
 | `/s6/gates/<id>/release` | POST | owner | только `*` | — (решение человека о снятии блокировки) |
 | `/s5/today`, `/s5/today/<id>` | GET | owner, fund_staff, investor | любой грант | — (только чтение, синтетика, отправки нет) |
 

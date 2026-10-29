@@ -88,13 +88,20 @@ def sha256(record: dict) -> str:
     return hashlib.sha256(json.dumps(record, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
 
-def admit(gate_id: str, rec: dict, release: dict | None, policy: dict | None = None) -> None:
+def admit(gate_id: str, rec: dict, release: dict | None, policy: dict | None = None, *,
+          human_decision: dict | None = None) -> None:
     """Единственная проверка допуска в S2. Результат пересчитывается из входных данных (подмена поля result в
-    хранилище допуск не даёт). PASS проходит; NEEDS_EVIDENCE — только при решении owner на ТЕ ЖЕ данные
-    (release.sha256 == хеш записи). Иначе GateBlocked. Вызывается из HTTP и из forward_to_s2 (прямой вызов)."""
+    хранилище допуск не даёт). PASS проходит. NEEDS_EVIDENCE проходит только если human_decision — явное
+    решение человека из аудит-лога на ТЕ ЖЕ данные (source=audit_log, sha256, именной актор, не admin).
+    Поле release в записи шлюза само по себе допуск не даёт. Иначе GateBlocked."""
     fresh = evaluate(rec["input"], policy or load_policy())
     if fresh["result"] == PASS:
         return
-    if release and release.get("by") and release.get("sha256") == sha256(rec):
+    digest = sha256(rec)
+    by = human_decision.get("by") if isinstance(human_decision, dict) else None
+    person = isinstance(by, str) and bool(by.strip()) and by.strip().lower() not in {"admin", "system", "token"}
+    if (person and human_decision.get("source") == "audit_log" and human_decision.get("sha256") == digest):
         return
+    # release намеренно не читается: подмена JSON в хранилище не является решением человека.
+    del release
     raise GateBlocked(gate_id, fresh["problems"])

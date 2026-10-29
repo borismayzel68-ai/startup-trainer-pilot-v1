@@ -119,8 +119,19 @@ class AuthStore:
         self._run("INSERT INTO audit_log (at, actor, action, object, result, ip, detail) VALUES (?, ?, ?, ?, ?, ?, ?)",
                   (utc_iso(), actor, action, obj, result, ip, detail))
 
+    def _audit_dicts(self, rows):
+        keys = ("at", "actor", "action", "object", "result", "ip", "detail")
+        return [dict(zip(keys, (str(v) if k == "at" else v for k, v in zip(keys, r)))) for r in rows]
+
     def audit_rows(self, limit=200):
         rows = self._run("SELECT at, actor, action, object, result, ip, detail FROM audit_log ORDER BY id DESC LIMIT ?",
                          (int(limit),), fetch=True)
-        keys = ("at", "actor", "action", "object", "result", "ip", "detail")
-        return [dict(zip(keys, (str(v) if k == "at" else v for k, v in zip(keys, r)))) for r in rows]
+        return self._audit_dicts(rows)
+
+    def audit_for(self, action, obj, result):
+        """Все строки одного действия по объекту, без отсечения последними N записями журнала."""
+        rows = self._run(
+            "SELECT at, actor, action, object, result, ip, detail FROM audit_log "
+            "WHERE action = ? AND object = ? AND result = ? ORDER BY id DESC",
+            (action, obj, result), fetch=True)
+        return self._audit_dicts(rows)
