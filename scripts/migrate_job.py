@@ -16,6 +16,9 @@ import migration_guard  # noqa: E402
 
 
 def run(body: dict) -> tuple:
+    dup = migration_guard.duplicate_prefixes()
+    if dup:
+        return 409, {"ok": False, "error": "duplicate_migration_prefix", "migrations": sorted(sum(dup.values(), []))}
     bad = migration_guard.destructive_migrations()
     if bad and not str(body.get("snapshot_id") or "").strip():
         return 409, {"ok": False, "error": "snapshot_required", "migrations": bad}
