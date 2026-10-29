@@ -1,0 +1,24 @@
+Полный прогон локально (без HQ018_PG_URL, Postgres-тесты skipped):
+672 passed, 31 skipped, 35 subtests passed.
+
+Ниже — тесты страницы согласия и входа.
+
+============================= test session starts ==============================
+platform linux -- Python 3.12.3, pytest-9.2.0, pluggy-1.7.0 -- /usr/bin/python3
+rootdir: /workspace
+collected 12 items
+
+tests/test_pdn_consent.py::PdnConsentTests::test_checkbox_records_ip_and_login_does_not_start_oauth PASSED
+tests/test_pdn_consent.py::PdnConsentTests::test_every_accepted_application_has_versioned_consent PASSED
+tests/test_pdn_consent.py::PdnConsentTests::test_migration_006_is_additive_and_unique PASSED
+tests/test_pdn_consent.py::PdnConsentTests::test_notice_comes_from_file_and_config_placeholders PASSED
+tests/test_pdn_consent.py::PdnConsentTests::test_page_is_draft_and_checkbox_is_off PASSED
+tests/test_pdn_consent.py::PdnConsentTests::test_revoke_sets_revoked_at PASSED
+tests/test_pdn_consent.py::PdnConsentTests::test_without_checkbox_intake_and_login_are_rejected PASSED
+tests/test_pdn_consent.py::StagingConsentOpenTests::test_consent_paths_do_not_require_session PASSED
+tests/test_pdn_consent.py::PdnConsentPostgresTests::test_migration_006_applies_and_revoke SKIPPED (HQ018_PG_URL не задан)
+tests/test_auth.py::test_oauth_callback_denied_when_consent_revoked PASSED
+tests/test_auth.py::test_oauth_callback_denied_when_consent_email_differs PASSED
+tests/test_auth.py::test_login_not_configured_503 PASSED
+
+11 passed, 1 skipped, 2 subtests passed

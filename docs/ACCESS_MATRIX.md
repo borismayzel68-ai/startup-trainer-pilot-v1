@@ -5,7 +5,7 @@
 Сайт не публичный: вход только по allowlist, `noindex` (meta + `X-Robots-Tag` + `robots.txt` Disallow: /).
 
 ## Вход
-- Google OAuth (OIDC): `GET /auth/login` → Google → `GET /auth/callback`.
+- Google OAuth (OIDC): `GET /auth/login` → Google → `GET /auth/callback`. Без неотзванного согласия в сессии (страница `/consent`) OAuth не начинается: редирект на `/consent`. Отзыв до callback — 403.
 - `AUTH_ALLOWLIST` — `email:роль[:scope]`, записи через запятую/`;`. Scope по умолчанию `*`. Email вне списка → **403**, пользователь не создаётся.
 - Стартовые гранты создаются из allowlist при входе. Отозванный грант (`role_grants.revoked_at`) **не воскрешается** и не действует: роли читаются из БД на каждом запросе.
 - Env: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `SESSION_SECRET`, `AUTH_ALLOWLIST`, при необходимости `AUTH_REDIRECT_URI`.
@@ -30,6 +30,8 @@ owner (Владелец фонда), fund_staff (Сотрудник фонда),
 |---|---|---|---|---|
 | `/health` | GET | публичный | — | — |
 | `/robots.txt` | GET | публичный | — | — |
+| `/consent` | GET, POST | публичный (согласие до входа; без чекбокса POST → 400) | — | CSRF-поле формы |
+| `/consent/revoke` | POST | публичный | — | CSRF-поле формы |
 | `/auth/login`, `/auth/callback` | GET | публичный | — | — |
 | `/auth/me`, `/auth/logout` | GET, POST | любая роль | любой грант | — |
 | `/` | GET | любая роль | любой грант | — |

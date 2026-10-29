@@ -22,6 +22,8 @@ from s2_mandate.blueprint import bp as s2_bp
 from werkzeug.middleware.proxy_fix import ProxyFix
 import auth
 from auth import require_role, public, ANY_ROLE, STAFF_ROLES
+from pdn_consent.blueprint import bp as consent_bp
+from pdn_consent.store import PdnConsentStore
 from s3_expert.blueprint import bp as s3_bp
 from staging_guard import init_staging
 
@@ -71,6 +73,8 @@ SESSIONS = DurableSessionStore(
     SESSION_DATABASE_URL,
     retention_days=SESSION_RETENTION_DAYS,
 )
+# 152-ФЗ: журнал согласия. На Postgres таблицу создаёт миграция 006, не старт приложения.
+app.extensions["pdn_store"] = PdnConsentStore(SESSION_DATABASE_URL)
 # MOS-6: закрытый staging (APP_ENV=staging): проверка env, замок по сессии MOS-1 (#61), только синтетика. Иначе — только noindex-заголовок.
 init_staging(app, os.environ)
 # A9 (#11): лимит размера запроса 20 МБ — на всё приложение, включая /s1/* (S1 принимает JSON-тела
@@ -92,6 +96,8 @@ app.register_blueprint(fund_bp)
 # MOS-4 (#55): портфель /portfolio; доступ — require_role из MOS-1 (owner/fund_staff/investor), scope проверяет сервис.
 from portfolio.blueprint import bp as portfolio_bp  # noqa: E402
 app.register_blueprint(portfolio_bp)
+# 152-ФЗ: страница согласия (/consent) до входа. Чекбокс не отмечен; без него заявка и вход инвестора не принимаются.
+app.register_blueprint(consent_bp)
 ALLOWED_STATUS = {"fact","hypothesis","missing","weak"}
 ALLOWED_REC = {"not_ready","iterate","ready_for_investor_conversation"}
 
