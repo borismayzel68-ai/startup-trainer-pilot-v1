@@ -47,6 +47,21 @@
 - Merge master обычным merge-коммитом, без rebase и force-push; конфликт только HANDOFF.md, код не менялся. Разделы LSM v1 из master — ниже без изменений.
 
 ## MOS-7 — одна точка замены LLM + Yandex AI Studio, issue #68, ветка `claude/issue-68-20261022-0511` → master (Claude, 22.10)
+
+## Q-067 — правила ревью кода, issue #76, ветка `claude/q067-review-rules` (Claude, 99 Tech Director, 17.10)
+**Сделано**
+- `REVIEW.md` — 7 классов провала этого репо (PASS без прогона, статус выше доказательства, порог не из канона, молчаливая неоднозначность, внешнее действие, реальные данные, тихий успех), уровни риска, защищённые пути, формат находок, лимит 3 раунда, регрессия из дефектов.
+- `CLAUDE.md` — блок «Проверка до PR».
+- `.github/pull_request_template.md` — как проверено / уровень риска / как откатить.
+- `.github/CODEOWNERS` — черновик защищённых путей.
+- Код продукта не менялся.
+
+**Не сделано / нужно решение Бориса**
+- Ruleset на master (обязательный CI, ревью владельца кода, сброс одобрения при новом коммите) — настройки GitHub, делает Борис.
+- Отдельный аккаунт MOS Tech для CODEOWNERS — E0.
+- Регрессионные тесты EDGE-01…09 — после решений по неоднозначностям (HQ-053), в HQ-031.
+
+## HQ-023 — S3 Эксперт (БП-07), issue #59, ветка `claude/issue-59-20261013-1241` → master (Claude, 13.10)
 **Сделано**
 - `app.py` больше не создаёт свой `OpenAI(...)`: `call_json` идёт через `s1_intake.llm.LLMClient.complete_dict` (тот же `OPENAI_BASE_URL`, `OPENAI_API_KEY`, `S1_LLM_PROVIDER`). Модель тренажёра по-прежнему `OPENAI_MODEL`.
 - `LLMClient`: модель из `Settings.openai_model`; `LLM_JSON_FORMAT=json_schema` переключает `text.format` на json_schema из pydantic (на случай, если Yandex не примет json_object).
