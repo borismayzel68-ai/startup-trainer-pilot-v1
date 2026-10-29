@@ -18,7 +18,7 @@ import migration_guard  # noqa: E402
 
 FUND_TABLES = ("decision_snapshots", "ic_decisions")
 EXPECTED = ["001_roles_access.sql", "002_jobs_queue.sql", "003_dealflow.sql",
-            "004_portfolio_passport.sql", "005_fund_view.sql"]
+            "004_portfolio_passport.sql", "005_fund_view.sql", "006_pdn_consent.sql"]
 
 
 # ---------- статические проверки ----------
