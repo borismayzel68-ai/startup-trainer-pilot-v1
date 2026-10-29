@@ -50,7 +50,7 @@ def human_decision(store, gate_id: str, digest: str) -> dict | None:
     """Решение из аудит-лога на этот хеш данных или None."""
     if _auth_ready():
         import auth
-        for row in auth.store().audit_rows(500):
+        for row in auth.store().audit_for(WAIVER_ACTION, gate_id, "allow"):
             detail = row.get("detail") or ""
             if (row.get("action") == WAIVER_ACTION and row.get("object") == gate_id
                     and row.get("result") == "allow" and f"sha256={digest}" in detail

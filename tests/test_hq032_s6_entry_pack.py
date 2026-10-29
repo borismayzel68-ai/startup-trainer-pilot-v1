@@ -73,6 +73,27 @@ def test_e_fact_without_verified_by_rejected():
     assert [c["verified_by"] for c in pack["facts_accepted"]] == ["owner"]
 
 
+def test_a_waiver_survives_a_long_audit_log():
+    """Решение человека ищется по шлюзу, а не среди последних строк общего журнала."""
+    from flask import Flask
+
+    from auth_store import AuthStore
+    from s6_perimeter import waiver
+
+    app = Flask("audit-window")
+    store = AuthStore("sqlite:///:memory:")
+    app.extensions["auth_store"] = store
+    digest = "a" * 64
+    with app.app_context():
+        store.audit("owner@example.test", waiver.WAIVER_ACTION, "gate-1", "allow", "127.0.0.1",
+                    f"source=audit_log sha256={digest} reason=синтетика")
+        for i in range(600):
+            store.audit("other@example.test", "change", f"/n/{i}", "allow", "127.0.0.1", "шум")
+        found = waiver.human_decision(None, "gate-1", digest)
+    assert found == {"by": "owner@example.test", "sha256": digest, "source": "audit_log"}
+    assert store.audit_rows(500)[0]["object"] != "gate-1"
+
+
 def test_g_no_autosend():
     for path in (ROOT / "s6_perimeter").glob("*.py"):
         text = path.read_text(encoding="utf-8")
