@@ -139,6 +139,8 @@ SA деплоя); идентификаторы `YC_FOLDER_ID`, `YC_REGISTRY_ID`,
 (`ON CONFLICT … DO UPDATE` и `ON DELETE CASCADE` не считаются). Если такие есть, `deploy.sh` делает
 `yc managed-postgresql cluster backup`, ждёт статус `DONE`, и только затем вызывает миграции с `snapshot_id`. Без `snapshot_id` контейнер миграций
 отвечает 409 и ничего не применяет. Сейчас все миграции только добавляют, шаг не срабатывает.
+Кроме того, guard падает (код 20, `deploy.sh` останавливается, контейнер миграций отвечает 409) на дубле числового префикса —
+один номер = один файл. Откаты — `db/migrations/down/NNN_*.down.sql`, применяются только вручную после снимка.
 Вручную: `yc managed-postgresql cluster backup <кластер>`.
 
 ### 4. Откат
