@@ -1,0 +1,74 @@
+# MOS-6 · staging на своей машине (Docker + nginx). Тот же стек, что docker-compose.yml (db → migrate → app),
+# но для закрытого стенда: APP_ENV=staging, без ИИ-заглушки, без демо-пользователей.
+#
+# ВАЖНО: демо-пользователей быть не должно. Шаг migrate запускает ТОЛЬКО scripts/hq018_migrate.py.
+# scripts/hq018_seed.py и scripts/seed_synthetic.py (создают *.synth@example.test) здесь НЕ вызываются
+# и на стенде не запускаются вручную.
+#
+# Значения переменных — только в .env.staging на машине (не в git, права 600). Здесь — одни имена.
+# Запуск:  docker compose --env-file .env.staging -f docker-compose.staging.yml up -d --build
+# (--env-file нужен для подстановки ${STAGING_DB_PASSWORD} и ${TRUSTED_PROXY_COUNT}; env_file — для переменных контейнера app.)
+# Подробнее: docs/deploy/STAGING.md; пример nginx: docs/deploy/nginx.staging.conf.example.
+#
+# Известный пробел: delivery_worker.py (доставка событий завершения с повторами) в compose не запускается —
+# как и в docker-compose.yml / Dockerfile / deploy.sh. Нужен ли он на пилоте — отдельное решение.
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: trainer_staging
+      POSTGRES_USER: trainer
+      POSTGRES_PASSWORD: ${STAGING_DB_PASSWORD:?задайте STAGING_DB_PASSWORD в .env.staging}
+    # Порт базы наружу не публикуется: доступ только из сети compose.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trainer -d trainer_staging"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    volumes: [pgdata:/var/lib/postgresql/data]
+
+  migrate:  # одноразовый шаг: только миграции, БЕЗ seed (без hq018_seed.py / seed_synthetic.py)
+    build: .
+    restart: "no"
+    depends_on:
+      db: {condition: service_healthy}
+    environment:
+      SESSION_DATABASE_URL: postgresql://trainer:${STAGING_DB_PASSWORD:?задайте STAGING_DB_PASSWORD в .env.staging}@db:5432/trainer_staging
+    command: ["python", "scripts/hq018_migrate.py"]
+
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db: {condition: service_healthy}
+      migrate: {condition: service_completed_successfully}
+    # Секреты и настройки (SESSION_SECRET, GOOGLE_CLIENT_ID/SECRET, AUTH_ALLOWLIST, AUTH_REDIRECT_URI, PUBLIC_BASE_URL,
+    # OPENAI_API_KEY, OPENAI_BASE_URL, S1_LLM_MODEL_ID, LLM_JSON_FORMAT, INVITE_CODE, S1_TILDA_WEBHOOK_KEY,
+    # S1_ADMIN_TOKEN, S1_APPROVERS, S1_APPROVER_ROLES, ...) — из .env.staging; список имён — .env.example.
+    env_file: [.env.staging]
+    environment:
+      # Не секреты; перекрывают env_file, чтобы стенд нельзя было случайно поднять не в staging-режиме.
+      APP_ENV: staging
+      STAGING_SYNTHETIC_ONLY: "true"
+      S1_LLM_PROVIDER: openai            # mock на staging запрещён кодом (MOS-7)
+      S1_AUTO_SEND_FOUNDER_REPORT: "false"
+      PORT: "10000"
+      # За одним nginx — 1 (иначе журнал видит IP nginx, а схема https теряется; Secure cookie требует HTTPS).
+      TRUSTED_PROXY_COUNT: ${TRUSTED_PROXY_COUNT:-1}
+      # Одна переменная адреса БД: SESSION_DATABASE_URL имеет приоритет над DATABASE_URL — DATABASE_URL в .env.staging не задавать.
+      SESSION_DATABASE_URL: postgresql://trainer:${STAGING_DB_PASSWORD:?задайте STAGING_DB_PASSWORD в .env.staging}@db:5432/trainer_staging
+    # 2 воркера, таймаут 120 с (как deploy/yc/web-entrypoint.sh) — под долгие ответы ИИ.
+    command: ["sh", "-c", "exec gunicorn -b 0.0.0.0:10000 --workers 2 --timeout 120 app:app"]
+    healthcheck:
+      # В python:3.13-slim нет curl — проверка средствами Python.
+      test: ["CMD", "python", "-c", "import sys,urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:10000/health', timeout=5).status == 200 else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    # Только на localhost: снаружи — через nginx на хосте (80/443).
+    ports: ["127.0.0.1:10000:10000"]
+
+volumes:
+  pgdata:

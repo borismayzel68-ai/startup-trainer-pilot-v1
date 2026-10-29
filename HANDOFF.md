@@ -34,7 +34,7 @@
 | #37 | HQ-041 · S6 «Периметр входа» (шлюз NEEDS_EVIDENCE); 26.10: `POST /s2/checks` только через пройденный S6; 27.10: merge master (после #90); 27.10: атомарный захват шлюза (CAS), forward_to_s2 и POST /s2/checks на одном захвате, повтор → 409, pytest 675 passed | [docs/handoff/37.md](docs/handoff/37.md) |
 | #93 | Q-316 · кнопка «Сообщить о проблеме» (S1); новая таблица s1_feedback — ревью MOS Tech; pytest 685 passed | [docs/handoff/93.md](docs/handoff/93.md) |
 | mig-005 | Миграция 004_fund_view → 005_fund_view, guard дублей номера, откат down/005 (MOS Tech, 29.10, ветка `fix/migration-005-fund-view`) | [docs/handoff/mig-005.md](docs/handoff/mig-005.md) |
-| #57 | MOS-6 · staging | [docs/handoff/57.md](docs/handoff/57.md) |
+| #57 | MOS-6 · staging; 29.10: docker-compose.staging.yml (без демо-пользователей) + пример nginx | [docs/handoff/57.md](docs/handoff/57.md) |
 | #59 | HQ-023 · S3 Эксперт (БП-07) | [docs/handoff/59.md](docs/handoff/59.md) |
 
 ## Слияние master (15adbca, LSM v1 #75) в ветку MOS-6 (Claude, 23.10, Refs #57)
