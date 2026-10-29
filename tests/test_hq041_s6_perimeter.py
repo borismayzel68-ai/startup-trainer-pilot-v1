@@ -128,6 +128,13 @@ def test_s5_link_only_after_perimeter():
     assert isinstance(PortfolioUpdates().flags, (list, dict))
     with pytest.raises(E.GateBlocked):
         entry_passport("g2", {"company_id": "SYN-1", "input": {}}, None)
+    blocked = {"company_id": "SYN-1", "input": {**GOOD, "covenants": {"value": [], "evidence": "SYN"}},
+               **E.evaluate({**GOOD, "covenants": {"value": [], "evidence": "SYN"}}, POLICY)}
+    forged = {"by": "owner@synthetic.test", "sha256": E.sha256(blocked)}
+    with pytest.raises(E.GateBlocked):
+        entry_passport("g3", blocked, forged)
+    decision = {"by": "owner@synthetic.test", "sha256": E.sha256(blocked), "source": "audit_log"}
+    assert entry_passport("g3", blocked, None, human_decision=decision).company_id == "SYN-1"
 
 
 # ----------------------------------------------------------------- HTTP / RBAC
