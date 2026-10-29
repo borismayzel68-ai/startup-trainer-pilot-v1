@@ -109,7 +109,7 @@ def current_user():
 
 
 def public(fn):
-    """Маршрут без проверки роли: только /health, /robots.txt, /auth/login, /auth/callback."""
+    """Маршрут без проверки роли: /health, /robots.txt, /auth/login, /auth/callback, /consent (согласие до входа)."""
     fn._rbac = {"public": True}
     return fn
 
@@ -207,9 +207,27 @@ def session_ok():
 
 
 # ----------------------------------------------------------------------- routes
+def _investor_consent_row():
+    """Неотозванная строка согласия этой сессии. Нет строки или отзыв — None."""
+    store = current_app.extensions.get("pdn_store")
+    if store is None:
+        return None
+    row = store.by_id(session.get("pdn_consent_id"))
+    if not row or row.get("revoked_at"):
+        return None
+    return row
+
+
+def _investor_consent_ok() -> bool:
+    """Вход инвестора не начинается, пока в этой сессии нет неотзванного согласия (страница /consent)."""
+    return _investor_consent_row() is not None
+
+
 @bp.get("/login")
 @public
 def login():
+    if not _investor_consent_ok():
+        return redirect("/consent")
     client_id = os.environ.get("GOOGLE_CLIENT_ID", "")
     if not client_id or not os.environ.get("GOOGLE_CLIENT_SECRET"):
         return jsonify({"error": "OAuth не настроен", "code": "oauth_not_configured"}), 503
@@ -247,6 +265,13 @@ def callback():
     if not entries:  # вне allowlist: пользователь НЕ создаётся
         audit("login", "/auth/callback", "deny", actor=email, detail="not_in_allowlist")
         return jsonify({"error": "Доступ запрещён", "code": "not_in_allowlist"}), 403
+    consent_row = _investor_consent_row()
+    if consent_row is None:
+        audit("login", "/auth/callback", "deny", actor=email, detail="pdn_consent_revoked")
+        return jsonify({"error": "Нужно согласие на обработку персональных данных", "code": "consent_required"}), 403
+    if consent_row["user_email"] != email:
+        audit("login", "/auth/callback", "deny", actor=email, detail="pdn_consent_email_mismatch")
+        return jsonify({"error": "Email согласия не совпадает с аккаунтом входа", "code": "consent_email_mismatch"}), 403
     user = store().upsert_user(email, claims.get("name") or email)
     for role, scope in entries:
         store().ensure_grant(user["id"], role, scope)

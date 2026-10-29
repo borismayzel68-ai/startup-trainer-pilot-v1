@@ -17,7 +17,10 @@ pytestmark = pytest.mark.auth_enforced
 
 BASE = "https://localhost"  # cookie Secure не уходит по http
 CLIENT_ID = "synthetic-client-id.apps.example.test"
-PUBLIC_ENDPOINTS = {"health", "robots", "auth.login", "auth.callback"}
+PUBLIC_ENDPOINTS = {
+    "health", "robots", "auth.login", "auth.callback",
+    "pdn_consent.page", "pdn_consent.submit", "pdn_consent.revoke",
+}
 EXTERNAL_OK_STATUSES = {401, 403, 404, 503}  # собственная проверка маршрута (Bearer / ключ / подпись ссылки)
 
 ALL_ROLES = sorted(auth.ROLES)
@@ -66,7 +69,16 @@ def rows(store, **where):
 
 
 # ------------------------------------------------------------- OAuth (мок)
+def grant_pdn(c, email="pdn-oauth@example.test"):
+    """Как после отмеченного чекбокса на /consent: строка журнала и id в сессии."""
+    row = appmod.app.extensions["pdn_store"].record(email, "v0-draft", "127.0.0.1", "investor_login")
+    with c.session_transaction() as s:
+        s["pdn_consent_id"] = row["id"]
+    return row
+
+
 def oauth_login(monkeypatch, c, email, verified=True, nonce_ok=True, aud=CLIENT_ID):
+    grant_pdn(c, email)
     r = c.get("/auth/login", base_url=BASE)
     assert r.status_code == 302
     q = urllib.parse.parse_qs(urllib.parse.urlparse(r.headers["Location"]).query)
@@ -110,14 +122,48 @@ def test_login_rejects_bad_id_token(env, monkeypatch, kw):
 
 def test_callback_rejects_wrong_state(env, monkeypatch):
     c = appmod.app.test_client()
+    grant_pdn(c)
     c.get("/auth/login", base_url=BASE)
     monkeypatch.setattr(auth, "exchange_code", lambda *a: pytest.fail("обмен кода не должен вызываться"))
     assert c.get("/auth/callback?code=x&state=wrong", base_url=BASE).status_code == 400
 
 
+def test_oauth_callback_denied_when_consent_revoked(env, monkeypatch):
+    c = appmod.app.test_client()
+    grant_pdn(c, "boris@example.test")
+    r = c.get("/auth/login", base_url=BASE)
+    assert r.status_code == 302
+    q = urllib.parse.parse_qs(urllib.parse.urlparse(r.headers["Location"]).query)
+    appmod.app.extensions["pdn_store"].revoke("boris@example.test")
+    claims = {"iss": "https://accounts.google.com", "aud": CLIENT_ID, "exp": time.time() + 600,
+              "email": "boris@example.test", "email_verified": True, "name": "Synthetic", "nonce": q["nonce"][0]}
+    monkeypatch.setattr(auth, "exchange_code", lambda code, redirect_uri: claims)
+    out = c.get("/auth/callback?code=synthetic&state=" + q["state"][0], base_url=BASE)
+    assert out.status_code == 403 and out.get_json()["code"] == "consent_required"
+    assert c.get("/auth/me", base_url=BASE).status_code == 401
+
+
+def test_oauth_callback_denied_when_consent_email_differs(env, monkeypatch):
+    c = appmod.app.test_client()
+    grant_pdn(c, "other-synth@example.test")
+    r = c.get("/auth/login", base_url=BASE)
+    q = urllib.parse.parse_qs(urllib.parse.urlparse(r.headers["Location"]).query)
+    claims = {"iss": "https://accounts.google.com", "aud": CLIENT_ID, "exp": time.time() + 600,
+              "email": "boris@example.test", "email_verified": True, "name": "Synthetic", "nonce": q["nonce"][0]}
+    monkeypatch.setattr(auth, "exchange_code", lambda code, redirect_uri: claims)
+    out = c.get("/auth/callback?code=synthetic&state=" + q["state"][0], base_url=BASE)
+    assert out.status_code == 403 and out.get_json()["code"] == "consent_email_mismatch"
+    assert env.user_by_email("boris@example.test") is None
+    assert c.get("/auth/me", base_url=BASE).status_code == 401
+
+
 def test_login_not_configured_503(env, monkeypatch):
     monkeypatch.delenv("GOOGLE_CLIENT_ID")
-    assert appmod.app.test_client().get("/auth/login", base_url=BASE).status_code == 503
+    c = appmod.app.test_client()
+    blocked = c.get("/auth/login", base_url=BASE)
+    assert blocked.status_code == 302 and blocked.headers["Location"].endswith("/consent")
+    grant_pdn(c)
+    assert c.get("/auth/login", base_url=BASE).status_code == 503
 
 
 def test_allowlist_parser():

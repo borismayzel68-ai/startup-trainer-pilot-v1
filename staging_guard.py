@@ -2,7 +2,8 @@
 
 Включается только при APP_ENV=staging — локальная среда, CI и S1 работают как раньше.
 Собственного OAuth здесь нет: вход, сессия и RBAC — модуль `auth` из MOS-1 (#61, `auth.current_user()`).
-Здесь только страховочный замок: без сессии #61 открыты лишь /health, /robots.txt и /auth/* (их защищает сам #61);
+Здесь только страховочный замок: без сессии #61 открыты лишь /health, /robots.txt, /auth/* (их защищает сам #61)
+и /consent (согласие на обработку ПДн отмечают до входа);
 остальное — 401 (API) или редирект на /auth/login. Если модуля `auth` нет, приложение не стартует (fail-closed).
 Секреты берутся только из env (Yandex Lockbox), в репозитории их нет."""
 import importlib
@@ -12,6 +13,13 @@ from flask import jsonify, redirect, request
 REQUIRED_ENV = ("DATABASE_URL", "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "SESSION_SECRET", "AUTH_ALLOWLIST")
 OPEN_PATHS = {"/health", "/robots.txt"}
 OPEN_PREFIXES = ("/auth/",)
+
+
+def anonymous_open(path: str) -> bool:
+    """Без сессии открыты здоровье, robots, OAuth и страница согласия (её отмечают до входа)."""
+    if path in OPEN_PATHS or path.startswith(OPEN_PREFIXES):
+        return True
+    return path == "/consent" or path.startswith("/consent/")
 NOINDEX = "noindex, nofollow, noarchive"
 LOGIN_PATH = "/auth/login"
 MIN_SESSION_SECRET = 32
@@ -106,7 +114,7 @@ def init_staging(app, env, data_check=check_synthetic_data, user_loader=None) ->
     @app.before_request
     def _require_login():
         path = request.path
-        if path in OPEN_PATHS or path.startswith(OPEN_PREFIXES):
+        if anonymous_open(path):
             return None
         if current_user():  # сессия MOS-1; роли и scope проверяет RBAC #61
             return None
