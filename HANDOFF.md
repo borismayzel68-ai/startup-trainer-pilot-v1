@@ -18,6 +18,7 @@
 
 | Issue | Тема | Файл |
 |---|---|---|
+| #17 | HQ-032 · S6 входной пакет до term sheet; обход admin/owner в S2 закрыт | [docs/handoff/17.md](docs/handoff/17.md) |
 | #22 | HQ-036 · линия tilda (A9 + S1) | [docs/handoff/22.md](docs/handoff/22.md) |
 | #33 | Чистка __pycache__ | [docs/handoff/33.md](docs/handoff/33.md) |
 | #36 | P0 #36 · S1 (шкала E, пакет основателю) | [docs/handoff/36.md](docs/handoff/36.md) |

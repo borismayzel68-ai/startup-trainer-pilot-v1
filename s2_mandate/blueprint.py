@@ -1,6 +1,8 @@
-"""S2 · шлюз мандата: /s2. Вход заявки — только через пройденный периметр S6 (s6_gate_id, Д-59; admin-токен это не обходит).
+"""S2 · шлюз мандата: /s2. Вход заявки — только через пройденный периметр S6 (s6_gate_id, Д-59).
+Роли admin и owner этот запрет не обходят: NEEDS_EVIDENCE → 403 blocked и запись в аудит-лог.
+Исключение — явное решение человека в аудит-логе (не поле release в JSON и не admin-токен).
 Решение по EXCEPTION — только персональная подпись человека (механизм S1: S1_APPROVERS +
-журнал s1_approvals). Admin-токен и система решение не принимают. Отправки наружу нет."""
+журнал s1_approvals). Отправки наружу нет."""
 from __future__ import annotations
 
 import uuid
@@ -11,6 +13,7 @@ from s1_intake.main import _admin_ok, _approver, _err, _state
 
 from s6_perimeter import claim as CLAIM
 from s6_perimeter import engine as S6
+from s6_perimeter import waiver as W
 
 from . import engine as E
 
@@ -38,24 +41,51 @@ def _load(check_id: str):
     return s2["check"] if s2 else None
 
 
-def _gate_problem(gate_id, body: dict) -> str | None:
-    """Причина отказа в допуске к S2 или None. Допуск считает S6.admit() (PASS либо снятие owner с тем же sha256);
-    заявка обязана совпадать с данными шлюза (чек, форма сделки), шлюз — одноразовый."""
+def _caller() -> tuple[str, str]:
+    """(актор, роль) для записи в аудит. Admin-токен — роль admin, не именной человек."""
+    from flask import g
+    roles = set(g.get("rbac_roles") or ())
+    if "owner" in roles:
+        role = "owner"
+    elif "fund_staff" in roles:
+        role = "fund_staff"
+    elif _admin_ok():
+        role = "admin"
+    else:
+        role = "unknown"
+    email = None
+    try:
+        import auth
+        from flask import current_app
+        if "auth_store" in current_app.extensions:
+            email = (auth.current_user() or {}).get("email")
+    except RuntimeError:
+        email = None
+    return (email or role), role
+
+
+def _gate_problem(gate_id, body: dict):
+    """None, если допуск есть. Иначе (код, сообщение, доп.поля).
+
+    403 — периметр не пройден (NEEDS_EVIDENCE) и в аудит-логе нет решения человека.
+    409 — нет id, шлюз не найден, заявка не совпадает со шлюзом или шлюз уже использован.
+    """
     if not isinstance(gate_id, str) or not gate_id.strip():
-        return "s6_gate_id обязателен: заявка без пройденного периметра входа S6 в S2 не идёт"
+        return 409, "s6_gate_id обязателен: заявка без пройденного периметра входа S6 в S2 не идёт", {}
     s6 = ((_state().store.get(gate_id) or {}).get("data") or {}).get("s6")
     if not s6:
-        return "шлюз S6 не найден: " + gate_id
+        return 409, "шлюз S6 не найден: " + str(gate_id), {}
     rec, release = s6["gate"], s6.get("release")
+    digest = S6.sha256(rec)
     try:
-        S6.admit(gate_id, rec, release)
+        S6.admit(gate_id, rec, release, human_decision=W.human_decision(_state().store, gate_id, digest))
     except S6.GateBlocked as exc:
-        return str(exc)
+        return 403, str(exc), {"digest": digest, "problems": exc.problems, "gate_id": gate_id}
     inp = rec["input"]
     if body["check_rub"] != inp["check_rub"]["value"] or body["instrument"] != inp["deal_form"]["value"]:
-        return "заявка не совпадает с данными шлюза S6 (check_rub, instrument)"
+        return 409, "заявка не совпадает с данными шлюза S6 (check_rub, instrument)", {}
     if CLAIM.used_by(s6):
-        return CLAIM.USED_MSG + CLAIM.used_by(s6)
+        return 409, CLAIM.USED_MSG + CLAIM.used_by(s6), {}
     return None
 
 
@@ -70,9 +100,15 @@ def create_check():
     if missing:
         return jsonify({"status": "returned", "missing": missing}), 422
     gate_id = body.get("s6_gate_id")
-    why = _gate_problem(gate_id, body)
-    if why:
-        return _err(why, 409)
+    problem = _gate_problem(gate_id, body)
+    if problem:
+        status, message, extra = problem
+        if status == 403:
+            actor, role = _caller()
+            W.record_block(_state().store, extra.get("gate_id") or "", actor, role, extra.get("digest") or "")
+            return jsonify({"error": message, "blocked": True, "gate_status": S6.NEEDS_EVIDENCE,
+                            "problems": extra.get("problems") or []}), 403
+        return _err(message, status)
     rec = {"input": {k: body[k] for k in E.FIELDS}, **E.evaluate(body, E.load_policy()), "s6_gate": gate_id}
     store, token = _state().store, uuid.uuid4().hex
     if not CLAIM.claim(store, gate_id, token):  # атомарно: из параллельных вызовов шлюз займёт один

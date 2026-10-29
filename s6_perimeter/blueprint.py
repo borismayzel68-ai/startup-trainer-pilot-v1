@@ -13,6 +13,7 @@ from s2_mandate import engine as S2
 
 from . import claim as CLAIM
 from . import engine as E
+from . import waiver as W
 
 bp = Blueprint("s6_perimeter", __name__, url_prefix="/s6")
 STAFF = ("owner", "fund_staff")
@@ -32,10 +33,14 @@ def _load(gate_id: str):
     return (s6["gate"], s6.get("release"), s6.get("s2_check_id")) if s6 else (None, None, None)
 
 
+def _decision(gate_id: str, rec: dict) -> dict | None:
+    return W.human_decision(_state().store, gate_id, E.sha256(rec))
+
+
 def _view(gate_id: str, rec: dict, release: dict | None, s2_id: str | None) -> dict:
     """Что видно снаружи. Допуск в S2 считается тем же admit(), что и при передаче."""
     try:
-        E.admit(gate_id, rec, release)
+        E.admit(gate_id, rec, release, human_decision=_decision(gate_id, rec))
         admitted = True
     except E.GateBlocked:
         admitted = False
@@ -51,7 +56,7 @@ def forward_to_s2(gate_id: str, sector, innovative) -> tuple[dict, int]:
     rec, release, s2_id = _load(gate_id)
     if rec is None:
         raise LookupError(gate_id)
-    E.admit(gate_id, rec, release)
+    E.admit(gate_id, rec, release, human_decision=_decision(gate_id, rec))
     if s2_id or CLAIM.used_by((((_state().store.get(gate_id) or {}).get("data") or {}).get("s6")) or {}):
         raise GateUsed(gate_id)
     inp = rec["input"]
@@ -117,7 +122,13 @@ def release_gate(gate_id):
     reason = (request.get_json(silent=True) or {}).get("reason")
     if not isinstance(reason, str) or not reason.strip():
         return _err("reason обязателен", 400)
-    release = {"by": _actor(), "reason": reason.strip(), "sha256": E.sha256(rec)}
+    actor = _actor()
+    if not W.is_person(actor or ""):
+        return _err("решение человека требует именную сессию", 403)
+    digest = E.sha256(rec)
+    release = {"by": actor, "reason": reason.strip(), "sha256": digest}
+    # Сначала аудит-лог: без этой записи admit() кейс не пропустит, даже если release уже лежит в JSON.
+    W.record_waiver(_state().store, gate_id, actor, digest, reason.strip())
     if not CLAIM.set_release(_state().store, gate_id, release):  # условная запись: ссылку S2 не затирает
         return _err("already released", 409)
     return jsonify(_view(gate_id, rec, release, _load(gate_id)[2]))
