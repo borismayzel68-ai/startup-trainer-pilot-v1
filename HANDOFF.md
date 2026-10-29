@@ -2,6 +2,11 @@
 
 Подробный handoff ведётся по задачам в `docs/handoff/<issue>.md`; здесь — только ссылки. При каждом коммите обновляется файл своей задачи (и эта таблица, если появилась новая задача).
 
+## Пакет для Сергея 29.10 (MOS Tech, ветка `docs/for-sergey-2026-10-29`)
+- Только документация, код не менялся: `docs/for-sergey/` — README.md, 01 (Nocvela для технического человека), 02 (ТЗ-чек-лист приёмки стенда), 03 (стенд: что установить и как). Основа — master 54295a1.
+- Секретов и значений переменных нет (только имена); персональных данных нет, кроме имён участников проекта; демо-адреса — синтетические `@example.test`.
+- Не проверено: команды из 03 (docker build, compose, nginx) на живой машине не запускались.
+
 ## Починка master 27.10 (диспетчер кода, ветка `fix/delivery-worker-t0`)
 - tests/test_delivery_worker.py: та же мина, что 26.10 в test_session_store.py — T0 = 2026-09-26 + хранение 30 дней → с 27.10 store.get() → None, 3 теста красные на master 03152fb. T0 теперь от текущего часа. Код не менялся.
 - pytest локально: 638 passed, 27 skipped, 0 failed.
@@ -18,6 +23,7 @@
 
 | Issue | Тема | Файл |
 |---|---|---|
+| #16 | HQ-031 · S5 светофор по форме HQ-030 (без новой ledger-таблицы) | [docs/handoff/16.md](docs/handoff/16.md) |
 | #22 | HQ-036 · линия tilda (A9 + S1) | [docs/handoff/22.md](docs/handoff/22.md) |
 | #33 | Чистка __pycache__ | [docs/handoff/33.md](docs/handoff/33.md) |
 | #36 | P0 #36 · S1 (шкала E, пакет основателю) | [docs/handoff/36.md](docs/handoff/36.md) |
@@ -26,6 +32,7 @@
 | #53 | MOS-2 · схема dealflow | [docs/handoff/53.md](docs/handoff/53.md) |
 | #37 | HQ-041 · S6 «Периметр входа» (шлюз NEEDS_EVIDENCE); 26.10: `POST /s2/checks` только через пройденный S6; 27.10: merge master (после #90); 27.10: атомарный захват шлюза (CAS), forward_to_s2 и POST /s2/checks на одном захвате, повтор → 409, pytest 675 passed | [docs/handoff/37.md](docs/handoff/37.md) |
 | #93 | Q-316 · кнопка «Сообщить о проблеме» (S1); новая таблица s1_feedback — ревью MOS Tech; pytest 685 passed | [docs/handoff/93.md](docs/handoff/93.md) |
+| mig-005 | Миграция 004_fund_view → 005_fund_view, guard дублей номера, откат down/005 (MOS Tech, 29.10, ветка `fix/migration-005-fund-view`) | [docs/handoff/mig-005.md](docs/handoff/mig-005.md) |
 | #57 | MOS-6 · staging; 29.10: docker-compose.staging.yml (без демо-пользователей) + пример nginx | [docs/handoff/57.md](docs/handoff/57.md) |
 | #59 | HQ-023 · S3 Эксперт (БП-07) | [docs/handoff/59.md](docs/handoff/59.md) |
 
