@@ -53,6 +53,7 @@ owner (Владелец фонда), fund_staff (Сотрудник фонда),
 | `/s6/gates`, `/s6/gates/<id>`, `/s6/gates/<id>/forward-to-s2` | GET, POST | owner, fund_staff | только `*` | — |
 | `POST /s2/checks` | POST | как раньше (admin-токен / сессия) **+ `s6_gate_id` пройденного шлюза S6**; без него → 409, admin-токен не обходит | — | — |
 | `/s6/gates/<id>/release` | POST | owner | только `*` | — (решение человека о снятии блокировки) |
+| `/s5/today`, `/s5/today/<id>` | GET | owner, fund_staff, investor | любой грант | — (только чтение, синтетика, отправки нет) |
 
 Отказ в любом маршруте: без входа — 401 (HTML-GET → redirect `/auth/login`), вошёл, но нет роли/scope или нет CSRF — 403.
 
