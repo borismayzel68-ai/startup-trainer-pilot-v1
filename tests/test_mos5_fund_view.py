@@ -62,7 +62,7 @@ def test_repo_without_standard_file_reports_not_loaded():
 
 
 def test_no_lp_fields_in_code_and_schema():
-    files = [ROOT / "db" / "migrations" / "004_fund_view.sql", *(ROOT / "fund_view").glob("*.py")]
+    files = [ROOT / "db" / "migrations" / "005_fund_view.sql", *(ROOT / "fund_view").glob("*.py")]
     for f in files:
         text = f.read_text(encoding="utf-8")
         text = re.sub(r"(?m)^\s*(--|#).*$|\"\"\".*?\"\"\"", "", text, flags=re.S)  # комментарии/докстринги

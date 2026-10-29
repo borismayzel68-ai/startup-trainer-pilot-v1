@@ -1,0 +1,38 @@
+# MOS-6 · пример nginx для staging (не проверялся на живой машине). Домен и пути сертификата — плейсхолдеры.
+#
+# ВАЖНО: при nginx перед приложением в .env.staging нужен TRUSTED_PROXY_COUNT=1
+# (docker-compose.staging.yml ставит 1 по умолчанию). Тогда приложение берёт IP клиента и схему https
+# из X-Forwarded-For / X-Forwarded-Proto. Cookie сессии ставится с флагом Secure: без HTTPS вход не держится.
+#
+# upstream app:10000 — если nginx запущен в той же сети compose. Если nginx стоит на хосте,
+# заменить на 127.0.0.1:10000 (app опубликован только на localhost).
+upstream nocvela_app {
+    server app:10000;
+}
+
+server {
+    listen 80;
+    server_name staging.example.test;            # плейсхолдер домена
+    location /.well-known/acme-challenge/ { root /var/www/certbot; }
+    location / { return 301 https://$host$request_uri; }
+}
+
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name staging.example.test;            # плейсхолдер домена
+
+    ssl_certificate     /etc/letsencrypt/live/staging.example.test/fullchain.pem;   # плейсхолдер
+    ssl_certificate_key /etc/letsencrypt/live/staging.example.test/privkey.pem;     # плейсхолдер
+
+    client_max_body_size 30m;        # не меньше S1_MAX_FILE_MB
+    proxy_read_timeout 180s;         # с запасом к gunicorn --timeout 120 / S1_LLM_TIMEOUT_S
+
+    location / {
+        proxy_pass http://nocvela_app;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host  $host;
+    }
+}

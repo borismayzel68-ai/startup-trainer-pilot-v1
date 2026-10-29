@@ -96,6 +96,9 @@ app.register_blueprint(fund_bp)
 # MOS-4 (#55): портфель /portfolio; доступ — require_role из MOS-1 (owner/fund_staff/investor), scope проверяет сервис.
 from portfolio.blueprint import bp as portfolio_bp  # noqa: E402
 app.register_blueprint(portfolio_bp)
+# HQ-031 (#16): светофор S5 по форме HQ-030, только чтение синтетики (/s5/today). Таблиц не добавляет.
+from s5_monitor.blueprint import bp as s5_bp  # noqa: E402
+app.register_blueprint(s5_bp)
 # 152-ФЗ: страница согласия (/consent) до входа. Чекбокс не отмечен; без него заявка и вход инвестора не принимаются.
 app.register_blueprint(consent_bp)
 ALLOWED_STATUS = {"fact","hypothesis","missing","weak"}

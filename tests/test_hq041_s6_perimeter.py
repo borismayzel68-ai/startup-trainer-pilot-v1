@@ -98,14 +98,20 @@ def test_no_policy_literals_in_code():
 
 def test_admit_blocks_and_owner_release_is_bound_to_data():
     rec = {"company_id": "SYN-1", "input": {}, **E.evaluate({}, POLICY)}
+    digest = E.sha256(rec)
     with pytest.raises(E.GateBlocked):
         E.admit("g1", rec, None)
-    rel = {"by": "owner@synthetic.test", "sha256": E.sha256(rec)}
-    E.admit("g1", rec, rel)
+    rel = {"by": "owner@synthetic.test", "sha256": digest}
+    with pytest.raises(E.GateBlocked):  # JSON release сам по себе не допуск
+        E.admit("g1", rec, rel)
+    decision = {"by": "owner@synthetic.test", "sha256": digest, "source": "audit_log"}
+    E.admit("g1", rec, None, human_decision=decision)
     with pytest.raises(E.GateBlocked):  # данные изменились — решение не действует
-        E.admit("g1", {**rec, "company_id": "SYN-2"}, rel)
-    with pytest.raises(E.GateBlocked):  # release без подписанта
-        E.admit("g1", rec, {"sha256": E.sha256(rec)})
+        E.admit("g1", {**rec, "company_id": "SYN-2"}, None, human_decision=decision)
+    with pytest.raises(E.GateBlocked):  # нет именного актора
+        E.admit("g1", rec, None, human_decision={"sha256": digest, "source": "audit_log"})
+    with pytest.raises(E.GateBlocked):  # admin не человек
+        E.admit("g1", rec, None, human_decision={"by": "admin", "sha256": digest, "source": "audit_log"})
 
 
 def test_forged_result_field_does_not_admit():
@@ -122,6 +128,13 @@ def test_s5_link_only_after_perimeter():
     assert isinstance(PortfolioUpdates().flags, (list, dict))
     with pytest.raises(E.GateBlocked):
         entry_passport("g2", {"company_id": "SYN-1", "input": {}}, None)
+    blocked = {"company_id": "SYN-1", "input": {**GOOD, "covenants": {"value": [], "evidence": "SYN"}},
+               **E.evaluate({**GOOD, "covenants": {"value": [], "evidence": "SYN"}}, POLICY)}
+    forged = {"by": "owner@synthetic.test", "sha256": E.sha256(blocked)}
+    with pytest.raises(E.GateBlocked):
+        entry_passport("g3", blocked, forged)
+    decision = {"by": "owner@synthetic.test", "sha256": E.sha256(blocked), "source": "audit_log"}
+    assert entry_passport("g3", blocked, None, human_decision=decision).company_id == "SYN-1"
 
 
 # ----------------------------------------------------------------- HTTP / RBAC

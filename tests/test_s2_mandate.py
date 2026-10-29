@@ -148,18 +148,22 @@ class S2HttpTests(tg1.Tg1Base):
         self.assertIn("не найден", r.get_json()["error"])
         self.assertEqual(len(self._s2_records()), 0)  # записей S2 нет (list() data не отдаёт — читаем через get)
 
-    def test_s6_gate_needs_evidence_is_409_no_record(self):
+    def test_s6_gate_needs_evidence_is_403_blocked_and_audited(self):
         bad = s6_fields()
         del bad["covenants"]
         gid = make_gate(self.store, fields=bad)
         r = self.post(gid)
-        self.assertEqual(r.status_code, 409)
-        self.assertIn("covenants", r.get_json()["error"])
+        self.assertEqual(r.status_code, 403)
+        body = r.get_json()
+        self.assertTrue(body["blocked"])
+        self.assertEqual(body["gate_status"], S6.NEEDS_EVIDENCE)
+        self.assertIn("covenants", body["error"])
         self.assertNotIn("s2_check_id", self.store.get(gid)["data"]["s6"])
+        self.assertTrue(any(a["outcome"] == "s6_gate_blocked" for a in self.store.approvals(gid)))
         # result в хранилище подделан — допуска всё равно нет (admit пересчитывает)
         s6 = self.store.get(gid)["data"]["s6"]
         self.store.update(gid, data_patch={"s6": {**s6, "gate": {**s6["gate"], "result": S6.PASS}}})
-        self.assertEqual(self.post(gid).status_code, 409)
+        self.assertEqual(self.post(gid).status_code, 403)
 
     def test_s6_passed_gate_is_201_and_linked(self):
         gid = self.gate()
@@ -177,6 +181,7 @@ class S2HttpTests(tg1.Tg1Base):
         self.assertIn("уже использован", r.get_json()["error"])
 
     def test_s6_owner_release_with_matching_sha_admits(self):
+        from s6_perimeter import waiver
         bad = s6_fields()
         del bad["tranches"]
         gid = make_gate(self.store, fields=bad)
@@ -184,9 +189,13 @@ class S2HttpTests(tg1.Tg1Base):
         wrong = {"by": "owner@example.test", "reason": "r", "sha256": "0" * 64}
         s6 = self.store.get(gid)["data"]["s6"]
         self.store.update(gid, data_patch={"s6": {**s6, "release": wrong}})
-        self.assertEqual(self.post(gid).status_code, 409)  # sha256 не совпадает
+        self.assertEqual(self.post(gid).status_code, 403)  # JSON release не допуск
         ok = {**wrong, "sha256": S6.sha256(rec)}
         self.store.update(gid, data_patch={"s6": {**s6, "release": ok}})
+        self.assertEqual(self.post(gid).status_code, 403)  # даже верный sha в JSON не допуск
+        with self.assertRaises(PermissionError):
+            waiver.record_waiver(self.store, gid, "admin", S6.sha256(rec), "токен")
+        waiver.record_waiver(self.store, gid, "owner@example.test", S6.sha256(rec), "синтетическое решение человека")
         self.assertEqual(self.post(gid).status_code, 201)
 
     def test_s6_foreign_or_changed_gate_is_409(self):
@@ -203,7 +212,9 @@ class S2HttpTests(tg1.Tg1Base):
         release = {"by": "owner@example.test", "reason": "r", "sha256": S6.sha256(s6["gate"])}
         changed = {**s6["gate"], "input": {**s6["gate"]["input"], "check_rub": {"value": 9 * M, "evidence": "SYN"}}}
         self.store.update(g2, data_patch={"s6": {"gate": changed, "release": release}})
-        self.assertEqual(self.post(g2, check_rub=9 * M).status_code, 409)
+        blocked = self.post(g2, check_rub=9 * M)
+        self.assertEqual(blocked.status_code, 403)
+        self.assertTrue(blocked.get_json()["blocked"])
         # не шлюз S6 (id заявки S1/S2) — тоже 409
         c = self.create()
         self.assertEqual(self.post(c["id"]).status_code, 409)
@@ -411,6 +422,62 @@ def test_rbac_create_and_decide(rbac_client):
     assert owner.post(url, json={"decision": "approve"}, headers=owner.hdr).status_code == 403
     assert rbac_client().post(url, json={"decision": "approve"}).status_code in (401, 403)
     assert not owner.get("/s2/checks/" + cid).get_json()["cleared_for_meeting"]
+
+
+@pytest.mark.auth_enforced
+def test_a_needs_evidence_blocked_for_owner_staff_and_admin(rbac_client):
+    """(a) NEEDS_EVIDENCE + admin/owner/fund_staff в S2 → 403 blocked и строка deny в audit_log.
+    Поле release в JSON шлюз не открывает. Открывает только решение человека, записанное release-маршрутом в аудит."""
+    import dataclasses
+    import app as appmod
+    bad = s6_fields()
+    del bad["covenants"]
+    gate_body = {"company_id": "synthetic", "fields": bad}
+    owner = rbac_client("gate-owner@example.test", "owner")
+    created = owner.post("/s6/gates", json=gate_body, headers=owner.hdr)
+    assert created.status_code == 201, created.get_json()
+    gid = created.get_json()["id"]
+    payload = {**GOOD, "s6_gate_id": gid}
+
+    def blocked(client):
+        response = client.post("/s2/checks", json=payload, headers=client.hdr)
+        assert response.status_code == 403, response.get_json()
+        body = response.get_json()
+        assert body["blocked"] is True and body["gate_status"] == S6.NEEDS_EVIDENCE
+        return body
+
+    blocked(owner)
+    blocked(rbac_client("gate-staff@example.test", "fund_staff"))
+    investor = rbac_client("gate-inv@example.test", "investor")
+    assert investor.post("/s2/checks", json=payload, headers=investor.hdr).status_code == 403
+    state = appmod.app.extensions["s1_intake"]
+    previous = state.settings
+    state.settings = dataclasses.replace(previous, admin_token="b" * 32)
+    try:
+        admin = appmod.app.test_client()
+        response = admin.post("/s2/checks", json=payload, headers={"Authorization": "Bearer " + "b" * 32})
+        assert response.status_code == 403 and response.get_json()["blocked"] is True
+    finally:
+        state.settings = previous
+    rows = appmod.app.extensions["auth_store"].audit_rows(200)
+    denies = [row for row in rows if row["action"] == "s6.gate" and row["result"] == "deny" and row["object"] == gid]
+    assert any("role=owner" in (row["detail"] or "") for row in denies)
+    assert any("role=fund_staff" in (row["detail"] or "") for row in denies)
+    assert any("role=admin" in (row["detail"] or "") for row in denies)
+    store = state.store
+    s6 = store.get(gid)["data"]["s6"]
+    store.update(gid, data_patch={"s6": {**s6, "release": {
+        "by": "gate-owner@example.test", "reason": "подмена", "sha256": S6.sha256(s6["gate"])}}})
+    blocked(owner)  # JSON release без аудит-лога не пропускает
+    released = owner.post(f"/s6/gates/{gid}/release", json={"reason": "ещё"}, headers=owner.hdr)
+    assert released.status_code == 409  # release в JSON уже стоит, решение в аудит не записано
+    fresh = owner.post("/s6/gates", json=gate_body, headers=owner.hdr).get_json()["id"]
+    ok = owner.post(f"/s6/gates/{fresh}/release", json={"reason": "синтетическое решение человека"}, headers=owner.hdr)
+    assert ok.status_code == 200, ok.get_json()
+    rows = appmod.app.extensions["auth_store"].audit_rows(200)
+    assert any(row["action"] == "s6.human_waiver" and row["result"] == "allow" and row["object"] == fresh for row in rows)
+    opened = owner.post("/s2/checks", json={**GOOD, "s6_gate_id": fresh}, headers=owner.hdr)
+    assert opened.status_code == 201, opened.get_json()
 
 
 if __name__ == "__main__":
