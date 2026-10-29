@@ -14,11 +14,17 @@ import hashlib
 import hmac
 import json
 import logging
+import os
+import threading
+import time
+from collections import deque
+from urllib.parse import urlsplit
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from flask import Blueprint, Flask, Response, current_app, jsonify, request
+import httpx
+from flask import Blueprint, Flask, Response, current_app, g, jsonify, request, session as browser_session
 
 from .config import Settings, get_settings, load_methodology
 from .dialogue import (DialogueError, add_r2_item, attach_file, build_session, expire_overdue, r2_candidates,
@@ -237,8 +243,28 @@ def _approver() -> str | None:
     return None
 
 
+_STAFF_ROLES = frozenset({"owner", "fund_staff"})  # = auth.STAFF_ROLES (MOS-1)
+
+
+def _staff_session() -> bool:
+    """MOS-1 (#61): сессия прошла require_role и содержит роль owner/fund_staff (investor — нет)."""
+    return bool(g.get("rbac_session_ok")) and bool(set(g.get("rbac_roles") or ()) & _STAFF_ROLES)
+
+
+def _s3_viewer() -> str | None:
+    """HQ-062: роль S3 — сессия owner/fund_staff (MOS-1) или персональный подписант из S3_OWNERS (пусто → любой
+    подписант S1). Bearer-ветка без изменений."""
+    if _staff_session():
+        return "session"
+    who = _approver()
+    owners = {x.strip() for x in os.environ.get("S3_OWNERS", "").split(",") if x.strip()}
+    return who if who and (not owners or who in owners) else None
+
+
 # ------------------------------------------------------------------ auth ----
 def _admin_ok() -> bool:
+    if g.get("rbac_session_ok"):  # MOS-1 (#52): сессия прошла require_role (роль + scope), маршрут её роль допускает
+        return True
     token = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
     expected = _state().settings.admin_token
     return bool(expected) and len(expected) >= 24 and hmac.compare_digest(token, expected)
@@ -292,10 +318,14 @@ def tilda_webhook():
 
 @bp.get("/jobs")
 def list_jobs():
-    if not _admin_ok():
-        return _err("unauthorized", 401)
     limit = min(int(request.args.get("limit", 50)), 500)
-    return jsonify(_state().store.list(limit))
+    if _staff_session():  # MOS-1: owner/fund_staff по сессии — S1 как раньше, плюс записи S3
+        return jsonify(_state().store.list(limit, s3="all"))
+    if _admin_ok():  # HQ-062: админ (Bearer) и investor по сессии видят S1, записи S3 — нет
+        return jsonify(_state().store.list(limit, s3="exclude"))
+    if _s3_viewer():  # роль S3 видит только S3
+        return jsonify(_state().store.list(limit, s3="only"))
+    return _err("forbidden" if _approver() else "unauthorized", 403 if _approver() else 401)
 
 
 @bp.get("/jobs/<job_id>")
@@ -303,7 +333,7 @@ def get_job(job_id):
     if not _admin_ok():
         return _err("unauthorized", 401)
     job = _state().store.get(job_id)
-    if not job:
+    if not job or job["data"].get("s3"):  # S3 — только через /s3/* (HQ-062)
         return _err("not found", 404)
     data = job.pop("data")
     brief = (data.get("readiness_pack") or {}).get("internal_analyst_brief") or {}
@@ -335,7 +365,7 @@ def get_artifact(job_id, artifact):
         return _err("not found", 404)
     job = _state().store.get(job_id)
     key, kind = _ARTIFACTS[artifact]
-    if not job or key not in job["data"]:
+    if not job or job["data"].get("s3") or key not in job["data"]:
         return _err("not found", 404)
     value = job["data"][key]
     if kind == "json":
@@ -856,3 +886,72 @@ def rerun(job_id):
         return _err("job not found or still in progress", 409)
     st.pool.submit(_process_job, current_app._get_current_object(), job_id)
     return jsonify({"ok": True})
+
+
+# ================================================================ Q-316 =====
+FEEDBACK_MAX_TEXT = 2000
+FEEDBACK_MAX_CONTACT = 200
+FEEDBACK_RATE_LIMIT = 5        # обращений
+FEEDBACK_RATE_WINDOW = 60.0    # за секунд, на одну сессию
+FEEDBACK_WEBHOOK_TIMEOUT = 5   # секунд
+_feedback_hits: dict[str, deque] = {}
+_feedback_lock = threading.Lock()
+
+
+def _feedback_rate_key() -> str:
+    """Сессия пользователя (uid после входа или csrf-токен сессии); без сессии — адрес клиента."""
+    raw = browser_session.get("uid") or browser_session.get("csrf") or request.remote_addr or "anon"
+    return hashlib.sha256(str(raw).encode()).hexdigest()[:16]
+
+
+def _feedback_allowed(key: str) -> bool:
+    now = time.monotonic()
+    with _feedback_lock:
+        hits = _feedback_hits.setdefault(key, deque())
+        while hits and now - hits[0] > FEEDBACK_RATE_WINDOW:
+            hits.popleft()
+        if len(hits) >= FEEDBACK_RATE_LIMIT:
+            return False
+        hits.append(now)
+        return True
+
+
+def _feedback_path(raw) -> str | None:
+    """Путь/экран без параметров запроса и фрагмента."""
+    return urlsplit(str(raw or request.referrer or "")).path[:200] or None
+
+
+def _send_feedback_webhook(payload: dict) -> None:
+    url = os.environ.get("FEEDBACK_WEBHOOK_URL", "").strip()
+    if not url:
+        return
+    try:
+        httpx.post(url, json=payload, timeout=FEEDBACK_WEBHOOK_TIMEOUT).raise_for_status()
+    except Exception as e:  # noqa: BLE001 — пользователю всё равно «принято»; адрес в лог не пишем
+        log.warning("feedback webhook failed for %s: %s", payload.get("number"), type(e).__name__)
+
+
+@bp.post("/feedback")
+def feedback_submit():
+    """Кнопка «Сообщить о проблеме» кабинета S1: сохранить, присвоить ОС-N, при наличии FEEDBACK_WEBHOOK_URL — отправить."""
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return _err("bad payload", 400)
+    text, contact = str(body.get("text") or "").strip(), str(body.get("contact") or "").strip()
+    if not text:
+        return _err("text required", 400)
+    if len(text) > FEEDBACK_MAX_TEXT:
+        return _err(f"text longer than {FEEDBACK_MAX_TEXT} chars", 400)
+    if len(contact) > FEEDBACK_MAX_CONTACT:
+        return _err(f"contact longer than {FEEDBACK_MAX_CONTACT} chars", 400)
+    key = _feedback_rate_key()
+    if not _feedback_allowed(key):
+        return _err("too many requests", 429)
+    roles = sorted(g.get("rbac_roles") or ())
+    sid = str(body.get("session_id") or "").strip()[:64] or key
+    item = _state().store.add_feedback(
+        "S1", ",".join(roles) or None, _feedback_path(body.get("path")), sid,
+        _state().settings.code_sha or None, text, contact or None)
+    _send_feedback_webhook(item)
+    return jsonify({"ok": True, "number": item["number"],
+                    "message": f"Спасибо, получили. Номер обращения {item['number']}"}), 201

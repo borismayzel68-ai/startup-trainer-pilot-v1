@@ -1,0 +1,36 @@
+# ПРЕДЛОЖЕНИЕ (.proposed, MOS-6, Refs #57). Не активен: лежит вне .github/workflows (у Claude нет права workflows).
+# Решение о переносе в .github/workflows/deploy-staging.yml и о запуске принимает MOS Tech; ничего не выкатывается.
+# Правила: только ручной запуск; отдельный от tests.yml; prod-секреты есть ТОЛЬКО здесь, в job тестов их нет.
+# Секреты хранятся в GitHub Environment `staging` (с обязательным ревьюером). Значений в репо нет.
+name: deploy-staging
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install yc CLI
+        run: |
+          curl -sSL https://storage.yandexcloud.net/yandexcloud-yc/install.sh | bash -s -- -a
+          echo "$HOME/yandex-cloud/bin" >> "$GITHUB_PATH"
+      - name: yc auth (ключ сервисного аккаунта деплоя)
+        env:
+          YC_SA_KEY_JSON: ${{ secrets.YC_SA_KEY_JSON }}
+        run: |
+          printf '%s' "$YC_SA_KEY_JSON" > "$RUNNER_TEMP/sa-key.json"
+          yc config set service-account-key "$RUNNER_TEMP/sa-key.json"
+          yc config set folder-id "${{ secrets.YC_FOLDER_ID }}"
+      - name: Deploy (образ -> снимок БД -> миграции -> web)
+        env:
+          YC_FOLDER_ID: ${{ secrets.YC_FOLDER_ID }}
+          YC_REGISTRY_ID: ${{ secrets.YC_REGISTRY_ID }}
+          YC_NETWORK_ID: ${{ secrets.YC_NETWORK_ID }}
+          YC_RUNTIME_SA_ID: ${{ secrets.YC_RUNTIME_SA_ID }}
+          YC_PG_CLUSTER_ID: ${{ secrets.YC_PG_CLUSTER_ID }}
+          LOCKBOX_SECRET_ID: ${{ secrets.LOCKBOX_SECRET_ID }}
+          AUTH_REDIRECT_URI: ${{ secrets.AUTH_REDIRECT_URI }}
+        run: deploy/yc/deploy.sh

@@ -4,6 +4,9 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt pytest
 COPY . .
+RUN chmod +x deploy/yc/*.sh
 ENV PORT=10000
 EXPOSE 10000
-CMD ["sh", "-c", "python scripts/hq018_migrate.py && python scripts/hq018_seed.py && gunicorn -b 0.0.0.0:${PORT} app:app"]
+# Миграции и seed — НЕ при старте контейнера: отдельный шаг деплоя (deploy/yc/deploy.sh, scripts/migrate_job.py).
+# Локально: docker compose run --rm app python scripts/hq018_migrate.py
+CMD ["sh", "-c", "gunicorn -b 0.0.0.0:${PORT} app:app"]

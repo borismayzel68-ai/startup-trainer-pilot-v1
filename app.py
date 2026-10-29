@@ -1,8 +1,7 @@
 import os, io, json, uuid, time, re, hashlib, hmac
 from datetime import timedelta
-from flask import Flask, request, jsonify, render_template, session as browser_session, Response
+from flask import Flask, request, jsonify, render_template, session as browser_session, Response, g
 from pypdf import PdfReader
-from openai import OpenAI
 from routing_v2 import (
     JURISDICTIONS, PRODUCT_CLASSES, normalize_project_id, norm_jurisdiction,
     norm_product_class, parse_target_markets, route, vocab, profile_question,
@@ -16,12 +15,22 @@ from question_engine_v2 import (
 from session_store import DurableSessionStore, iso_z, utc_now
 from completion_event import build_completion_payload  # A9: доставка completion — через delivery_worker
 from founder_package import build_package, render_markdown, plan_ledger_write, verify_ledger, validate_package
+from s1_intake.config import Settings as LLMSettings
+from s1_intake.llm import LLMClient, check_prod_config
 from s1_intake.main import init_s1
+from s2_mandate.blueprint import bp as s2_bp
+from werkzeug.middleware.proxy_fix import ProxyFix
+import auth
+from auth import require_role, public, ANY_ROLE, STAFF_ROLES
 from s3_expert.blueprint import bp as s3_bp
+from staging_guard import init_staging
 
-app = Flask(__name__)
-client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+app = Flask(__name__, static_folder=None)  # статики нет: маршрут /static не нужен
+# MOS-7: одна точка замены LLM — s1_intake.llm.LLMClient (OPENAI_BASE_URL, OPENAI_API_KEY, модель из env).
+# Модель тренажёра: OPENAI_MODEL (по умолчанию gpt-5.6); S1 держит свою закреплённую модель (TG-1, S1_LLM_MODEL_ID).
 MODEL = os.environ.get("OPENAI_MODEL", "gpt-5.6")
+LLM_SETTINGS = LLMSettings(openai_model=MODEL)
+client = LLMClient(LLM_SETTINGS)
 TRAINER_VERSION = "s1-ext-pilot-v1.6-founder-package"
 TRAINER_EVENT_WEBHOOK = os.environ.get("TRAINER_EVENT_WEBHOOK", "").strip()
 WEBHOOK_TIMEOUT_SECONDS = float(
@@ -38,10 +47,20 @@ except ValueError:
     COMPLETION_GATE_LEASE_SECONDS = 300
 MAX_COMPLETION_EVENT_BYTES = 64 * 1024
 PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "https://startup-trainer-a9-staging.onrender.com").rstrip("/")
-app.secret_key = os.environ.get("FLASK_SECRET_KEY") or hashlib.sha256((COMPLETION_RECEIVER_SECRET or str(uuid.uuid4())).encode()).hexdigest()
-app.config.update(SESSION_COOKIE_SECURE=True, SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax")
+if os.environ.get("APP_ENV", "").strip().lower() in ("staging", "production") and not os.environ.get("SESSION_SECRET", "").strip():
+    raise RuntimeError("SESSION_SECRET обязателен при APP_ENV=staging|production: без него сессии подписываются случайным ключом")
+if os.environ.get("APP_ENV", "").strip().lower() == "staging" and not os.environ.get("PUBLIC_BASE_URL", "").strip():
+    raise RuntimeError("PUBLIC_BASE_URL обязателен при APP_ENV=staging: иначе пакет основателю получит ссылки на Render")
+check_prod_config(LLM_SETTINGS, os.environ.get("APP_ENV", ""))  # mock в проде — ошибка конфигурации при старте
+try:
+    _PROXIES = max(0, int(os.environ.get("TRUSTED_PROXY_COUNT", "0")))
+except ValueError:
+    _PROXIES = 0
+if _PROXIES:  # X-Forwarded-For доверяем только от N ближайших прокси (иначе remote_addr)
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=_PROXIES, x_proto=1, x_host=0)
+app.secret_key = os.environ.get("SESSION_SECRET") or os.environ.get("FLASK_SECRET_KEY") or hashlib.sha256((COMPLETION_RECEIVER_SECRET or str(uuid.uuid4())).encode()).hexdigest()
+app.config.update(SESSION_COOKIE_SECURE=True, SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax", PERMANENT_SESSION_LIFETIME=timedelta(hours=12))
 INVITE_CODE = os.environ.get("INVITE_CODE", "PILOT-S1-EXT-001")
-ADMIN_KEY = os.environ.get("ADMIN_KEY", "change-me")
 SESSION_RETENTION_DAYS = int(os.environ.get("SESSION_RETENTION_DAYS", "30"))
 SESSION_DATABASE_URL = (
     os.environ.get("SESSION_DATABASE_URL")
@@ -52,6 +71,8 @@ SESSIONS = DurableSessionStore(
     SESSION_DATABASE_URL,
     retention_days=SESSION_RETENTION_DAYS,
 )
+# MOS-6: закрытый staging (APP_ENV=staging): проверка env, замок по сессии MOS-1 (#61), только синтетика. Иначе — только noindex-заголовок.
+init_staging(app, os.environ)
 # A9 (#11): лимит размера запроса 20 МБ — на всё приложение, включая /s1/* (S1 принимает JSON-тела
 # и ссылки на файлы; сами файлы скачиваются парсером с отдельным лимитом S1_MAX_FILE_MB).
 app.config["MAX_CONTENT_LENGTH"] = 20 * 1024 * 1024
@@ -60,6 +81,20 @@ app.config["MAX_CONTENT_LENGTH"] = 20 * 1024 * 1024
 init_s1(app)
 # S3 · БП-07 (HQ-023): один вопрос → ответ → бриф, подпись владельца через механизм S1 (/s3/*). Отправки наружу нет.
 app.register_blueprint(s3_bp)
+# S2 · шлюз мандата фонда (#44): правила из s2_mandate/investment_policy.yaml, EXCEPTION решает человек (/s2/*).
+app.register_blueprint(s2_bp)
+# S6 · «Периметр входа» (HQ-041, #37): блокирующий шлюз перед S2 (NEEDS_EVIDENCE); доступ — require_role MOS-1 (/s6/*).
+from s6_perimeter.blueprint import bp as s6_bp  # noqa: E402
+app.register_blueprint(s6_bp)
+# MOS-5 (#56): вид фонда (owner/fund_staff), /fund/*. Доступ через auth MOS-1 (owner, fund_staff), noindex.
+from fund_view.blueprint import bp as fund_bp  # noqa: E402
+app.register_blueprint(fund_bp)
+# MOS-4 (#55): портфель /portfolio; доступ — require_role из MOS-1 (owner/fund_staff/investor), scope проверяет сервис.
+from portfolio.blueprint import bp as portfolio_bp  # noqa: E402
+app.register_blueprint(portfolio_bp)
+# HQ-031 (#16): светофор S5 по форме HQ-030, только чтение синтетики (/s5/today). Таблиц не добавляет.
+from s5_monitor.blueprint import bp as s5_bp  # noqa: E402
+app.register_blueprint(s5_bp)
 ALLOWED_STATUS = {"fact","hypothesis","missing","weak"}
 ALLOWED_REC = {"not_ready","iterate","ready_for_investor_conversation"}
 
@@ -87,21 +122,7 @@ def extract_pdf(file_storage):
     return text[:30000], manifest
 
 def call_json(system, user):
-    r = client.responses.create(
-        model=MODEL,
-        input=[
-            {"role":"system","content":[{"type":"input_text","text":system}]},
-            {"role":"user","content":[{"type":"input_text","text":user}]},
-        ],
-    )
-    txt = r.output_text.strip()
-    try:
-        return json.loads(txt)
-    except Exception:
-        m = re.search(r"\{[\s\S]*\}", txt)
-        if not m:
-            raise
-        return json.loads(m.group(0))
+    return client.complete_dict("trainer", system, user)
 
 def source_text(s):
     parts=[
@@ -279,11 +300,21 @@ def emit_completion_event(s):
     return s if claimed else (SESSIONS.get(s["id"]) or s)
 
 
+READ_ROLES = ["founder", "investor", "fund_staff", "owner"]
+
+def session_case(kw):
+    """ID кейса (project_id) сессии тренажёра — для проверки scope; None, если сессии нет."""
+    stored = SESSIONS.get(kw["sid"])
+    return stored.get("project_id") if stored else None
+
+
 @app.get("/")
+@require_role(ANY_ROLE)
 def home():
-    return render_template("index.html")
+    return render_template("index.html", csrf_token=auth.csrf_token())
 
 @app.get("/health")
+@public
 def health():
     return jsonify({
         "ok":True,
@@ -375,6 +406,7 @@ def completion_receiver_payload(max_bytes=MAX_COMPLETION_EVENT_BYTES):
 
 
 @app.post("/api/completion-events")
+@require_role(["owner"], scope="*", external="secret")
 def receive_completion_event():
     """Grant Make a processing lease; duplicate only after completion."""
     identity, error = completion_receiver_payload()
@@ -408,6 +440,7 @@ def receive_completion_event():
 
 
 @app.post("/api/completion-events/complete")
+@require_role(["owner"], scope="*", external="secret")
 def complete_completion_event():
     """Confirm that Make finished every downstream action."""
     identity, error = completion_receiver_payload()
@@ -451,11 +484,13 @@ def complete_completion_event():
 def artifact_authorized(sid):
     supplied = str(request.headers.get("X-Completion-Secret") or "")
     internal = bool(COMPLETION_RECEIVER_SECRET) and hmac.compare_digest(supplied.encode(), COMPLETION_RECEIVER_SECRET.encode())
-    return internal or sid in (browser_session.get("trainer_sessions") or [])
+    # сессия, прошедшая require_role (роль + scope кейса), либо внутренний секрет, либо своя сессия тренажёра
+    return internal or auth.session_ok() or sid in (browser_session.get("trainer_sessions") or [])
 
 
 @app.get("/api/session/<sid>/report.md")
 @app.get("/api/session/<sid>/report.json")
+@require_role(READ_ROLES, scope=session_case, external="secret")
 def founder_artifact(sid):
     if not artifact_authorized(sid):
         return jsonify({"error":"Owner session or internal authentication required"}),403
@@ -473,6 +508,7 @@ def founder_artifact(sid):
 
 @app.post("/api/completion-events/package-plan")
 @app.post("/api/completion-events/package-verify")
+@require_role(["owner"], scope="*", external="secret")
 def completion_package_ledger():
     identity, error = completion_receiver_payload(max_bytes=2 * 1024 * 1024)
     if error:
@@ -499,6 +535,7 @@ def completion_package_ledger():
 
 
 @app.get("/robots.txt")
+@public
 def robots():
     return "User-agent: *\nDisallow: /\n",200,{"Content-Type":"text/plain"}
 
@@ -508,6 +545,7 @@ def start_error(message,code,status=400,allowed=None):
     return jsonify(body),status
 
 @app.post("/api/start")
+@require_role(["founder", "owner"], scope=lambda kw: normalize_project_id(request.form.get("project_id")))
 def start():
     if request.form.get("invite_code") != INVITE_CODE:
         return start_error("\u041d\u0435\u0432\u0435\u0440\u043d\u044b\u0439 \u043a\u043e\u0434 \u0434\u043e\u0441\u0442\u0443\u043f\u0430","invite_code_invalid",403)
@@ -607,6 +645,7 @@ def start():
     return jsonify(public_session(s))
 
 @app.post("/api/session/<sid>/answer")
+@require_role(["founder", "owner"], scope=session_case, external="secret")
 def answer(sid):
     if not artifact_authorized(sid): return jsonify({"error":"Unauthorized"}),401
     s=SESSIONS.get(sid)
@@ -657,6 +696,7 @@ def answer(sid):
     return jsonify(public_session(s))
 
 @app.get("/api/session/<sid>")
+@require_role(READ_ROLES, scope=session_case, external="secret")
 def get_session(sid):
     if not artifact_authorized(sid): return jsonify({"error":"Unauthorized"}),401
     s=SESSIONS.get(sid)
@@ -664,12 +704,14 @@ def get_session(sid):
     return jsonify(public_session(s))
 
 @app.delete("/api/session/<sid>")
+@require_role(["founder", "owner"], scope=session_case, external="secret")
 def delete_session(sid):
     if not artifact_authorized(sid): return jsonify({"error":"Unauthorized"}),401
     SESSIONS.pop(sid,None)
     return jsonify({"ok":True})
 
 @app.post("/api/session/<sid>/feedback")
+@require_role(["founder", "owner", "fund_staff"], scope=session_case, external="secret")
 def feedback(sid):
     if not artifact_authorized(sid): return jsonify({"error":"Unauthorized"}),401
     s=SESSIONS.get(sid)
@@ -679,10 +721,55 @@ def feedback(sid):
     SESSIONS[sid]=s
     return jsonify({"ok":True})
 
-@app.get("/admin")
-def admin():
-    if request.args.get("key")!=ADMIN_KEY: return "Unauthorized",401
+@app.get("/admin/sessions")
+@require_role(["owner"], scope="*")
+def admin_sessions():
+    """Админ-просмотр — только owner (прежний /admin?key= удалён: 404)."""
     return "<pre>"+json.dumps(list(SESSIONS.values()),ensure_ascii=False,indent=2).replace("&","&amp;").replace("<","&lt;")+"</pre>"
+
+@app.get("/admin/audit")
+@require_role(["owner"], scope="*")
+def admin_audit():
+    try:
+        limit = int(request.args.get("limit", 200))
+    except ValueError:
+        return jsonify({"error": "limit должен быть целым числом", "code": "bad_limit"}), 400
+    return jsonify(auth.store().audit_rows(max(1, min(limit, 500))))
+
+# S1: собственная проверка (Bearer-токены, ключ вебхука, подписанные ссылки) остаётся; сессия owner/fund_staff/investor
+# проходит по ролям. Запрос без сессии передаётся этой проверке (external). См. docs/ACCESS_MATRIX.md.
+_JOB = lambda kw: kw.get("job_id")
+_S1_STAFF = (["owner", "fund_staff"], _JOB, "secret")
+_S1_READ = (["owner", "fund_staff", "investor"], _JOB, "secret")
+_S1_ALL = (["owner", "fund_staff"], "*", "secret")
+_S1_LINK = (["founder", "owner", "fund_staff"], _JOB, "link")
+S1_POLICY = {
+    "s1_intake.tilda_webhook": (["owner"], "*", "secret"),
+    "s1_intake.list_jobs": (["owner", "fund_staff", "investor"], "*", "secret"),
+    "s1_intake.tasks": _S1_ALL, "s1_intake.fund_timers_sweep": _S1_ALL,
+    "s1_intake.get_job": _S1_READ, "s1_intake.get_artifact": _S1_READ, "s1_intake.get_free_part": _S1_READ,
+    "s1_intake.approvals": _S1_READ, "s1_intake.fund_timer_status": _S1_READ,
+    **{"s1_intake." + n: _S1_STAFF for n in (
+        "approve", "fund_call", "admin_consents", "get_dialogue", "dialogue_link", "dialogue_answer_text",
+        "dialogue_r2_expire", "dialogue_r2_file", "dialogue_r2_resume", "answer_stage", "fact_signoffs",
+        "free_link", "rerun", "verify_slot", "teaser_build", "teaser_sign", "transfer_request",
+        "vertical_decision", "transfer_g4")},
+    **{"s1_intake." + n: _S1_LINK for n in (
+        "founder_dialogue", "founder_dialogue_answer", "free_public",
+        "cabinet_consent", "cabinet_revoke", "cabinet_consents")},
+    # Q-316: «Сообщить о проблеме» — любой вошедший пользователь кабинета; CSRF проверяет require_role
+    "s1_intake.feedback_submit": (sorted(auth.ANY_ROLE), None, None),
+    "s1_intake.shared_open": (["investor", "owner", "fund_staff"], None, "link"),
+    # S3 (HQ-023): подпись брифа по-прежнему только персональным Bearer из S1_APPROVERS (G-12); сессия заменяет лишь admin-токен
+    **{"s3_expert." + n: _S1_ALL for n in (
+        "create_brief", "get_status", "review", "issue_json", "issue_md")},
+    "s3_expert.sign_screen": (["owner", "fund_staff"], "*", "secret"),  # статичная страница без данных; Bearer подписанта — проверка во view
+    "s3_expert.sign": (["owner"], "*", "secret"),
+    # S2 (#44): создание/чтение проверки — owner/fund_staff или admin-токен; решение по EXCEPTION — только персональный Bearer (Human Gate)
+    "s2_mandate.create_check": _S1_ALL, "s2_mandate.get_check": _S1_ALL,
+    "s2_mandate.decide": (["owner"], "*", "secret"),
+}
+auth.init_auth(app, SESSION_DATABASE_URL, S1_POLICY)
 
 if __name__=="__main__":
     app.run(host="0.0.0.0",port=int(os.environ.get("PORT","10000")))

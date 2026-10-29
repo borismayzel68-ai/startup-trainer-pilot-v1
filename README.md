@@ -4,9 +4,15 @@ Private founder-facing pilot. Not an investment decision.
 
 ## Env
 - `OPENAI_API_KEY`
-- `OPENAI_MODEL` (default: `gpt-5.6`)
+- `OPENAI_MODEL` (default: `gpt-5.6`) — модель тренажёра (app.py)
+- `OPENAI_BASE_URL` — общий для app.py и S1 (MOS-7). Yandex AI Studio: `https://llm.api.cloud.yandex.net/v1`, модель `gpt://<folder_ID>/<model>`
+- `S1_LLM_MODEL_ID` — явная замена закреплённой модели S1 (TG-1; нужна при смене провайдера)
+- `LLM_JSON_FORMAT` (`json_object` | `json_schema` | `none`) — если провайдер не поддерживает json_object; `json_schema` действует только для S1 (есть схема), для тренажёра app.py запасной режим — `none` (без text.format, JSON извлекается из текста)
+- По умолчанию `LLM_JSON_FORMAT=json_object` (для app.py раньше `text.format` не передавался). **Для Yandex до проверки реальным вызовом ставить `LLM_JSON_FORMAT=none`.**
+- `S1_LLM_PROVIDER` (`openai` | `mock`) — тренажёр app.py тоже идёт через LLMClient; `mock` только для тестов/dry-run, при `APP_ENV=staging|production` приложение не стартует (ошибка конфигурации)
+- Ключ и folder_id на Yandex Cloud — только через Lockbox (как в #57), в репозитории значений нет
 - `INVITE_CODE`
-- `ADMIN_KEY`
+- `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` (Google OAuth), `SESSION_SECRET`, `AUTH_ALLOWLIST` (`email:role[:scope]`, comma-separated), optional `AUTH_REDIRECT_URI` — see `docs/ACCESS_MATRIX.md`. `ADMIN_KEY` and `/admin?key=` were removed (404); admin view is `/admin/sessions`, owner only.
 - `SESSION_DATABASE_URL` (or Render-provided `DATABASE_URL`)
 - `SESSION_RETENTION_DAYS` (default: `30`)
 - `TRAINER_EVENT_WEBHOOK` (Make webhook used by the A9 delivery worker)
@@ -78,10 +84,70 @@ the Render worker are wired and the end-to-end restart/retry test passes.
 `pip install -r requirements.txt`
 `python app.py`
 
-## Render
+## Запуск процессов
 Build: `pip install -r requirements.txt`
 Start: `gunicorn app:app`
 Worker: `python delivery_worker.py`
+
+## Развёртывание в Yandex Cloud (MOS-6, закрытый staging, ru-central1)
+Только синтетические данные. **Выпуск на живых пользователей — только после явного утверждения Бориса.**
+Рендер (Render) больше не используется. Всё в регионе РФ: Managed PostgreSQL и Serverless Container в `ru-central1`.
+
+### 0. Секреты и роли (точный список, значений нет)
+**Yandex Lockbox** — один секрет `mos-staging` с ключами: `DATABASE_URL`, `SESSION_SECRET`, `GOOGLE_CLIENT_ID`,
+`GOOGLE_CLIENT_SECRET`, `AUTH_ALLOWLIST`, `OPENAI_API_KEY`, `OPENAI_BASE_URL` (Yandex AI Studio; на staging обязателен и не api.openai.com — иначе старт падает). Не секрет, обычная env ревизии: `AUTH_REDIRECT_URI`.
+**GitHub Environment `staging`** (только для deploy-workflow, не для `tests.yml`): секрет `YC_SA_KEY_JSON` (авторизованный ключ
+SA деплоя); идентификаторы `YC_FOLDER_ID`, `YC_REGISTRY_ID`, `YC_NETWORK_ID`, `YC_RUNTIME_SA_ID`, `YC_PG_CLUSTER_ID`,
+`LOCKBOX_SECRET_ID`, `AUTH_REDIRECT_URI`.
+
+| Сервисный аккаунт | Роли |
+|---|---|
+| `mos-runtime` (рантайм контейнеров) | `lockbox.payloadViewer` (на секрет `mos-staging`), `container-registry.images.puller` (на реестр) |
+| `mos-deploy` (ключ в GitHub) | `serverless-containers.editor`, `serverless.containers.invoker` (вызов контейнера миграций), `container-registry.images.pusher`, `iam.serviceAccounts.user` (на `mos-runtime`), `vpc.user`, `managed-postgresql.editor` (резервная копия), `lockbox.viewer` |
+
+Названия ролей сверить в консоли IAM: проверка на живом облаке не выполнялась.
+
+### 1. Развёртывание, шаг за шагом
+1. **Сеть.** Создать VPC и подсеть в `ru-central1-*`, **NAT-шлюз** и таблицу маршрутов (контейнеру в VPC нужен выход к Google OAuth).
+2. **Managed PostgreSQL 16** в той же сети, `ru-central1`, **без публичного адреса**, включить защиту от удаления.
+   Автоматические резервные копии: `yc managed-postgresql cluster update <кластер> --backup-window-start 02:00 --backup-retain-period-days 7`
+   (по умолчанию включены; проверить окно и срок хранения; PITR — в пределах срока хранения).
+3. **Container Registry** `mos` и два сервисных аккаунта из п. 0 с ролями.
+4. **Lockbox**: создать секрет `mos-staging` с ключами из п. 0 (значения вводить в консоли, не в командной строке/истории shell).
+   `DATABASE_URL=postgresql://<user>:<pass>@<rw-host>.mdb.yandexcloud.net:6432/<db>?sslmode=require`;
+   `SESSION_SECRET` — `openssl rand -hex 32`; `AUTH_ALLOWLIST` — email участников пилота через запятую.
+5. **Google OAuth client** (Web): redirect URI `https://<custom-domain>/auth/callback`. Сам вход — модуль `auth` из MOS-1 (#61); в staging-коде своего OAuth нет. `AUTH_ALLOWLIST` — в формате #61 `email:role[:scope]`.
+6. **GitHub**: создать Environment `staging` (обязательный ревьюер = MOS Tech), добавить секрет и идентификаторы из п. 0,
+   workflow лежит как предложение `docs/deploy/yc-deploy.yml.proposed` (расширение `.proposed` — он **не активен**; Claude не имеет права менять `.github/workflows`). Переносить и запускать его — решение MOS Tech, после ревью.
+7. **Деплой** (ручной запуск workflow или `deploy/yc/deploy.sh` у оператора). Порядок шагов скрипта:
+   образ (секреты в ревизию — флагами `--secret environment-variable=…,id=<lockbox>,version-id=…,key=…`, значений в командах нет) → проверка миграций → **резервная копия, если есть миграция, меняющая/удаляющая данные** → миграции (приватный контейнер
+   `mos-staging-migrate`, не CI, не старт web) → web-ревизия `mos-staging` → проверка `/health`.
+8. **Проверка:** `/health` → 200; `/` без входа → редирект на `/auth/login`; `/api/*`, `/s1/*` → 401; в ответах `X-Robots-Tag: noindex`.
+9. **Seed (по желанию, только синтетика):** `python scripts/seed_synthetic.py` из среды с доступом к БД; на несинтетических данных скрипт откажется работать.
+   **Реальный импорт на staging запрещён до одобрения Бориса.**
+10. **Домен `<custom-domain>`:** Serverless Containers → API Gateway/Certificate Manager: выпустить сертификат Let's Encrypt, `CNAME` у регистратора,
+    HTTPS. Обновить `AUTH_REDIRECT_URI` и redirect URI в Google, повторить деплой.
+
+### 2. Безопасность и CI
+- Доступ только по сессии MOS-1 (#61: вход Google + `AUTH_ALLOWLIST`, RBAC); `staging_guard` — страховочный замок поверх неё: открыты только `/health`, `/robots.txt`, `/auth/*`. Если модуля `auth` (#61) нет, при `APP_ENV=staging` приложение не стартует. noindex: заголовок, meta, `robots.txt`.
+- Только синтетика: `STAGING_SYNTHETIC_ONLY=true` (по умолчанию); при старте БД проверяется на пользователей без флага `is_synthetic` (признак — колонка, не домен email; участники `AUTH_ALLOWLIST`, входящие через #61, исключены). Seed: `python scripts/seed_synthetic.py`.
+- `tests.yml` работает только со своим Postgres 16 (service container) и не содержит секретов облака. Деплой — отдельный workflow.
+- Миграции не запускаются из CI и при старте web. Контейнер миграций приватный (вызов с IAM-токеном), БД без публичного адреса.
+
+### 3. Снимок перед опасной миграцией
+`scripts/migration_guard.py` ищет в `db/migrations` `DROP`, `TRUNCATE`, `DELETE FROM`, `UPDATE`, `ALTER … TYPE/RENAME/SET NOT NULL`
+(`ON CONFLICT … DO UPDATE` и `ON DELETE CASCADE` не считаются). Если такие есть, `deploy.sh` делает
+`yc managed-postgresql cluster backup`, ждёт статус `DONE`, и только затем вызывает миграции с `snapshot_id`. Без `snapshot_id` контейнер миграций
+отвечает 409 и ничего не применяет. Сейчас все миграции только добавляют, шаг не срабатывает.
+Кроме того, guard падает (код 20, `deploy.sh` останавливается, контейнер миграций отвечает 409) на дубле числового префикса —
+один номер = один файл. Откаты — `db/migrations/down/NNN_*.down.sql`, применяются только вручную после снимка.
+Вручную: `yc managed-postgresql cluster backup <кластер>`.
+
+### 4. Откат
+- **Код:** `deploy/yc/rollback.sh <тег-образа>` (теги: `yc container image list`) создаёт ревизию на прежнем образе.
+- **БД:** `yc managed-postgresql cluster restore --backup-id <id> --name mos-staging-restored …` (из копии) либо PITR на момент до миграции
+  (`--time`). Новый кластер → поправить `DATABASE_URL` в Lockbox → деплой. Старый кластер не удалять до проверки.
+- **Аварийно закрыть доступ:** `yc serverless container deny-unauthenticated-invoke --name mos-staging`.
 
 ---
 

@@ -1,4 +1,5 @@
--- HQ-018 · ЧЕРНОВИК миграции: только роли и доступ. Полей тарифа/подписки НЕТ (нужно явное «да» владельца).
+-- HQ-018 / MOS-1 (#52) · миграция ролей и доступа. Идемпотентна (IF NOT EXISTS / ON CONFLICT).
+-- Полей тарифа/подписки НЕТ (нужно явное «да» владельца).
 CREATE TABLE IF NOT EXISTS users (
     id           BIGSERIAL PRIMARY KEY,
     email        TEXT UNIQUE NOT NULL,
@@ -16,7 +17,9 @@ INSERT INTO roles (code, label) VALUES
     ('expert',   'Эксперт'),
     ('signer',   'Владелец / подписант'),
     ('clinic',   'Клиника'),
-    ('syndicator','Синдикатор')
+    ('syndicator','Синдикатор'),
+    ('owner',      'Владелец фонда'),
+    ('fund_staff', 'Сотрудник фонда')
 ON CONFLICT (code) DO NOTHING;
 CREATE TABLE IF NOT EXISTS role_grants (
     id         BIGSERIAL PRIMARY KEY,
@@ -28,3 +31,16 @@ CREATE TABLE IF NOT EXISTS role_grants (
     revoked_at TIMESTAMPTZ,
     UNIQUE (user_id, role_code, scope)
 );
+CREATE INDEX IF NOT EXISTS role_grants_user_idx ON role_grants (user_id) WHERE revoked_at IS NULL;
+-- Журнал доступа: кто, когда, действие, объект, результат (allow/deny), IP.
+CREATE TABLE IF NOT EXISTS audit_log (
+    id         BIGSERIAL PRIMARY KEY,
+    at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    actor      TEXT,                       -- email (NULL для анонимных отказов)
+    action     TEXT NOT NULL,              -- login | logout | view | change | ...
+    object     TEXT,                       -- маршрут / ID кейса
+    result     TEXT NOT NULL CHECK (result IN ('allow', 'deny')),
+    ip         TEXT,
+    detail     TEXT
+);
+CREATE INDEX IF NOT EXISTS audit_log_at_idx ON audit_log (at);
