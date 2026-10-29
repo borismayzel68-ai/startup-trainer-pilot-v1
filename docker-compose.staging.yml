@@ -56,7 +56,9 @@ services:
       PORT: "10000"
       # За одним nginx — 1 (иначе журнал видит IP nginx, а схема https теряется; Secure cookie требует HTTPS).
       TRUSTED_PROXY_COUNT: ${TRUSTED_PROXY_COUNT:-1}
-      # Одна переменная адреса БД: SESSION_DATABASE_URL имеет приоритет над DATABASE_URL — DATABASE_URL в .env.staging не задавать.
+      # staging_guard (APP_ENV=staging) требует DATABASE_URL; остальной код читает SESSION_DATABASE_URL.
+      # Оба — один и тот же адрес; в .env.staging их задавать не нужно, значения перекрывают env_file.
+      DATABASE_URL: postgresql://trainer:${STAGING_DB_PASSWORD:?задайте STAGING_DB_PASSWORD в .env.staging}@db:5432/trainer_staging
       SESSION_DATABASE_URL: postgresql://trainer:${STAGING_DB_PASSWORD:?задайте STAGING_DB_PASSWORD в .env.staging}@db:5432/trainer_staging
     # 2 воркера, таймаут 120 с (как deploy/yc/web-entrypoint.sh) — под долгие ответы ИИ.
     command: ["sh", "-c", "exec gunicorn -b 0.0.0.0:10000 --workers 2 --timeout 120 app:app"]
