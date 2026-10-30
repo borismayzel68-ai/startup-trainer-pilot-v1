@@ -11,7 +11,9 @@ from __future__ import annotations
 import os
 import uuid
 
-from flask import Blueprint, Response, jsonify, request
+from flask import Blueprint, Response, g, jsonify, request
+
+import auth
 
 from s1_intake.main import _admin_ok, _approver, _err, _staff_session, _state
 
@@ -157,9 +159,12 @@ _SIGN_PAGE = """<!doctype html><meta charset="utf-8"><title>S3 · подпись
 <label><input type="checkbox" id="chk"> Проверил</label>
 <button id="sign" disabled>Подписать</button>
 <p id="msg"></p>
+<meta name="csrf-token" content="__CSRF__">
 <script>
 const id = location.pathname.split('/').slice(-2)[0];
-const H = () => ({'Authorization': 'Bearer ' + document.getElementById('tok').value, 'Content-Type': 'application/json'});
+const CSRF = document.querySelector('meta[name="csrf-token"]').content;
+const H = () => ({'Authorization': 'Bearer ' + document.getElementById('tok').value, 'Content-Type': 'application/json',
+  'X-CSRF-Token': CSRF});
 const msg = t => document.getElementById('msg').textContent = t;
 document.getElementById('load').onclick = async () => {
   const r = await fetch('/s3/briefs/' + id + '/review', {headers: H()});
@@ -182,7 +187,15 @@ document.getElementById('sign').onclick = async () => {
 def sign_screen(brief_id):
     """Экран подписи «проверил, дата». Только с входом (HQ-062): сессия owner/fund_staff (MOS-1) или Bearer подписанта;
     без входа — 401, admin-Bearer и не-подписант — 403. Страница статическая и содержимого брифа не несёт.
-    Сама подпись (POST /sign) по-прежнему только персональным Bearer (G-12)."""
+    Сама подпись (POST /sign) по-прежнему только персональным Bearer (G-12).
+    CSRF-токен сессии кладётся в страницу: при входе владельца (owner) require_role проверяет CSRF на POST /sign,
+    без токена подпись с этого экрана получала 403 (проверка стенда 30.10)."""
     if not (_staff_session() or _signer()):
         return _err("login required", 403 if (_admin_ok() or _approver()) else 401)
-    return Response(_SIGN_PAGE, mimetype="text/html")
+    # Токен — только сессии owner: POST /sign по сессии разрешён одному owner (S1_POLICY), fund_staff подписывает
+    # Bearer без CSRF. Bearer без сессии: CSRF не проверяется, сессию не создаём.
+    token = auth.csrf_token() if _staff_session() and "owner" in (g.get("rbac_roles") or ()) else ""
+    resp = Response(_SIGN_PAGE.replace("__CSRF__", token), mimetype="text/html")
+    resp.headers["Cache-Control"] = "no-store"
+    resp.headers["X-Frame-Options"] = "DENY"
+    return resp
