@@ -102,3 +102,6 @@ def test_owner_signs_from_sign_screen_with_csrf_from_page(env, jobs):
     ok = owner.post(url, json={"checked": True}, headers={**SIGNER, "X-CSRF-Token": token}, base_url=BASE)
     assert ok.status_code == 200, ok.get_json()
     assert ok.get_json()["signed_by"] == "carol"
+    staff, _ = make_client(env, "staff-sign@example.test", [("fund_staff", "*")])
+    staff_page = staff.get(f"/s3/briefs/{bid}/sign-screen", base_url=BASE).get_data(as_text=True)
+    assert 'name="csrf-token" content=""' in staff_page  # fund_staff токен не нужен (подпись — Bearer без CSRF)

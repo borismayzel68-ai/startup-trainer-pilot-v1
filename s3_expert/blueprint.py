@@ -11,7 +11,7 @@ from __future__ import annotations
 import os
 import uuid
 
-from flask import Blueprint, Response, jsonify, request
+from flask import Blueprint, Response, g, jsonify, request
 
 import auth
 
@@ -192,7 +192,9 @@ def sign_screen(brief_id):
     без токена подпись с этого экрана получала 403 (проверка стенда 30.10)."""
     if not (_staff_session() or _signer()):
         return _err("login required", 403 if (_admin_ok() or _approver()) else 401)
-    token = auth.csrf_token() if _staff_session() else ""  # Bearer без сессии: CSRF не проверяется, сессию не создаём
+    # Токен — только сессии owner: POST /sign по сессии разрешён одному owner (S1_POLICY), fund_staff подписывает
+    # Bearer без CSRF. Bearer без сессии: CSRF не проверяется, сессию не создаём.
+    token = auth.csrf_token() if _staff_session() and "owner" in (g.get("rbac_roles") or ()) else ""
     resp = Response(_SIGN_PAGE.replace("__CSRF__", token), mimetype="text/html")
     resp.headers["Cache-Control"] = "no-store"
     resp.headers["X-Frame-Options"] = "DENY"

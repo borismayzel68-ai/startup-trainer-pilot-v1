@@ -8,3 +8,4 @@
 - nginx-пример: HSTS, X-Frame-Options, nosniff, Referrer-Policy, `server_tokens off`. Проверено: `nginx -t` и HTTPS-запросы
   через nginx (самоподписанный сертификат) к стенду — заголовки приходят, редиректы остаются на https.
 - Тест: `tests/test_hq062_s3_session.py::test_owner_signs_from_sign_screen_with_csrf_from_page`.
+- Ревью 30.10: токен отдаётся только сессии owner (fund_staff подписывает Bearer без CSRF). JS-заголовок проверен чтением кода, браузерный прогон — нет.
