@@ -80,6 +80,25 @@ def _consent_given() -> bool:
     return str(request.form.get("consent") or "").strip().lower() in _YES
 
 
+_SESSION_EMAILS = "pdn_emails"
+_MAX_SESSION_EMAILS = 5
+
+
+def _remember_email(email: str) -> None:
+    """Email'ы, для которых согласие отмечено в этой сессии браузера (не больше 5)."""
+    seen = [e for e in session.get(_SESSION_EMAILS, []) if e != email]
+    session[_SESSION_EMAILS] = (seen + [email])[-_MAX_SESSION_EMAILS:]
+
+
+def _may_revoke(email: str) -> bool:
+    """Отзыв — только своего согласия: email вошедшего пользователя или отмеченный в этой же сессии браузера.
+    Иначе любой посетитель /consent мог бы отозвать чужое согласие (журнал 152-ФЗ и вход жертвы)."""
+    user = auth.current_user() if "auth_store" in current_app.extensions else None
+    if user and user["email"].lower() == email:
+        return True
+    return email in session.get(_SESSION_EMAILS, [])
+
+
 @bp.get("/consent")
 @auth.public
 def page():
@@ -100,6 +119,7 @@ def submit():
     if not _consent_given():
         return _fail("Нужно согласие на обработку персональных данных", "consent_required")
     row = _store().record(email, TEXT_VERSION, auth.client_ip(), flow)
+    _remember_email(email)
     if flow == "investor_login":
         session["pdn_consent_id"] = row["id"]
         if not _wants_json():
@@ -118,6 +138,9 @@ def revoke():
     email = _clean_email(request.form.get("email"))
     if not email:
         return _fail("Укажите email", "email_required")
+    if not _may_revoke(email):  # проверка стенда 30.10: иначе аноним отзывал согласие любого email
+        return _fail("Отозвать здесь можно только своё согласие: войдите или отметьте согласие в этом браузере. Иначе — письмом на адрес из текста согласия",
+                     "consent_not_yours", 403)
     rows = _store().revoke(email)
     if not rows:
         return _fail("Нет действующего согласия", "consent_not_found", 404)
