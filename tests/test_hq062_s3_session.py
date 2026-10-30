@@ -74,3 +74,31 @@ def test_bearer_behaviour_unchanged(env, jobs):
     assert s1_id in adm and s3_id not in adm  # admin-Bearer: S1 без S3
     sig = _ids(c.get("/s1/jobs?limit=500", headers=SIGNER, base_url=BASE))
     assert s3_id in sig and s1_id not in sig  # подписант: только S3
+
+
+def _brief_id():
+    """Бриф S3 в хранилище приложения (синтетика), ждёт подписи."""
+    from s3_expert import engine as E
+    state = appmod.app.extensions["s1_intake"]
+    brief = E.build_brief({"question": "Синтетический вопрос?", "bounds": "синтетика", "cutoff": "2026-11-01",
+                           "materials": [{"text": "синтетический материал"}]})
+    return state.store.create_or_get("s3-" + uuid.uuid4().hex, "S3 brief", "", {"s3": {"brief": brief, "payer": "fund"}})[0]
+
+
+def test_owner_signs_from_sign_screen_with_csrf_from_page(env, jobs):
+    """Проверка стенда 30.10: owner вошёл + Bearer подписанта. Экран подписи отдаёт CSRF-токен сессии,
+    без него POST /sign — 403 (CSRF), с ним — подпись проходит. Сессия без Bearer подписать не может (G-12)."""
+    import re
+    bid = _brief_id()
+    owner, _ = make_client(env, "owner-sign@example.test", [("owner", "*")])
+    page = owner.get(f"/s3/briefs/{bid}/sign-screen", base_url=BASE)
+    assert page.status_code == 200 and page.headers["X-Frame-Options"] == "DENY"
+    token = re.search(r'name="csrf-token" content="([^"]+)"', page.get_data(as_text=True)).group(1)
+    assert token and token != "__CSRF__"
+    url = f"/s3/briefs/{bid}/sign"
+    assert owner.post(url, json={"checked": True}, headers=SIGNER, base_url=BASE).status_code == 403  # нет CSRF
+    no_bearer = owner.post(url, json={"checked": True}, headers={"X-CSRF-Token": token}, base_url=BASE)
+    assert no_bearer.status_code == 403  # сессия — не подпись (G-12)
+    ok = owner.post(url, json={"checked": True}, headers={**SIGNER, "X-CSRF-Token": token}, base_url=BASE)
+    assert ok.status_code == 200, ok.get_json()
+    assert ok.get_json()["signed_by"] == "carol"

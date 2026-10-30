@@ -13,6 +13,8 @@ import uuid
 
 from flask import Blueprint, Response, jsonify, request
 
+import auth
+
 from s1_intake.main import _admin_ok, _approver, _err, _staff_session, _state
 
 from . import engine as E
@@ -157,9 +159,12 @@ _SIGN_PAGE = """<!doctype html><meta charset="utf-8"><title>S3 · подпись
 <label><input type="checkbox" id="chk"> Проверил</label>
 <button id="sign" disabled>Подписать</button>
 <p id="msg"></p>
+<meta name="csrf-token" content="__CSRF__">
 <script>
 const id = location.pathname.split('/').slice(-2)[0];
-const H = () => ({'Authorization': 'Bearer ' + document.getElementById('tok').value, 'Content-Type': 'application/json'});
+const CSRF = document.querySelector('meta[name="csrf-token"]').content;
+const H = () => ({'Authorization': 'Bearer ' + document.getElementById('tok').value, 'Content-Type': 'application/json',
+  'X-CSRF-Token': CSRF});
 const msg = t => document.getElementById('msg').textContent = t;
 document.getElementById('load').onclick = async () => {
   const r = await fetch('/s3/briefs/' + id + '/review', {headers: H()});
@@ -182,7 +187,13 @@ document.getElementById('sign').onclick = async () => {
 def sign_screen(brief_id):
     """Экран подписи «проверил, дата». Только с входом (HQ-062): сессия owner/fund_staff (MOS-1) или Bearer подписанта;
     без входа — 401, admin-Bearer и не-подписант — 403. Страница статическая и содержимого брифа не несёт.
-    Сама подпись (POST /sign) по-прежнему только персональным Bearer (G-12)."""
+    Сама подпись (POST /sign) по-прежнему только персональным Bearer (G-12).
+    CSRF-токен сессии кладётся в страницу: при входе владельца (owner) require_role проверяет CSRF на POST /sign,
+    без токена подпись с этого экрана получала 403 (проверка стенда 30.10)."""
     if not (_staff_session() or _signer()):
         return _err("login required", 403 if (_admin_ok() or _approver()) else 401)
-    return Response(_SIGN_PAGE, mimetype="text/html")
+    token = auth.csrf_token() if _staff_session() else ""  # Bearer без сессии: CSRF не проверяется, сессию не создаём
+    resp = Response(_SIGN_PAGE.replace("__CSRF__", token), mimetype="text/html")
+    resp.headers["Cache-Control"] = "no-store"
+    resp.headers["X-Frame-Options"] = "DENY"
+    return resp
