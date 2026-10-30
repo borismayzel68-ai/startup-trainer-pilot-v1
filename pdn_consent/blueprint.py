@@ -80,6 +80,29 @@ def _consent_given() -> bool:
     return str(request.form.get("consent") or "").strip().lower() in _YES
 
 
+_SESSION_IDS = "pdn_ids"
+_MAX_SESSION_IDS = 10
+
+
+def _remember_consent(row: dict) -> None:
+    """ID строк согласия, отмеченных в этой сессии браузера (не больше 10)."""
+    ids = [i for i in session.get(_SESSION_IDS, []) if i != row["id"]]
+    session[_SESSION_IDS] = (ids + [row["id"]])[-_MAX_SESSION_IDS:]
+
+
+def _revoke_own(email: str):
+    """Отзыв только своего согласия (проверка стенда 30.10). Вошедший пользователь — все строки своего email.
+    Иначе — только строки, отмеченные в этой же сессии браузера: чужое согласие с тем же email не трогается,
+    даже если посетитель сам отметил согласие на чужой email. None — отзывать нечего из этой сессии."""
+    user = auth.current_user() if "auth_store" in current_app.extensions else None
+    if user and user["email"].lower() == email:
+        return _store().revoke(email)
+    ids = session.get(_SESSION_IDS, [])
+    if not ids:
+        return None
+    return _store().revoke_ids(email, ids)
+
+
 @bp.get("/consent")
 @auth.public
 def page():
@@ -100,6 +123,7 @@ def submit():
     if not _consent_given():
         return _fail("Нужно согласие на обработку персональных данных", "consent_required")
     row = _store().record(email, TEXT_VERSION, auth.client_ip(), flow)
+    _remember_consent(row)
     if flow == "investor_login":
         session["pdn_consent_id"] = row["id"]
         if not _wants_json():
@@ -118,7 +142,10 @@ def revoke():
     email = _clean_email(request.form.get("email"))
     if not email:
         return _fail("Укажите email", "email_required")
-    rows = _store().revoke(email)
+    rows = _revoke_own(email)
+    if rows is None:  # проверка стенда 30.10: иначе аноним отзывал согласие любого email
+        return _fail("Отозвать здесь можно только своё согласие: войдите или отметьте согласие в этом браузере. "
+                     "Иначе — письмом на адрес из текста согласия", "consent_not_yours", 403)
     if not rows:
         return _fail("Нет действующего согласия", "consent_not_found", 404)
     payload = {"ok": True, "revoked": rows}

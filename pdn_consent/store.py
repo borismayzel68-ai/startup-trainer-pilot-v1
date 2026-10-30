@@ -33,6 +33,10 @@ _REVOKE = (
     "UPDATE pdn_consents SET revoked_at = ? WHERE user_email = ? AND revoked_at IS NULL "
     "RETURNING " + ", ".join(COLUMNS)
 )
+_REVOKE_ONE = (
+    "UPDATE pdn_consents SET revoked_at = ? WHERE id = ? AND user_email = ? AND revoked_at IS NULL "
+    "RETURNING " + ", ".join(COLUMNS)
+)
 _BY_EMAIL = "SELECT " + ", ".join(COLUMNS) + " FROM pdn_consents WHERE user_email = ? ORDER BY id"
 _BY_ID = "SELECT " + ", ".join(COLUMNS) + " FROM pdn_consents WHERE id = ?"
 
@@ -110,6 +114,19 @@ class PdnConsentStore:
     def revoke(self, email: str, when: datetime | None = None) -> list[dict]:
         rows = self._rows(_REVOKE, (self._stamp(when), email.strip().lower()), "all")
         return [_norm(r) for r in rows]
+
+    def revoke_ids(self, email: str, ids, when: datetime | None = None) -> list[dict]:
+        """Отзыв только перечисленных строк этого email (строки, отмеченные в одной сессии браузера)."""
+        out = []
+        for consent_id in ids:
+            try:
+                consent_id = int(consent_id)
+            except (TypeError, ValueError):
+                continue
+            row = self._rows(_REVOKE_ONE, (self._stamp(when), consent_id, email.strip().lower()), "one")
+            if row:
+                out.append(_norm(row))
+        return out
 
     def for_email(self, email: str) -> list[dict]:
         return [_norm(r) for r in self._rows(_BY_EMAIL, (email.strip().lower(),), "all")]
