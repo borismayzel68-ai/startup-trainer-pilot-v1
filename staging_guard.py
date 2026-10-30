@@ -36,7 +36,24 @@ def allowlist_emails(raw: str) -> list:
     return sorted({e for e in items if "@" in e})
 
 
+# Переменные, где текст комментария вместо значения опасен или ломает вход (секреты, адреса, allowlist).
+# Остальные не проверяются: настоящий пароль SMTP или цвет вполне может начинаться с «#».
+COMMENT_CHECKED = REQUIRED_ENV + ("S1_ADMIN_TOKEN", "S1_TILDA_WEBHOOK_KEY", "S1_APPROVERS", "INVITE_CODE",
+                                  "PUBLIC_BASE_URL", "AUTH_REDIRECT_URI", "OPENAI_API_KEY", "OPENAI_BASE_URL")
+
+
+def comment_values(env) -> list:
+    """Переменные из COMMENT_CHECKED, чьё значение начинается с «#»: строка из .env.example скопирована без значения,
+    и docker compose (env_file) отдал текст комментария. Для SESSION_SECRET / S1_ADMIN_TOKEN это ключ, известный из git."""
+    return sorted(k for k in COMMENT_CHECKED if (env.get(k) or "").lstrip().startswith("#"))
+
+
 def validate_env(env) -> dict:
+    commented = comment_values(env)
+    if commented:
+        raise StagingConfigError(
+            "APP_ENV=staging: значение — текст комментария из .env.example (значение не заполнено): "
+            + ", ".join(commented) + ". Заполните или удалите эти строки в .env.staging; комментарий в строке значения не ставьте.")
     missing = [k for k in REQUIRED_ENV if not (env.get(k) or "").strip()]
     if missing:
         raise StagingConfigError(
@@ -48,7 +65,22 @@ def validate_env(env) -> dict:
     cfg["allowlist"] = allowlist_emails(cfg["AUTH_ALLOWLIST"])
     if not cfg["allowlist"]:
         raise StagingConfigError("AUTH_ALLOWLIST не содержит ни одного email.")
+    wide = founders_without_scope(cfg["AUTH_ALLOWLIST"])
+    if wide:
+        raise StagingConfigError(
+            "AUTH_ALLOWLIST: у основателя нет scope (по умолчанию «*» — доступ ко всем кейсам, включая чужие сессии "
+            "тренажёра): " + ", ".join(wide) + ". Укажите кейс: email:founder:<ID кейса>.")
     return cfg
+
+
+def founders_without_scope(raw: str) -> list:
+    """Записи `email:founder` без scope или со scope «*» (формат MOS-1: email:role[:scope])."""
+    out = []
+    for item in raw.replace(";", ",").replace("\n", ",").split(","):
+        parts = [x.strip() for x in item.strip().split(":", 2)]
+        if len(parts) >= 2 and parts[1] == "founder" and (len(parts) < 3 or parts[2] in ("", "*")):
+            out.append(parts[0].lower())
+    return sorted(set(out))
 
 
 def synthetic_only(env) -> bool:
