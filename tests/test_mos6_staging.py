@@ -129,6 +129,7 @@ class StagingTests(unittest.TestCase):
             make_app(dict(ENV, SESSION_SECRET="# Lockbox; openssl rand -hex 32 (≥32 символов)",
                           S1_ADMIN_TOKEN="# openssl rand -hex 32 (≥24 символа); Authorization: Bearer"))
         self.assertIn("S1_ADMIN_TOKEN, SESSION_SECRET", str(e.exception))
+        make_app(dict(ENV, S1_SMTP_PASSWORD="#Xy9!synthetic"))  # прочие переменные с «#» допустимы
 
     def test_founder_without_scope_refused(self):
         """Проверка стенда 30.10: email:founder без scope = «*» (все кейсы) — staging не стартует."""

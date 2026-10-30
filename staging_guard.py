@@ -36,10 +36,16 @@ def allowlist_emails(raw: str) -> list:
     return sorted({e for e in items if "@" in e})
 
 
+# Переменные, где текст комментария вместо значения опасен или ломает вход (секреты, адреса, allowlist).
+# Остальные не проверяются: настоящий пароль SMTP или цвет вполне может начинаться с «#».
+COMMENT_CHECKED = REQUIRED_ENV + ("S1_ADMIN_TOKEN", "S1_TILDA_WEBHOOK_KEY", "S1_APPROVERS", "INVITE_CODE",
+                                  "PUBLIC_BASE_URL", "AUTH_REDIRECT_URI", "OPENAI_API_KEY", "OPENAI_BASE_URL")
+
+
 def comment_values(env) -> list:
-    """Переменные, чьё значение начинается с «#»: строка из .env.example скопирована без значения, и docker compose
-    (env_file) отдал текст комментария как значение. Для SESSION_SECRET / S1_ADMIN_TOKEN это ключ, известный из git."""
-    return sorted(k for k, v in env.items() if isinstance(v, str) and v.lstrip().startswith("#"))
+    """Переменные из COMMENT_CHECKED, чьё значение начинается с «#»: строка из .env.example скопирована без значения,
+    и docker compose (env_file) отдал текст комментария. Для SESSION_SECRET / S1_ADMIN_TOKEN это ключ, известный из git."""
+    return sorted(k for k in COMMENT_CHECKED if (env.get(k) or "").lstrip().startswith("#"))
 
 
 def validate_env(env) -> dict:
