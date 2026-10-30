@@ -180,6 +180,26 @@ class PdnConsentTests(unittest.TestCase):
         self.assertEqual(r.get_json()["code"], "consent_not_yours")
         self.assertIsNone(self.store.for_email(victim)[0]["revoked_at"])
 
+    def test_revoke_after_own_submit_for_victim_email_keeps_victim_consent(self):
+        """Ревью 30.10: посетитель сам отмечает согласие на чужой email и затем отзывает —
+        отзывается только его строка, исходное согласие человека остаётся в силе."""
+        token, _ = self.open_page()
+        victim = "synth-victim2@example.test"
+        self.assertEqual(self.post_json(token, email=victim, consent="yes", flow="s1_intake").status_code, 200)
+        attacker = appmod.app.test_client()
+        page = attacker.get("/consent", base_url=BASE).get_data(as_text=True)
+        a_token = re.search(r'name="csrf_token" value="([^"]+)"', page).group(1)
+        hdr = {"Accept": "application/json"}
+        own = attacker.post("/consent", data={"csrf_token": a_token, "email": victim, "consent": "yes", "flow": "s1_intake"},
+                            base_url=BASE, headers=hdr)
+        self.assertEqual(own.status_code, 200)
+        r = attacker.post("/consent/revoke", data={"csrf_token": a_token, "email": victim}, base_url=BASE, headers=hdr)
+        self.assertEqual(r.status_code, 200, r.get_json())
+        self.assertEqual([x["id"] for x in r.get_json()["revoked"]], [own.get_json()["id"]])
+        rows = self.store.for_email(victim)
+        self.assertIsNone(rows[0]["revoked_at"])  # согласие человека не тронуто
+        self.assertIsNotNone(rows[1]["revoked_at"])
+
     def test_migration_006_is_additive_and_unique(self):
         sys.path.insert(0, str(ROOT / "scripts"))
         import migration_guard
