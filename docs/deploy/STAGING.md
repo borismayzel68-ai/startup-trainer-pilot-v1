@@ -5,6 +5,11 @@
 ## Подготовка
 1. `cp .env.example .env.staging`, `chmod 600 .env.staging`; заполнить значения (не в git). Добавить `STAGING_DB_PASSWORD` (пароль Postgres внутри compose).
 2. `DATABASE_URL` / `SESSION_DATABASE_URL` в `.env.staging` не задавать — compose собирает адрес базы сам.
+   Внимание (проверка стенда 30.10): docker compose читает `env_file` так, что незаполненная строка из `.env.example` вида
+   `SESSION_SECRET=   # комментарий` получает значение «# комментарий». Незаполненные строки удалить; комментарии — только
+   на отдельной строке. Staging с таким значением не стартует (`staging_guard.comment_values`).
+   `AUTH_ALLOWLIST`: основатель — только с кейсом, `email:founder:<ID кейса>`; без кейса staging не стартует
+   (иначе scope «*» — доступ ко всем кейсам).
 3. За nginx: `TRUSTED_PROXY_COUNT=1` (по умолчанию в compose). Обязательны `PUBLIC_BASE_URL=https://<домен>`, `AUTH_REDIRECT_URI=https://<домен>/auth/callback`, `SESSION_SECRET`, Google OAuth, `AUTH_ALLOWLIST`, `OPENAI_API_KEY`, `OPENAI_BASE_URL` (не api.openai.com).
 4. nginx — по `docs/deploy/nginx.staging.conf.example`, сертификат certbot.
 

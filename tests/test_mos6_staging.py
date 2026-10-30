@@ -122,6 +122,22 @@ class StagingTests(unittest.TestCase):
         with mock.patch.dict(sys.modules, {"auth": fake}):
             self.assertIs(sg.mos1_user_loader(), fake.current_user)
 
+    def test_comment_text_as_value_refused(self):
+        """Проверка стенда 30.10: cp .env.example .env.staging без заполнения — compose отдаёт текст комментария
+        как значение; SESSION_SECRET длиннее 32 символов и известен из git. Staging не стартует."""
+        with self.assertRaises(sg.StagingConfigError) as e:
+            make_app(dict(ENV, SESSION_SECRET="# Lockbox; openssl rand -hex 32 (≥32 символов)",
+                          S1_ADMIN_TOKEN="# openssl rand -hex 32 (≥24 символа); Authorization: Bearer"))
+        self.assertIn("S1_ADMIN_TOKEN, SESSION_SECRET", str(e.exception))
+
+    def test_founder_without_scope_refused(self):
+        """Проверка стенда 30.10: email:founder без scope = «*» (все кейсы) — staging не стартует."""
+        for raw in ("f.synth@example.test:founder", "f.synth@example.test:founder:", "f.synth@example.test:founder:*"):
+            with self.assertRaises(sg.StagingConfigError):
+                make_app(dict(ENV, AUTH_ALLOWLIST="allowed.synth@example.test:owner," + raw))
+        make_app(dict(ENV, AUTH_ALLOWLIST="allowed.synth@example.test:owner,f.synth@example.test:founder:VC-1001"))
+        self.assertEqual(sg.founders_without_scope("a@x.test:owner;b@x.test:founder\nc@x.test:founder:VC-1"), ["b@x.test"])
+
     def test_allowlist_emails_mos1_format(self):
         self.assertEqual(sg.allowlist_emails("A@x.test:owner, b@x.test:investor:CASE-1;\nc@x.test"),
                          ["a@x.test", "b@x.test", "c@x.test"])
