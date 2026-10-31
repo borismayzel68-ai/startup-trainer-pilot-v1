@@ -2,6 +2,14 @@
 
 Подробный handoff ведётся по задачам в `docs/handoff/<issue>.md`; здесь — только ссылки. При каждом коммите обновляется файл своей задачи (и эта таблица, если появилась новая задача).
 
+## Слияние master в #113 31.10 (Claude, ветка `docs/state-2026-10-30`)
+- Конфликт docs/STATE.md после #108: два блока «Статус 30.10» (из #108 и из #113) объединены в один раздел без дублей, ничего не удалено. Добавлена пометка: #105–#108 теперь в master (master 315e6c5), кто слил — НЕ ПОДТВЕРЖДЕНО.
+- Только docs; код и секреты не менялись. pytest: 737 passed, 7 skipped.
+
+## Проверка стенда и защиты 30.10 (Claude, ветка `docs/stand-check-2026-10-30`)
+- Отчёт: `docs/reports/STAND_CHECK_2026-10-30.md`; STATE.md дополнен. Исправления — отдельными draft PR #105 (S3 CSRF, nginx), #106 (отзыв согласия), #107 (ловушки env staging); handoff каждой — `docs/handoff/sec-*.md` в своей ветке.
+- Код продукта в этой ветке не менялся.
+
 ## Починка staging-compose 29.10 (MOS Tech, ветка `fix/staging-compose-database-url`)
 - Найдено при сборке пакета передачи: `docker-compose.staging.yml` (#102) передавал только `SESSION_DATABASE_URL`, а `staging_guard` при `APP_ENV=staging` требует `DATABASE_URL` → `StagingConfigError` при старте. Исправлено: в app заданы оба с одним адресом.
 - `tests/test_staging_compose.py`: compose даёт DATABASE_URL = SESSION_DATABASE_URL, seed в compose нет. Код продукта не менялся.

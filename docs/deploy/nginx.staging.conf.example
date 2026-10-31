@@ -25,6 +25,14 @@ server {
     ssl_certificate     /etc/letsencrypt/live/staging.example.test/fullchain.pem;   # плейсхолдер
     ssl_certificate_key /etc/letsencrypt/live/staging.example.test/privkey.pem;     # плейсхолдер
 
+    # Заголовки защиты (проверка стенда 30.10): HTTPS-only в браузере, запрет встраивания во фрейм
+    # (экран подписи S3), без угадывания типа, без утечки адреса в Referer, без версии nginx.
+    server_tokens off;
+    add_header Strict-Transport-Security "max-age=31536000" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "same-origin" always;
+
     client_max_body_size 30m;        # не меньше S1_MAX_FILE_MB
     proxy_read_timeout 180s;         # с запасом к gunicorn --timeout 120 / S1_LLM_TIMEOUT_S
 
