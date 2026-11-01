@@ -5,6 +5,6 @@
 - Шаблоны: `templates/spec_template.md`, `templates/plan_template.md`, `templates/tasks_template.md` (переданы техдиректором 31.10.2026).
 - Комплект функции кладётся в `docs/sdd/FEAT-NNN/` — `spec.md`, `plan.md`, `tasks.md`.
 - Первая функция — FEAT-001 (готов черновик v0.2: `FEAT-001/spec.md`, `plan.md`, `tasks.md`) «Регистрация, роли и личный кабинет» (по ревью стенда 31.10: `docs/reports/STAND_REVIEW_2026-10-31.md`).
-- Комплект PR #117 перенесён сюда целиком (#118 — источник истины, #117 заменён): `AGENTS.md`, `README_для_Сергея.md`, `specs/FEAT-001…004-*/`. Две версии FEAT-001 (`FEAT-001/` и `specs/FEAT-001-vhod-i-registraciya/`) обе сохранены, их нужно свести в одну.
+- Комплект PR #117 перенесён сюда (#118 — источник истины, #117 закрыт как дубль): `AGENTS.md`, `README_для_Сергея.md`, `specs/FEAT-002…004-*/`. **Действует одна версия FEAT-001 — `docs/sdd/FEAT-001/` v0.2** (приглашения `access_invites`, `tenant_id`, R0, NFR-007; `AUTH_ALLOWLIST` только для первого администратора). Файлы `specs/FEAT-001-vhod-i-registraciya/` — заглушки со ссылкой на v0.2; их полезное содержание перенесено в `FEAT-001/spec.md`, раздел 3a.
 - Для Сергея: начать с `README_для_Сергея.md`, правила работы агента — `AGENTS.md`; FEAT-002 (роли и кабинеты), FEAT-003 (форма «Начать», код доступа), FEAT-004 (панель администратора) — в `specs/`.
 - Поручение @claude в issue = карточка задачи из `tasks_template.md` §4.
