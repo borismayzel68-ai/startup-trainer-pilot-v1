@@ -261,3 +261,6 @@
 
 ## Правки по ревью PR #82 (Claude, 23.10, Refs #57)
 - PUBLIC_BASE_URL обязателен на staging, ограничен цикл ожидания бэкапа, тест bash -n, CLAUDE.md = master; подробности — docs/handoff/57.md.
+
+## Q-B1 пересмотр 4 → 6 — блокер ревью Tech Director (Claude, 02.11, Refs #118)
+- В `docs/sdd/README.md` и `FEAT-001/spec.md` §10 добавлена строка «Q-B1 пересмотр: 4 → 6? ждёт Бориса»; в `FEAT-001/tasks.md` T-006 и T-007 части R5/R6 помечены Blocked. Решение не менялось. Не мержить #118 до ответа Бориса.
