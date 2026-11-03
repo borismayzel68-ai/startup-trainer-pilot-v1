@@ -77,7 +77,7 @@ def grant_pdn(c, email="pdn-oauth@example.test"):
     return row
 
 
-def oauth_login(monkeypatch, c, email, verified=True, nonce_ok=True, aud=CLIENT_ID):
+def oauth_login(monkeypatch, c, email, verified=True, nonce_ok=True, aud=CLIENT_ID, headers=None):
     grant_pdn(c, email)
     r = c.get("/auth/login", base_url=BASE)
     assert r.status_code == 302
@@ -86,7 +86,7 @@ def oauth_login(monkeypatch, c, email, verified=True, nonce_ok=True, aud=CLIENT_
     claims = {"iss": "https://accounts.google.com", "aud": aud, "exp": time.time() + 600, "email": email,
               "email_verified": verified, "name": "Synthetic", "nonce": q["nonce"][0] if nonce_ok else "other"}
     monkeypatch.setattr(auth, "exchange_code", lambda code, redirect_uri: claims)
-    return c.get("/auth/callback?code=synthetic&state=" + q["state"][0], base_url=BASE)
+    return c.get("/auth/callback?code=synthetic&state=" + q["state"][0], base_url=BASE, headers=headers or {})
 
 
 def test_login_allowlisted_creates_user_and_grants(env, monkeypatch):
@@ -111,6 +111,38 @@ def test_login_outside_allowlist_403_and_no_user(env, monkeypatch):
     assert env.user_by_email("stranger@example.test") is None
     assert c.get("/auth/me", base_url=BASE).status_code == 401
     assert rows(env, action="login", result="deny", actor="stranger@example.test")
+
+
+def test_not_in_allowlist_browser_gets_html_page(env, monkeypatch):
+    r = oauth_login(monkeypatch, appmod.app.test_client(), "stranger@example.test",
+                    headers={"Accept": "text/html,application/xhtml+xml"})
+    body = r.get_data(as_text=True)
+    assert r.status_code == 403 and r.mimetype == "text/html"
+    assert "Доступ по приглашению" in body and "stranger@example.test" in body
+    assert "попросите администратора добавить эту почту" in body.lower()
+    assert "not_in_allowlist" not in body
+    assert env.user_by_email("stranger@example.test") is None
+
+
+def test_not_in_allowlist_html_escapes_email(env, monkeypatch):
+    r = oauth_login(monkeypatch, appmod.app.test_client(), "<b>x</b>@example.test", headers={"Accept": "text/html"})
+    body = r.get_data(as_text=True)
+    assert r.status_code == 403 and "<b>x</b>" not in body and "&lt;b&gt;" in body
+
+
+def test_not_in_allowlist_api_keeps_json_403(env, monkeypatch):
+    r = oauth_login(monkeypatch, appmod.app.test_client(), "stranger@example.test",
+                    headers={"Accept": "application/json"})
+    assert r.status_code == 403 and r.get_json() == {"error": "Доступ запрещён", "code": "not_in_allowlist"}
+
+
+def test_not_in_allowlist_logged_with_masked_email(env, monkeypatch, caplog):
+    with caplog.at_level("WARNING", logger="auth"):
+        oauth_login(monkeypatch, appmod.app.test_client(), "stranger@example.test")
+    text = "\n".join(rec.getMessage() for rec in caplog.records)
+    assert "auth: not_in_allowlist s***@example.test" in text
+    assert "stranger" not in text
+    assert auth.mask_email("sergey@example.test") == "s***@example.test" and auth.mask_email("") == "***"
 
 
 @pytest.mark.parametrize("kw", [{"verified": False}, {"nonce_ok": False}, {"aud": "other-client"}])

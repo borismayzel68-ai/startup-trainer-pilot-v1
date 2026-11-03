@@ -13,7 +13,7 @@ import time
 import urllib.parse
 from functools import wraps
 
-from flask import Blueprint, current_app, g, jsonify, redirect, request, session
+from flask import Blueprint, current_app, g, jsonify, redirect, render_template, request, session
 
 from auth_store import ROLE_LABELS, AuthStore
 
@@ -68,6 +68,17 @@ def exchange_code(code, redirect_uri):
         "redirect_uri": redirect_uri, "grant_type": "authorization_code"})
     r.raise_for_status()
     return _jwt_claims(r.json()["id_token"])
+
+
+def mask_email(email):
+    """'sergey@example.test' → 's***@example.test': в журнал полная почта не пишется."""
+    local, _, domain = str(email or "").partition("@")
+    return (local[:1] + "***@" + domain) if domain else "***"
+
+
+def _wants_html():
+    """Браузер (Accept содержит text/html) получает страницу, остальные — JSON (контракт API не меняется)."""
+    return "text/html" in request.headers.get("Accept", "")
 
 
 def _redirect_uri():
@@ -264,6 +275,11 @@ def callback():
     entries = allowlist().get(email)
     if not entries:  # вне allowlist: пользователь НЕ создаётся
         audit("login", "/auth/callback", "deny", actor=email, detail="not_in_allowlist")
+        log.warning("auth: not_in_allowlist %s", mask_email(email))
+        if _wants_html():
+            resp = current_app.make_response((render_template("access_invite.html", email=email), 403))
+            resp.headers["Cache-Control"] = "no-store"
+            return resp
         return jsonify({"error": "Доступ запрещён", "code": "not_in_allowlist"}), 403
     consent_row = _investor_consent_row()
     if consent_row is None:
