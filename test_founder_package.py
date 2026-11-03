@@ -1,12 +1,17 @@
 import unittest, uuid, copy
+from datetime import datetime, timezone, timedelta
 from founder_package import build_package, render_markdown, plan_ledger_write, verify_ledger, LEDGER_TABS
 from question_engine_v2 import seed_source_coverage, record_answer
 from session_store import DurableSessionStore
 
 class FounderPackageRegression(unittest.TestCase):
     def setUp(self):
+        # Даты — от текущего времени: с жёсткой датой сессия истекает по retention_days и get() вернёт None
+        now=datetime.now(timezone.utc).replace(microsecond=0)
+        fmt='%Y-%m-%dT%H:%M:%SZ'
+        created=(now-timedelta(minutes=1)).strftime(fmt); completed=now.strftime(fmt)
         sid=str(uuid.uuid4())
-        self.s={'id':sid,'event_id':str(uuid.uuid5(uuid.NAMESPACE_URL,'trainer-completed:'+sid)), 'idempotency_key':'trainer-completed:'+sid,'project_id':'VC-995','project_name':'Синтетический сервис здоровья','founder_name':'Тестовый основатель','founder_email':'test@example.com','jurisdiction':'RF','product_class':'WELLNESS_INFORMATION','mode':'B','created_at':'2026-10-04T18:40:00Z','completed_at':'2026-10-04T18:41:00Z','description':'10 клиентов и 100000 рублей; документов нет','intended_use':'Хранение истории лабораторных анализов без интерпретации','qa':[{'answer':'10 клиентов, документов нет','analysis':{'status':'fact'},'module':'traction'}],'stop_reason':'required_coverage_complete','selected_modules':['traction']}
+        self.s={'id':sid,'event_id':str(uuid.uuid5(uuid.NAMESPACE_URL,'trainer-completed:'+sid)), 'idempotency_key':'trainer-completed:'+sid,'project_id':'VC-995','project_name':'Синтетический сервис здоровья','founder_name':'Тестовый основатель','founder_email':'test@example.com','jurisdiction':'RF','product_class':'WELLNESS_INFORMATION','mode':'B','created_at':created,'completed_at':completed,'description':'10 клиентов и 100000 рублей; документов нет','intended_use':'Хранение истории лабораторных анализов без интерпретации','qa':[{'answer':'10 клиентов, документов нет','analysis':{'status':'fact'},'module':'traction'}],'stop_reason':'required_coverage_complete','selected_modules':['traction']}
         self.r={'facts':['10 клиентов и 100000 рублей'],'claims':['Основатель заявляет о клиентах'],'coverage':{'required':18,'required_assessed':18},'recommendation':'ready_for_investor_conversation'}
         self.p=build_package(self.s,self.r,'https://startup-trainer-a9-staging.onrender.com',self.s['completed_at'])
     def test_claim_never_becomes_verified(self):
