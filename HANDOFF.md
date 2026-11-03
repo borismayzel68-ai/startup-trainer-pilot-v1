@@ -277,3 +277,9 @@
 
 ## Q-B1 решён: 4 кабинета (Claude, 02.11, Refs #118)
 - Решение Бориса 02.11 12:02: кабинетов 4 (R1–R4); R5 и R6 — «После первого входа», не в объёме (`FEAT-001/spec.md` §2, §4, §10, v0.3; `tasks.md` T-006/T-007). Строка и пометка «Не мержить» в `docs/sdd/README.md` заменены. Только docs.
+
+## Тест-«бомба времени» в test_founder_package (Claude, 03.11, Refs #123)
+- Причина: в `setUp` жёстко заданы `created_at='2026-10-04T18:40:00Z'`; при retention 30 дней сессия истекла 03.11 18:40 UTC, `DurableSessionStore.get()` вернул None.
+- Правка: только `test_founder_package.py` — `created_at`/`completed_at` от `datetime.now(timezone.utc)` (формат `%Y-%m-%dT%H:%M:%SZ`). Код приложения не менялся.
+- Поиск других бомб (`grep` по жёстким датам 2026): `tests/test_session_store.py` и `tests/test_delivery_worker.py` уже на относительных датах; остальные даты — входные данные без истечения по сроку хранения (`test_completion_event` с 26.09 проходит: от даты не зависит).
+- Полный прогон: 737 passed, 7 skipped, 35 subtests passed. Только синтетика.
