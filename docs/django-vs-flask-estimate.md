@@ -19,7 +19,7 @@ python3 -m pytest -q --tb=no
 713 passed, 35 skipped, 1 warning, 35 subtests passed in 29.22s
 ```
 
-Падений нет. 35 пропусков — тесты с условием `HQ018_PG_URL` (Postgres в этом прогоне не поднимался). В CI Postgres 16 задан (`.github/workflows/tests.yml`), там эти тесты не пропускаются. Функций `def test_` в исходниках — 527; «713 passed» больше, потому что часть тестов параметризована.
+Падений нет. Из 35 пропусков 7 — `pytest.skip("публичный маршрут")` в `tests/test_auth.py` (health, robots, login, callback, страница согласия и два POST). Они пропускаются и когда Postgres задан. Остальные 28 — нет `HQ018_PG_URL`; в CI переменная задана (`.github/workflows/tests.yml`), там эти 28 запускаются. Функций `def test_` в исходниках — 527; «713 passed» больше, потому что часть тестов параметризована. Второй прогон той же командой после правки документа: 713 passed, 35 skipped, 1 warning, 35 subtests passed in 29.02s.
 
 ## 2. Что в приложении сейчас (ФАКТ)
 
@@ -72,7 +72,7 @@ WTForms нет. HTML-форм две, обе в `templates/consent.html` (POST `
 
 Ещё 10 таблиц создаются из Python (их нет в списке SQL выше): 3 в `session_store.py` и 7 в `s1_intake/store.py` (`s1_readiness_jobs`, `s1_approvals`, `s1_consents`, `s1_transfers`, `s1_tasks`, `s1_fact_signoffs`, `s1_feedback`). `users` / `roles` / `role_grants` / `audit_log` и `pdn_consents` продублированы: и миграция, и `CREATE TABLE` в Python (для SQLite в тестах).
 
-Прямых `.execute(` / `.executemany(` в коде приложения — 100, из них 68 в `session_store.py`. В `s1_intake/store.py` (365 строк) запросы идут через `_exec`: таких вызовов 40, в число 100 они не входят (внутри `_exec` один `conn.execute`).
+Прямых `.execute(` / `.executemany(` в коде приложения — 100, из них 68 в `session_store.py`. В `s1_intake/store.py` (364 строки, `wc -l`) запросы идут через `_exec`: таких вызовов 40, в число 100 они не входят (внутри `_exec` один `conn.execute`).
 
 ### Маршруты, которые сидят на Flask
 
@@ -98,7 +98,7 @@ WTForms нет. HTML-форм две, обе в `templates/consent.html` (POST `
 
 ### Тесты
 
-`test_client(` встречается 56 раз в 16 тестовых файлах. Слово `flask` есть в 19 тестовых файлах. Самый крупный по клиенту — `tests/test_auth.py` (474 строки, 20 вызовов `test_client`).
+`test_client(` встречается 56 раз в 16 тестовых файлах. `import flask` / `from flask` — в 8 тестовых файлах (`test_auth`, `test_hq023_s3_expert`, `test_hq032_s6_entry_pack`, `test_mos6_staging`, `test_pdn_consent`, `test_q316_feedback`, `test_s1_intake`, `test_tg1_human_gate`). Самый крупный по клиенту — `tests/test_auth.py` (474 строки, 20 вызовов `test_client`).
 
 ## 3. Два объёма переноса
 
@@ -124,7 +124,7 @@ WTForms нет. HTML-форм две, обе в `templates/consent.html` (POST `
 | Пакет | Счёт | Дни |
 |---|---|---:|
 | `session_store.py` | 68 `.execute`, 1 092 строки, SQLite и Postgres. 68/8 ≈ 8,5 → 9; 68/4 = 17 | 9–17 |
-| `s1_intake/store.py` | 40 вызовов `_exec`, 365 строк, два диалекта. 40/8 = 5; 40/4 = 10 | 5–10 |
+| `s1_intake/store.py` | 40 вызовов `_exec`, 364 строки, два диалекта. 40/8 = 5; 40/4 = 10 | 5–10 |
 | Остальной SQL | 31 прямой `.execute` вне этих двух файлов (dealflow, fund, portfolio, согласие, auth_store, скрипты). 31/8 ≈ 3,9 → 4; 31/4 = 7,75 → 8 | 4–8 |
 | Миграции Django | 7 SQL-файлов, 252 строки, 14 таблиц + down; поведение «повторный прогон ничего не делает» надо воспроизвести (тесты `test_mig005`) | 2–4 |
 | Формы Django | 2 HTML-формы согласия. Анкета на `fetch` формой Django не заменяется | 0–2 |
@@ -200,4 +200,4 @@ Q-B4 (`docs/sdd/AGENTS.md`): ядро Flask не переписывать, по�
 - Скорость человеко-дня не замерена на этом репозитории. Вилки разделов 3 и 4 держатся на допущениях «4–8 SQL-вызовов в день» и на пакетах маршрутов. Файлы и строки при смене допущения пересчитывать не нужно.
 - Q-001 (как устроена активная роль) блокирует T-005. Ответа в репозитории нет.
 - Q-B9 и каркас админки вне репозитория не оценены. FastAPI не оценён.
-- Сколько из 35 локально пропущенных тестов Postgres упадут на Django, неизвестно: перенос не делался.
+- Сколько из 28 тестов, пропущенных без Postgres, упадут на Django, неизвестно: перенос не делался. Семь пропусков публичных маршрутов к Postgres не относятся.
