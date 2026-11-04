@@ -2,6 +2,9 @@
 
 Подробный handoff ведётся по задачам в `docs/handoff/<issue>.md`; здесь — только ссылки. При каждом коммите обновляется файл своей задачи (и эта таблица, если появилась новая задача).
 
+## Шаблон PR: «Внешний результат» и Closes/Refs, #76 (04.11, ветка `cursor/pr-template-external-result-7073`)
+- Только `.github/pull_request_template.md`: обязательные поля «Внешний результат: что изменится снаружи, как измеряется, к какому сроку» и `Closes #N / Refs #N`. Код, CLAUDE.md, REVIEW.md, workflows не менялись. Подробно — [docs/handoff/76.md](docs/handoff/76.md).
+
 ## Страница «Доступ по приглашению», #114 (Claude, ветка `claude/issue-114-20261103-1620`, 03.11)
 - `auth.py`: отказ `not_in_allowlist` для браузера — HTML-страница (403), для API прежний JSON; в журнал `auth: not_in_allowlist s***@домен`. 4 теста, pytest: 741 passed, 7 skipped. Проверка за 5 минут — `docs/for-sergey/04_*.md`. Миграции, формат `AUTH_ALLOWLIST`, секреты не тронуты. Подробно — `docs/handoff/114.md`.
 
