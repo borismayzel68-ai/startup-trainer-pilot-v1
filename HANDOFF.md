@@ -5,6 +5,10 @@
 ## T-001 «Начать» без кода доступа, #114 (Claude, ветка `claude/issue-114-20261104-0624`, 04.11)
 - `app.py`: `/api/start` не проверяет `INVITE_CODE`, если запрос прошёл по сессии (`auth.session_ok()`); без сессии (RBAC выключен) проверка осталась. Анонимный запрос при включённом RBAC — 401. `templates/index.html`: поля «Код доступа» нет; номер проекта founder берётся из `/auth/me` (только чтение); ошибка видна над кнопкой при любом не-200. 4 новых теста (`tests/test_t001_start_without_code.py`), pytest: 745 passed, 7 skipped (`docs/handoff/114_T001_pytest.log`). Код ответа успеха остался 200, не 201. Секреты, `.env*`, миграции не тронуты.
 
+## Оценка Flask / Django, #109 (04.11, ветка `cursor/django-vs-flask-estimate-7073`)
+- Только документ `docs/django-vs-flask-estimate.md`: что переписывать при переходе на Django, дни с допущениями, влияние на T-002…T-006, три варианта с ценой. Код не менялся. Решение владельца не записано. Подробно — [docs/handoff/django-vs-flask.md](docs/handoff/django-vs-flask.md).
+- Слияние master `2d6d82f` (#126, шаблон PR): конфликт только в этом файле, обе записи сохранены.
+
 ## Шаблон PR: «Внешний результат» и Closes/Refs, #76 (04.11, ветка `cursor/pr-template-external-result-7073`)
 - Только `.github/pull_request_template.md`: обязательные поля «Внешний результат: что изменится снаружи, как измеряется, к какому сроку» и `Closes #N / Refs #N`. Код, CLAUDE.md, REVIEW.md, workflows не менялись. Подробно — [docs/handoff/76.md](docs/handoff/76.md).
 
