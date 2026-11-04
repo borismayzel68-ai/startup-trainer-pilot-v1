@@ -4,6 +4,10 @@
 
 ## Оценка Flask / Django, #109 (04.11, ветка `cursor/django-vs-flask-estimate-7073`)
 - Только документ `docs/django-vs-flask-estimate.md`: что переписывать при переходе на Django, дни с допущениями, влияние на T-002…T-006, три варианта с ценой. Код не менялся. Решение владельца не записано. Подробно — [docs/handoff/django-vs-flask.md](docs/handoff/django-vs-flask.md).
+- Слияние master `2d6d82f` (#126, шаблон PR): конфликт только в этом файле, обе записи сохранены.
+
+## Шаблон PR: «Внешний результат» и Closes/Refs, #76 (04.11, ветка `cursor/pr-template-external-result-7073`)
+- Только `.github/pull_request_template.md`: обязательные поля «Внешний результат: что изменится снаружи, как измеряется, к какому сроку» и `Closes #N / Refs #N`. Код, CLAUDE.md, REVIEW.md, workflows не менялись. Подробно — [docs/handoff/76.md](docs/handoff/76.md).
 
 ## Страница «Доступ по приглашению», #114 (Claude, ветка `claude/issue-114-20261103-1620`, 03.11)
 - `auth.py`: отказ `not_in_allowlist` для браузера — HTML-страница (403), для API прежний JSON; в журнал `auth: not_in_allowlist s***@домен`. 4 теста, pytest: 741 passed, 7 skipped. Проверка за 5 минут — `docs/for-sergey/04_*.md`. Миграции, формат `AUTH_ALLOWLIST`, секреты не тронуты. Подробно — `docs/handoff/114.md`.
