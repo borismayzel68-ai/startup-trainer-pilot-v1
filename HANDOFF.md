@@ -5,6 +5,9 @@
 ## T-001 «Начать» без кода доступа, #114 (Claude, ветка `claude/issue-114-20261104-0624`, 04.11)
 - `app.py`: `/api/start` не проверяет `INVITE_CODE`, если запрос прошёл по сессии (`auth.session_ok()`); без сессии (RBAC выключен) проверка осталась. Анонимный запрос при включённом RBAC — 401. `templates/index.html`: поля «Код доступа» нет; номер проекта founder берётся из `/auth/me` (только чтение); ошибка видна над кнопкой при любом не-200. 4 новых теста (`tests/test_t001_start_without_code.py`), pytest: 745 passed, 7 skipped (`docs/handoff/114_T001_pytest.log`). Код ответа успеха остался 200, не 201. Секреты, `.env*`, миграции не тронуты.
 
+## Шаблон PR: «Внешний результат» и Closes/Refs, #76 (04.11, ветка `cursor/pr-template-external-result-7073`)
+- Только `.github/pull_request_template.md`: обязательные поля «Внешний результат: что изменится снаружи, как измеряется, к какому сроку» и `Closes #N / Refs #N`. Код, CLAUDE.md, REVIEW.md, workflows не менялись. Подробно — [docs/handoff/76.md](docs/handoff/76.md).
+
 ## Страница «Доступ по приглашению», #114 (Claude, ветка `claude/issue-114-20261103-1620`, 03.11)
 - `auth.py`: отказ `not_in_allowlist` для браузера — HTML-страница (403), для API прежний JSON; в журнал `auth: not_in_allowlist s***@домен`. 4 теста, pytest: 741 passed, 7 skipped. Проверка за 5 минут — `docs/for-sergey/04_*.md`. Миграции, формат `AUTH_ALLOWLIST`, секреты не тронуты. Подробно — `docs/handoff/114.md`.
 
