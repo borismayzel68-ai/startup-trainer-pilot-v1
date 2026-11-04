@@ -59,7 +59,6 @@ window.fetch=function(u,o){o=o||{};if((o.method||"GET").toUpperCase()!=="GET"){o
 <div><label>Кто покупает / решает</label><input id="buyer"></div>
 <div><label>Кто платит</label><input id="payer"></div>
 </div>
-<p><label>Код доступа</label><input id="code" placeholder="Код пилота"></p>
 <p><label>Сценарий</label>
 <select id="mode">
 <option value="A">A — проверить текущую модель</option>
@@ -71,8 +70,8 @@ window.fetch=function(u,o){o=o||{};if((o.method||"GET").toUpperCase()!=="GET"){o
 <p><label>Краткое описание проекта</label><textarea id="desc" placeholder="Что уже работает, кто пользователь, кто платит, стадия"></textarea></p>
 <p><label>Pitch deck, PDF (необязательно)</label><input id="deck" type="file" accept="application/pdf"></p>
 <p><label><input id="consent" type="checkbox" style="width:auto"> Я согласен на обработку материалов для этого закрытого пилота и не загружаю персональные медицинские данные пациентов.</label></p>
+<p id="startErr" class="error" role="alert"></p>
 <button onclick="startSession()">Начать</button>
-<p id="startErr" class="error"></p>
 </div>
 <div id="chat" class="card hidden">
 <div id="progress" class="muted"></div>
@@ -93,10 +92,19 @@ window.fetch=function(u,o){o=o||{};if((o.method||"GET").toUpperCase()!=="GET"){o
 </div>
 <script>
 let sid=null, state=null;
+// T-001: founder с одним проектом видит свой номер, поле только для чтения
+(async function(){
+  try{
+    const r=await fetch('/auth/me'); if(!r.ok) return;
+    const me=await r.json();
+    const own=(me.grants||[]).filter(g=>g.role==='founder'&&g.scope&&g.scope!=='*').map(g=>g.scope);
+    const isOwner=(me.grants||[]).some(g=>g.role==='owner');
+    if(own.length===1&&!isOwner){ const f=document.getElementById('projectId'); f.value=own[0]; f.readOnly=true; }
+  }catch(e){}
+})();
 async function startSession(){
   document.getElementById('startErr').textContent='';
   const fd=new FormData();
-  fd.append('invite_code',document.getElementById('code').value);
   fd.append('project_id',document.getElementById('projectId').value);
   fd.append('project_name',document.getElementById('project').value);
   fd.append('founder_name',document.getElementById('founderName').value);
@@ -115,8 +123,12 @@ async function startSession(){
   fd.append('description',document.getElementById('desc').value);
   fd.append('consent',document.getElementById('consent').checked?'true':'false');
   const f=document.getElementById('deck').files[0]; if(f) fd.append('deck',f);
-  const r=await fetch('/api/start',{method:'POST',body:fd}); const j=await r.json();
-  if(!r.ok){document.getElementById('startErr').textContent=j.error||'Ошибка';return;}
+  const err=document.getElementById('startErr');
+  let r,j={};
+  try{ r=await fetch('/api/start',{method:'POST',body:fd}); }
+  catch(e){ err.textContent='Нет связи с сервером. Проверьте интернет и повторите.'; return; }
+  try{ j=await r.json(); }catch(e){ j={}; }
+  if(!r.ok){ err.textContent=j.error||('Ошибка '+r.status+'. Повторите или сообщите администратору.'); return; }
   sid=j.id; state=j; document.getElementById('start').classList.add('hidden'); document.getElementById('chat').classList.remove('hidden'); renderState();
 }
 function renderState(){
