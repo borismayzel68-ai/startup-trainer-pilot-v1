@@ -2,6 +2,10 @@
 
 Подробный handoff ведётся по задачам в `docs/handoff/<issue>.md`; здесь — только ссылки. При каждом коммите обновляется файл своей задачи (и эта таблица, если появилась новая задача).
 
+## Оценка Flask / Django, #109 (04.11, ветка `cursor/django-vs-flask-estimate-7073`)
+- Только документ `docs/django-vs-flask-estimate.md`: что переписывать при переходе на Django, дни с допущениями, влияние на T-002…T-006, три варианта с ценой. Код не менялся. Решение владельца не записано. Подробно — [docs/handoff/django-vs-flask.md](docs/handoff/django-vs-flask.md).
+- Слияние master `2d6d82f` (#126, шаблон PR): конфликт только в этом файле, обе записи сохранены.
+
 ## Шаблон PR: «Внешний результат» и Closes/Refs, #76 (04.11, ветка `cursor/pr-template-external-result-7073`)
 - Только `.github/pull_request_template.md`: обязательные поля «Внешний результат: что изменится снаружи, как измеряется, к какому сроку» и `Closes #N / Refs #N`. Код, CLAUDE.md, REVIEW.md, workflows не менялись. Подробно — [docs/handoff/76.md](docs/handoff/76.md).
 
