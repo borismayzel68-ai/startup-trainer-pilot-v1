@@ -19,7 +19,8 @@ INSERT INTO roles (code, label) VALUES
     ('clinic',   'Клиника'),
     ('syndicator','Синдикатор'),
     ('owner',      'Владелец фонда'),
-    ('fund_staff', 'Сотрудник фонда')
+    ('fund_staff', 'Сотрудник фонда'),
+    ('buyer',      'Покупатель технологии')  -- R10: роль без маршрутов (ТЗ «Роли и доступ», §5.6а)
 ON CONFLICT (code) DO NOTHING;
 CREATE TABLE IF NOT EXISTS role_grants (
     id         BIGSERIAL PRIMARY KEY,

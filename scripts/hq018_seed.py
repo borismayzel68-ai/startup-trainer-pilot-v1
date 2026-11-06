@@ -10,6 +10,7 @@ USERS = [
     ("signer.synth@example.test", "Синтетический подписант", "signer"),
     ("clinic.synth@example.test", "Синтетическая клиника", "clinic"),
     ("syndicator.synth@example.test", "Синтетический синдикатор", "syndicator"),
+    ("buyer.synth@example.test", "Синтетический покупатель технологии", "buyer"),
 ]
 
 

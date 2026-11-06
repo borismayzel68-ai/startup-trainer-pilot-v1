@@ -11,7 +11,7 @@ os.environ.setdefault("INVITE_CODE", "PILOT-S1-EXT-001")
 os.environ.setdefault("SESSION_DATABASE_URL", "sqlite:///:memory:")
 import app as appmod  # noqa: E402
 import auth  # noqa: E402
-from auth_store import AuthStore  # noqa: E402
+from auth_store import ROLE_LABELS, AuthStore  # noqa: E402
 
 pytestmark = pytest.mark.auth_enforced
 
@@ -279,6 +279,7 @@ SCOPE_MATRIX = [
     (("fund_staff", "VC-1001"), 200, 403),
     (("expert", "*"), 403, 403),
     (("clinic", "VC-1001"), 403, 403),
+    (("buyer", "*"), 403, 403),
 ]
 
 
@@ -472,3 +473,23 @@ def test_audit_limit_cap_and_bad_value(env):
     env.audit_rows = lambda limit=200: seen.append(limit) or orig(limit)
     owner.get("/admin/audit?limit=999999", base_url=BASE)
     assert seen == [500]
+
+
+# ------------------------------------------------------------ R10 покупатель технологии
+def test_buyer_role_exists_with_label(env):
+    assert "buyer" in auth.ROLES
+    assert ROLE_LABELS["buyer"] == "Покупатель технологии"
+
+
+def test_buyer_denied_on_working_routes(env, cases):
+    """Роль заведена, но ни к одному рабочему маршруту не допущена (deny by default, ТЗ §5.6а)."""
+    _, sid_a, _ = cases
+    c, _ = make_client(env, "buyer@example.test", [("buyer", "*")])
+    for path in ("/s1/jobs", "/s5/today", "/admin/audit", "/api/session/" + sid_a,
+                 "/api/session/" + sid_a + "/report.json"):
+        assert c.get(path, base_url=BASE).status_code in EXTERNAL_OK_STATUSES - {404}, path
+    r = c.post("/api/start", data={"project_id": "VC-1001"}, base_url=BASE, headers={"X-CSRF-Token": c.csrf})
+    assert r.status_code == 403
+    assert rows(env, actor="buyer@example.test", result="deny")
+    me = c.get("/auth/me", base_url=BASE)
+    assert me.status_code == 200
