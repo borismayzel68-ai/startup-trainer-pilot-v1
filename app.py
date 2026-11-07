@@ -1,6 +1,6 @@
 import os, io, json, uuid, time, re, hashlib, hmac
 from datetime import timedelta
-from flask import Flask, request, jsonify, render_template, session as browser_session, Response, g
+from flask import Flask, request, jsonify, render_template, redirect, session as browser_session, Response, g
 from pypdf import PdfReader
 from routing_v2 import (
     JURISDICTIONS, PRODUCT_CLASSES, normalize_project_id, norm_jurisdiction,
@@ -22,6 +22,7 @@ from s2_mandate.blueprint import bp as s2_bp
 from werkzeug.middleware.proxy_fix import ProxyFix
 import auth
 from auth import require_role, public, ANY_ROLE, STAFF_ROLES
+from auth_store import ROLE_LABELS
 from pdn_consent.blueprint import bp as consent_bp
 from pdn_consent.store import PdnConsentStore
 from s3_expert.blueprint import bp as s3_bp
@@ -314,10 +315,87 @@ def session_case(kw):
     return stored.get("project_id") if stored else None
 
 
+@app.context_processor
+def _shell_context():
+    """T-004: шапка кабинета (base.html) — имя и роли вошедшего; без сессии шапки нет."""
+    user = auth.current_user() if "auth_store" in app.extensions else None
+    if not user:
+        return {}
+    roles = sorted({r for r, _ in user["grants"]})
+    labels = ", ".join(ROLE_LABELS.get(r, r) for r in roles)
+    return {"shell_user": {"name": user["display_name"] or user["email"], "email": user["email"], "roles": labels}}
+
+
 @app.get("/")
 @require_role(ANY_ROLE)
 def home():
     return render_template("index.html", csrf_token=auth.csrf_token())
+
+
+@app.get("/profile")
+@require_role(ANY_ROLE)
+def profile():
+    user = auth.current_user()
+    consents = app.extensions["pdn_store"].for_email(user["email"])
+    active = next((c for c in reversed(consents) if not c["revoked_at"]), None)
+    last = consents[-1] if consents else None
+    grants = [{"label": ROLE_LABELS.get(r, r), "scope": "все проекты" if s == "*" else s} for r, s in sorted(user["grants"])]
+    return render_template("profile.html", csrf_token=auth.csrf_token(), user=user, grants=grants,
+                           consent=active, last_consent=last, error=request.args.get("e"))
+
+
+@app.post("/profile/revoke-consent")
+@require_role(ANY_ROLE)
+def profile_revoke_consent():
+    """Отзыв согласия — только своего email (тот же механизм, что /consent/revoke): сессия завершается,
+    новый вход возможен только после нового согласия."""
+    user = auth.current_user()
+    rows = app.extensions["pdn_store"].revoke(user["email"])
+    auth.audit("consent_revoke", "/profile/revoke-consent", "allow", actor=user["email"], detail="revoked=%d" % len(rows))
+    browser_session.clear()
+    if "text/html" in request.headers.get("Accept", ""):
+        resp = redirect("/consent")
+        resp.headers["Cache-Control"] = "no-store"
+        return resp
+    return jsonify({"ok": True, "revoked": len(rows)})
+
+
+_ERR_PAGES = {
+    401: ("Требуется вход", "Войдите, чтобы открыть эту страницу."),
+    403: ("Нет доступа", "У вас нет прав на эту страницу. Если это ошибка, напишите администратору."),
+    404: ("Страница не найдена", "Такой страницы нет. Вернитесь на главную."),
+}
+
+
+def _html_error(code):
+    title, text = _ERR_PAGES[code]
+    resp = app.make_response((render_template("error.html", code=code, title=title, text=text, csrf_token=""), code))
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+
+def _browser_page_request():
+    """Переход браузера по ссылке (Accept: text/html), не API и не вызов fetch."""
+    return (request.method == "GET" and "text/html" in request.headers.get("Accept", "")
+            and not request.path.startswith("/api/"))
+
+
+for _code in _ERR_PAGES:
+    app.register_error_handler(_code, lambda e, c=_code: _html_error(c) if _browser_page_request() else e)
+
+
+@app.after_request
+def _cabinet_pages(resp):
+    """T-004: (1) JSON-отказ 401/403/404 при переходе браузера по странице → HTML по-русски (API не трогаем);
+    (2) страницы под сессией не кэшируются — «назад» после выхода не открывает данные (FR-008)."""
+    if (resp.status_code in _ERR_PAGES and resp.mimetype == "application/json" and _browser_page_request()
+            and not request.path.startswith("/auth/")):
+        new = _html_error(resp.status_code)
+        new.headers.update({k: v for k, v in resp.headers.items() if k.lower() in ("x-robots-tag",)})
+        return new
+    if g.get("rbac_session_ok") and resp.mimetype == "text/html":
+        resp.headers["Cache-Control"] = "no-store"
+    return resp
 
 @app.get("/health")
 @public

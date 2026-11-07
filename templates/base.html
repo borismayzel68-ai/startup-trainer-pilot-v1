@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<meta name="csrf-token" content="{{ csrf_token }}">
+<title>{% block title %}Nocvela{% endblock %}</title>
+<style>
+body{font-family:Arial,sans-serif;max-width:820px;margin:0 auto 40px;padding:0 18px;color:#111;background:#f7f7f8}
+.card{background:white;border:1px solid #ddd;border-radius:16px;padding:24px;margin-bottom:16px}
+.shell{display:flex;flex-wrap:wrap;align-items:center;gap:12px;padding:12px 0;margin-bottom:20px;border-bottom:1px solid #ddd}
+.shell .brand{font-weight:700;font-size:18px}.shell .who{color:#444;font-size:14px}
+.shell nav{display:flex;gap:14px;flex:1;flex-wrap:wrap}.shell nav a{color:#111}
+.shell form{margin:0}.shell .linkbtn{width:auto;background:none;color:#111;border:1px solid #bbb;padding:6px 12px;border-radius:10px;cursor:pointer;font:inherit}
+#fbBtn{position:fixed;right:16px;bottom:16px;width:auto;z-index:50;box-shadow:0 2px 8px rgba(0,0,0,.3)}
+#fbBox{position:fixed;right:16px;bottom:70px;width:min(380px,calc(100% - 32px));z-index:50;background:white;border:1px solid #bbb;border-radius:16px;padding:16px;box-shadow:0 4px 16px rgba(0,0,0,.25)}
+#fbBox textarea{min-height:90px}#fbBox label{display:block;margin-top:8px}
+</style>
+<style>{% block style %}{% endblock %}</style>
+</head>
+<body>
+<script>
+// CSRF: все не-GET запросы к API несут токен сессии (auth.py)
+(function(){var t=document.querySelector('meta[name="csrf-token"]').content,f=window.fetch;
+window.fetch=function(u,o){o=o||{};if((o.method||"GET").toUpperCase()!=="GET"){o.headers=Object.assign({},o.headers,{"X-CSRF-Token":t});}return f(u,o);};})();
+</script>
+{% if shell_user %}
+<header class="shell" id="shell">
+<span class="brand">Nocvela</span>
+<span class="who">{{ shell_user.name }} · {{ shell_user.roles }}</span>
+<nav aria-label="Меню">
+<a href="/">Тренажёр</a>
+<a href="/profile">Профиль</a>
+<a href="#" id="fbLink">Сообщить о проблеме</a>
+</nav>
+<form method="post" action="/auth/logout">
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+<button type="submit" class="linkbtn">Выйти</button>
+</form>
+</header>
+{% endif %}
+{% block content %}{% endblock %}
+<button id="fbBtn" type="button">Сообщить о проблеме</button>
+<div id="fbBox" class="hidden" role="dialog" aria-label="Сообщить о проблеме">
+<p class="muted"><b>Не вводите персональные данные пациентов и закрытые сведения</b></p>
+<label for="fbText">Что случилось</label>
+<textarea id="fbText" maxlength="2000"></textarea>
+<label for="fbContact">Как с вами связаться (необязательно)</label>
+<input id="fbContact" maxlength="200">
+<p id="fbMsg" class="msg"></p>
+<button id="fbSend" type="button">Отправить</button>
+</div>
+<script>
+(function(){var $=function(i){return document.getElementById(i)},box=$("fbBox"),msg=$("fbMsg");
+$("fbBtn").onclick=function(){box.classList.toggle("hidden");};
+var fl=$("fbLink");if(fl)fl.onclick=function(e){e.preventDefault();box.classList.toggle("hidden");};
+$("fbSend").onclick=function(){var text=$("fbText").value.trim();msg.className="msg";
+if(!text){msg.className="msg error";msg.textContent="Опишите, что случилось.";return;}
+fetch("/s1/feedback",{method:"POST",headers:{"Content-Type":"application/json"},
+body:JSON.stringify({text:text,contact:$("fbContact").value,path:location.pathname})})
+.then(function(r){return r.json().then(function(j){return[r.ok,j]})})
+.then(function(x){if(x[0]){msg.textContent=x[1].message;$("fbText").value="";}
+else{msg.className="msg error";msg.textContent=x[1].error==="too many requests"?"Слишком часто, попробуйте через минуту.":"Не удалось отправить, проверьте текст.";}})
+.catch(function(){msg.className="msg error";msg.textContent="Не удалось отправить.";});};})();
+</script>
+</body></html>
