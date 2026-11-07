@@ -48,8 +48,22 @@ def parse_allowlist(text):
     return result
 
 
-def allowlist():
+def env_allowlist():
+    """Только AUTH_ALLOWLIST из окружения (формат не менялся). Для первого администратора."""
     return parse_allowlist(os.environ.get("AUTH_ALLOWLIST", ""))
+
+
+def allowlist():
+    """env ∪ действующие приглашения из БД (FEAT-001 FR-001). Читается на каждом запросе — без перезапуска."""
+    result = {e: list(v) for e, v in env_allowlist().items()}
+    try:
+        invites = store().active_invites()
+    except RuntimeError:  # нет контекста приложения — только env
+        return result
+    for email, entries in invites.items():
+        merged = result.setdefault(email, [])
+        merged.extend(x for x in entries if x not in merged)
+    return result
 
 
 # ---------------------------------------------------------------------- OIDC
@@ -107,7 +121,12 @@ def current_user():
     uid = session.get("uid")
     if uid:
         user = store().user_by_id(uid)
-        if user and user["email"].lower() not in allowlist():
+        if user and user["blocked_at"]:
+            # блокировка действует со следующего запроса; сессия не стирается — после разблокировки доступ вернётся
+            audit("view", request.path, "deny", actor=user["email"], detail="user_blocked")
+            g.rbac_blocked = True
+            user = None
+        elif user and user["email"].lower() not in allowlist():
             # email убран из AUTH_ALLOWLIST — доступ отзывается на ближайшем же запросе
             audit("logout", request.path, "deny", actor=user["email"], detail="removed_from_allowlist")
             session.clear()
@@ -162,6 +181,14 @@ def _has_external_credential(kind):
     return kind == "link" and bool(request.args)
 
 
+def _blocked_response():
+    if _wants_html():
+        resp = current_app.make_response((render_template("access_blocked.html"), 403))
+        resp.headers["Cache-Control"] = "no-store"
+        return resp
+    return jsonify({"error": "Доступ приостановлен", "code": "user_blocked"}), 403
+
+
 def _deny(user, action, obj, why, status):
     audit(action, obj, "deny", actor=user["email"] if user else None, detail=why)
     if status == 401 and request.method == "GET" and "text/html" in request.headers.get("Accept", ""):
@@ -189,6 +216,9 @@ def _enforce(fn, roles, scope, external, args, kwargs):
         g.rbac_session_ok = True
         audit(action, obj, "allow", actor=user["email"], detail="case=%s roles=%s" % (case, ",".join(sorted(granted))))
         return fn(*args, **kwargs)
+    if g.get("rbac_blocked") and not (external and _has_external_credential(external)):
+        g.rbac_delegated = None
+        return _blocked_response()
     if g.get("rbac_revoked") and not (external and _has_external_credential(external)):
         g.rbac_delegated = None
         return jsonify({"error": "Доступ запрещён", "code": "removed_from_allowlist"}), 403
@@ -215,6 +245,58 @@ def unprotected_endpoints(app):
 def session_ok():
     """True, если запрос прошёл require_role по сессии (а не по Bearer/ссылке)."""
     return bool(g.get("rbac_session_ok"))
+
+
+# ------------------------------------------------- приглашения и блокировка (T-002)
+# Экранов админки здесь нет (T-003): это функции, которые она вызовет. Права вызывающего проверяет маршрут.
+def invite_user(email, role, scope="*", actor=None):
+    """Создаёт приглашение. ValueError — если данные неверны (в т.ч. founder без проекта). Возвращает id."""
+    try:
+        invite_id = store().create_invite(email, role, scope, invited_by=actor)
+    except ValueError as exc:
+        audit("invite", "access_invites", "deny", actor=actor, detail="%s %s" % (exc, mask_email(email)))
+        raise
+    audit("invite", "access_invites/%s" % invite_id, "allow", actor=actor,
+          detail="%s role=%s scope=%s" % (mask_email(email), role, scope or "*"))
+    return invite_id
+
+
+def revoke_invite(invite_id, actor=None):
+    """Отзывает приглашение. Роль, выданная им при входе, отзывается на следующем запросе пользователя,
+    если та же роль и область не даны ещё и через AUTH_ALLOWLIST или другое приглашение."""
+    inv = store().revoke_invite(invite_id)
+    if inv is None:
+        return False
+    email, entry = inv["email"].lower(), (inv["role"], inv["scope"])
+    if entry not in allowlist().get(email, []):
+        user = store().user_by_email(email)
+        if user:
+            store().revoke(user["id"], inv["role"], inv["scope"])
+    audit("invite_revoke", "access_invites/%s" % invite_id, "allow", actor=actor,
+          detail="%s role=%s scope=%s" % (mask_email(email), inv["role"], inv["scope"]))
+    return True
+
+
+def block_user(user_id, actor=None):
+    """Блокирует пользователя; себя заблокировать нельзя (FR-002). Возвращает False, если пользователя нет."""
+    user = store().user_by_id(user_id)
+    if user is None:
+        return False
+    if actor and actor.lower() == user["email"].lower():
+        audit("block", "users/%s" % user_id, "deny", actor=actor, detail="self_block")
+        raise ValueError("self_block")
+    store().block_user(user_id)
+    audit("block", "users/%s" % user_id, "allow", actor=actor, detail=mask_email(user["email"]))
+    return True
+
+
+def unblock_user(user_id, actor=None):
+    user = store().user_by_id(user_id)
+    if user is None:
+        return False
+    store().unblock_user(user_id)
+    audit("unblock", "users/%s" % user_id, "allow", actor=actor, detail=mask_email(user["email"]))
+    return True
 
 
 # ----------------------------------------------------------------------- routes
@@ -281,6 +363,11 @@ def callback():
             resp.headers["Cache-Control"] = "no-store"
             return resp
         return jsonify({"error": "Доступ запрещён", "code": "not_in_allowlist"}), 403
+    known = store().user_by_email(email)
+    if known and known["blocked_at"]:  # заблокированный не входит и не получает новых грантов
+        audit("login", "/auth/callback", "deny", actor=email, detail="user_blocked")
+        log.warning("auth: user_blocked %s", mask_email(email))
+        return _blocked_response()
     consent_row = _investor_consent_row()
     if consent_row is None:
         audit("login", "/auth/callback", "deny", actor=email, detail="pdn_consent_revoked")
