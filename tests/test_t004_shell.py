@@ -92,3 +92,13 @@ def test_html_404_403_401_in_russian_for_browser_json_for_api(env):
     anon = appmod.app.test_client()
     r = anon.get("/api/session/none", base_url=BASE, headers=HTML)
     assert r.status_code == 401 and r.is_json
+
+
+def test_feedback_box_hidden_by_default_on_profile_and_error_pages(env):
+    """Находка 3 ревью: .hidden определён в base.html, #fbBox скрыт на всех страницах оболочки."""
+    import re
+    c, _ = make_client(env, "f@example.test", [("founder", "VC-991")])
+    for path in ("/profile", "/net-takoj-stranicy"):
+        html = page(c, path).get_data(as_text=True)
+        assert ".hidden{display:none}" in html, path
+        assert re.search(r'<div id="fbBox" class="hidden"', html), path
