@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Пользователи — Nocvela{% endblock %}
+{% block style %}table{border-collapse:collapse;width:100%}td,th{text-align:left;padding:6px 10px 6px 0;border-bottom:1px solid #eee;font-size:14px}
+input,select{font:inherit;padding:8px;border:1px solid #bbb;border-radius:8px}.btn{font:inherit;padding:6px 12px;border:1px solid #bbb;border-radius:8px;background:#fff;cursor:pointer}
+form.inline{display:inline;margin:0}.ok{color:#070}{% endblock %}
+{% block content %}
+<div class="card" id="admin-users">
+<h1>Пользователи</h1>
+<p><a href="/admin/data/users">Данные</a></p>
+{% if error %}<p class="error" id="adminError">{{ error }}</p>{% endif %}
+{% if ok %}<p class="ok">Готово.</p>{% endif %}
+<form method="get" action="/admin/users">
+<input name="q" value="{{ q }}" placeholder="email или имя" maxlength="100">
+<select name="state"><option value="">все</option><option value="active"{% if state == 'active' %} selected{% endif %}>действующие</option><option value="blocked"{% if state == 'blocked' %} selected{% endif %}>заблокированные</option></select>
+<button class="btn" type="submit">Найти</button>
+</form>
+<h3>Пригласить</h3>
+<form method="post" action="/admin/users/invite">
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+<input name="email" type="email" placeholder="email" required>
+<select name="role">{% for code, label in roles %}<option value="{{ code }}">{{ label }}</option>{% endfor %}</select>
+<input name="scope" placeholder="проект, например VC-991 (для основателя обязательно)">
+<button class="btn" type="submit">Пригласить</button>
+</form>
+<h3>Пользователи</h3>
+<table>
+<tr><th>Email</th><th>Имя</th><th>Роли</th><th>Статус</th><th></th></tr>
+{% for u in users %}<tr><td>{{ u.email }}</td><td>{{ u.display_name }}</td><td>{{ u.roles }}</td>
+<td>{% if u.blocked_at %}заблокирован{% else %}действует{% endif %}</td>
+<td>{% if not u.is_me %}<form class="inline" method="post" action="/admin/users/{{ u.id }}/{{ 'unblock' if u.blocked_at else 'block' }}">
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn" type="submit">{{ 'Разблокировать' if u.blocked_at else 'Заблокировать' }}</button></form>{% endif %}</td></tr>
+{% else %}<tr><td colspan="5" class="muted">Никого не найдено</td></tr>{% endfor %}
+</table>
+<h3>Действующие приглашения</h3>
+<table>
+<tr><th>Email</th><th>Роль</th><th>Область</th><th>Создано</th><th></th></tr>
+{% for i in invites %}<tr><td>{{ i.email }}</td><td>{{ role_labels.get(i.role, i.role) }}</td><td>{{ i.scope }}</td><td>{{ i.created_at }}</td>
+<td><form class="inline" method="post" action="/admin/invites/{{ i.id }}/revoke"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn" type="submit">Отозвать</button></form></td></tr>
+{% else %}<tr><td colspan="5" class="muted">Приглашений нет</td></tr>{% endfor %}
+</table>
+</div>
+{% endblock %}

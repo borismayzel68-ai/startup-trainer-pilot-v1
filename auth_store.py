@@ -46,6 +46,11 @@ def utc_iso():
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
+def _like(q):
+    q = q.strip().lower().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return "%" + q + "%"
+
+
 class AuthStore:
     def __init__(self, database_url):
         self.url = database_url
@@ -174,6 +179,51 @@ class AuthStore:
 
     def unblock_user(self, user_id):
         self._run("UPDATE users SET blocked_at = NULL WHERE id = ?", (user_id,))
+
+    # ---- чтение для админки (FEAT-001 T-003) ------------------------------
+    def list_users(self, q=None, blocked=None):
+        """Пользователи с действующими грантами. q — подстрока email/имени; blocked: True/False/None (все)."""
+        sql = "SELECT id, email, display_name, blocked_at FROM users WHERE 1=1"
+        params = []
+        if q:
+            sql += " AND (lower(email) LIKE ? ESCAPE '\\' OR lower(display_name) LIKE ? ESCAPE '\\')"
+            params += [_like(q)] * 2
+        if blocked is True:
+            sql += " AND blocked_at IS NOT NULL"
+        elif blocked is False:
+            sql += " AND blocked_at IS NULL"
+        users = [self._user(r) for r in self._run(sql + " ORDER BY id", tuple(params), fetch=True)]
+        for u in users:
+            u["grants"] = self.active_grants(u["id"])
+        return users
+
+    def list_invites(self, q=None):
+        """Действующие приглашения (отозванные не показываются)."""
+        sql = ("SELECT id, email, role, scope, invited_by, created_at FROM access_invites WHERE revoked_at IS NULL")
+        params = ()
+        if q:
+            sql, params = sql + " AND lower(email) LIKE ? ESCAPE '\\'", (_like(q),)
+        keys = ("id", "email", "role", "scope", "invited_by", "created_at")
+        return [dict(zip(keys, (v if k == "id" or v is None else str(v) for k, v in zip(keys, r))))
+                for r in self._run(sql + " ORDER BY id", params, fetch=True)]
+
+    def count_active_owners(self, exclude_user_id=None):
+        """Незаблокированные пользователи с действующей ролью owner на все проекты."""
+        rows = self._run("SELECT count(DISTINCT u.id) FROM role_grants g JOIN users u ON u.id = g.user_id "
+                         "WHERE g.role_code = 'owner' AND g.scope = '*' AND g.revoked_at IS NULL "
+                         "AND u.blocked_at IS NULL AND u.id <> ?", (exclude_user_id or 0,), fetch=True)
+        return rows[0][0]
+
+    def data_rows(self, table, columns, q=None, limit=200):
+        """Только чтение. table/columns — из белого списка вызывающего (в SQL не попадает ввод пользователя);
+        q ищется по всем перечисленным столбцам как подстрока без учёта регистра."""
+        sql = "SELECT %s FROM %s" % (", ".join(columns), table)
+        params = []
+        if q:
+            sql += " WHERE " + " OR ".join("lower(CAST(%s AS TEXT)) LIKE ? ESCAPE '\\'" % c for c in columns)
+            params = [_like(q)] * len(columns)
+        sql += " ORDER BY 1 DESC LIMIT %d" % int(limit)
+        return [["" if v is None else str(v) for v in r] for r in self._run(sql, tuple(params), fetch=True)]
 
     # ---- audit ------------------------------------------------------------
     def audit(self, actor, action, obj, result, ip, detail=None):
