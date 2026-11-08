@@ -2,6 +2,9 @@
 
 Подробный handoff ведётся по задачам в `docs/handoff/<issue>.md`; здесь — только ссылки. При каждом коммите обновляется файл своей задачи (и эта таблица, если появилась новая задача).
 
+## Роль «Покупатель технологии» (buyer), #132 (Claude, ветка `feat/role-buyer`, 06.11)
+- Роль `buyer` заведена в коде (`ROLE_LABELS`, строка в `roles` в 001, ACCESS_MATRIX, FEAT-002 FR-004, seed, тесты). Ни одного рабочего маршрута — запрет по умолчанию. Схема не менялась. Подробно — [docs/handoff/132.md](docs/handoff/132.md). 07.11: влит master (T-002), конфликт был только в этом файле, обе записи сохранены.
+
 ## T-002 допуск по приглашениям из БД и блокировка, #114 (Claude, ветка `claude/issue-114-20261105-2024`, 05.11) — ВЫСОКИЙ РИСК
 - Миграция `db/migrations/007_access_invites.sql` (+ `down/007_access_invites.down.sql`): `access_invites` с `tenant_id` (TD-007), `users.blocked_at`. `auth_store.py`: DDL SQLite, `create_invite/revoke_invite/active_invites/block_user/unblock_user`; Postgres применяет 001 и 007 при старте (обе идемпотентны). `auth.py`: `allowlist()` = env ∪ приглашения; `blocked_at` проверяется в `current_user()` на каждом запросе; страница «Доступ приостановлен» (`templates/access_blocked.html`, JSON `user_blocked` для API); функции `invite_user/revoke_invite/block_user/unblock_user` с аудитом (почта замаскирована). Формат `AUTH_ALLOWLIST` и шлюзы не менялись. 15 новых тестов (`tests/test_t002_access_invites.py`); в `test_mig005_fund_view.py` в ожидаемый список добавлена 007. pytest: 760 passed, 7 skipped (`docs/handoff/114_T002_pytest.log`). Не сделано: админка (T-003), защита «последнего owner» (относится к экрану роли, T-003). Миграцию на стенде не применяли.
 

@@ -1,0 +1,4 @@
+$ python -m pytest -q   (после слияния origin/master, 07.11.2026)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+765 passed, 7 skipped, 1 warning, 35 subtests passed in 34.98s
