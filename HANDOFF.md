@@ -2,6 +2,9 @@
 
 Подробный handoff ведётся по задачам в `docs/handoff/<issue>.md`; здесь — только ссылки. При каждом коммите обновляется файл своей задачи (и эта таблица, если появилась новая задача).
 
+## T-004 оболочка кабинета, #114 (Claude, ветка `claude/issue-114-20261107-0751`, 07.11; 08.11 влит master с #133 buyer) — ВЫСОКИЙ РИСК (`auth.py`: `logout`; `app.py`: `/profile`, `after_request`)
+- `templates/base.html` (Nocvela · имя · роли · меню · Профиль · Сообщить о проблеме · Выйти; виджет обратной связи перенесён из `index.html`), `index.html` на нём. `GET /profile`, `POST /profile/revoke-consent` (свой email, сессия завершается, вход только после нового согласия). «Выйти» — форма `POST /auth/logout` с CSRF → 303 на `/auth/login`; для API прежний JSON. HTML-страницы 401/403/404 по-русски для перехода браузера (кроме `/api/*` и `/auth/*`), `no-store` для страниц под сессией. 8 тестов (`tests/test_t004_shell.py`), pytest: 770 passed, 7 skipped (`docs/handoff/114_T004_pytest.log`). Активная роль (T-005) и домашние страницы (T-006) не делались: в шапке перечень ролей. Формат сессии и шлюзы не менялись.
+
 ## Роль «Покупатель технологии» (buyer), #132 (Claude, ветка `feat/role-buyer`, 06.11)
 - Роль `buyer` заведена в коде (`ROLE_LABELS`, строка в `roles` в 001, ACCESS_MATRIX, FEAT-002 FR-004, seed, тесты). Ни одного рабочего маршрута — запрет по умолчанию. Схема не менялась. Подробно — [docs/handoff/132.md](docs/handoff/132.md). 07.11: влит master (T-002), конфликт был только в этом файле, обе записи сохранены.
 
@@ -299,3 +302,5 @@
 - Правка: только `test_founder_package.py` — `created_at`/`completed_at` от `datetime.now(timezone.utc)` (формат `%Y-%m-%dT%H:%M:%SZ`). Код приложения не менялся.
 - Поиск других бомб (`grep` по жёстким датам 2026): `tests/test_session_store.py` и `tests/test_delivery_worker.py` уже на относительных датах; остальные даты — входные данные без истечения по сроку хранения (`test_completion_event` с 26.09 проходит: от даты не зависит).
 - Полный прогон: 737 passed, 7 skipped, 35 subtests passed. Только синтетика.
+## T-004: правка по ревью (Claude, 07.11, Refs #114)
+- Стили `.hidden`/`.msg`/`.error` и формы «Сообщить о проблеме» — в `base.html` (дубль из `index.html` убран); тест на скрытый `#fbBox` для `/profile` и страницы 404. Follow-up по страницам без шапки (`snapshot`, sign-screen, `/consent`, `access_*`) — T-006/T-007, см. `docs/handoff/114.md`. `auth.py` не менялся.

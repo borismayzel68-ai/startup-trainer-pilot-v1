@@ -391,6 +391,10 @@ def callback():
 def logout():
     audit("logout", "/auth/logout", "allow", actor=current_user()["email"])
     session.clear()
+    if _wants_html():  # кнопка «Выйти» (форма) → страница входа; API-клиенты получают прежний JSON
+        resp = redirect("/auth/login", code=303)
+        resp.headers["Cache-Control"] = "no-store"
+        return resp
     return jsonify({"ok": True})
 
 
