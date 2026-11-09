@@ -97,6 +97,9 @@ app.register_blueprint(fund_bp)
 # MOS-4 (#55): портфель /portfolio; доступ — require_role из MOS-1 (owner/fund_staff/investor), scope проверяет сервис.
 from portfolio.blueprint import bp as portfolio_bp  # noqa: E402
 app.register_blueprint(portfolio_bp)
+# FEAT-001 T-003 (#114): админка пользователей и «Данные» (/admin/*), только owner; приглашения/блокировка — auth (T-002).
+from admin_users.blueprint import bp as admin_users_bp  # noqa: E402
+app.register_blueprint(admin_users_bp)
 # HQ-031 (#16): светофор S5 по форме HQ-030, только чтение синтетики (/s5/today). Таблиц не добавляет.
 from s5_monitor.blueprint import bp as s5_bp  # noqa: E402
 app.register_blueprint(s5_bp)
@@ -323,7 +326,8 @@ def _shell_context():
         return {}
     roles = sorted({r for r, _ in user["grants"]})
     labels = ", ".join(ROLE_LABELS.get(r, r) for r in roles)
-    return {"shell_user": {"name": user["display_name"] or user["email"], "email": user["email"], "roles": labels}}
+    return {"shell_user": {"name": user["display_name"] or user["email"], "email": user["email"], "roles": labels,
+                           "is_owner": any(r == "owner" and sc == "*" for r, sc in user["grants"])}}
 
 
 @app.get("/")

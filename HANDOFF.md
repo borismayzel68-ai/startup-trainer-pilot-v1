@@ -304,3 +304,10 @@
 - Полный прогон: 737 passed, 7 skipped, 35 subtests passed. Только синтетика.
 ## T-004: правка по ревью (Claude, 07.11, Refs #114)
 - Стили `.hidden`/`.msg`/`.error` и формы «Сообщить о проблеме» — в `base.html` (дубль из `index.html` убран); тест на скрытый `#fbBox` для `/profile` и страницы 404. Follow-up по страницам без шапки (`snapshot`, sign-screen, `/consent`, `access_*`) — T-006/T-007, см. `docs/handoff/114.md`. `auth.py` не менялся.
+
+## T-003 (08.11): админка пользователей и «Данные» (Claude, Refs #114)
+- Что: blueprint `admin_users/` (`/admin/users`, `/admin/users/invite`, `/admin/users/<id>/block|unblock`, `/admin/invites/<id>/revoke`, `/admin/data/<table>`), только owner на все проекты; страницы на `base.html`, ссылка «Пользователи» в шапке для owner. Функции T-002 вызываются как есть; в хранилище добавлено только чтение (`list_users`, `list_invites`, `count_active_owners`, `data_rows`). Схема, `auth.py`, `AUTH_ALLOWLIST`, шлюзы не менялись.
+- «Данные»: белый список таблиц и столбцов (users, role_grants, access_invites, audit_log), только GET, поиск по подстроке; ip, токенов, хэшей, секретов нет.
+- Проверка: `python -m pytest -q` → 803 passed, 7 skipped (`docs/handoff/114_T003_pytest.log`). JS/вид страниц в браузере не проверялись (формы без JS).
+- Риск: высокий (`app.py` — защищённый путь REVIEW.md §3, регистрация blueprint и контекст шапки). Откат: `git revert` коммита, миграций нет.
+- Открыто: смена роли существующему пользователю в T-003 не делалась (нет в API-004…008; роль даётся приглашением); защита «последнего owner» срабатывает только при блокировке (до смены роли — отдельно).

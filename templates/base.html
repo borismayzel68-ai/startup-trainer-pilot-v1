@@ -35,7 +35,8 @@ window.fetch=function(u,o){o=o||{};if((o.method||"GET").toUpperCase()!=="GET"){o
 <span class="who">{{ shell_user.name }} · {{ shell_user.roles }}</span>
 <nav aria-label="Меню">
 <a href="/">Тренажёр</a>
-<a href="/profile">Профиль</a>
+{% if shell_user.is_owner %}<a href="/admin/users">Пользователи</a>
+{% endif %}<a href="/profile">Профиль</a>
 <a href="#" id="fbLink">Сообщить о проблеме</a>
 </nav>
 <form method="post" action="/auth/logout">

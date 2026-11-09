@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Данные — Nocvela{% endblock %}
+{% block style %}table{border-collapse:collapse;width:100%}td,th{text-align:left;padding:6px 10px 6px 0;border-bottom:1px solid #eee;font-size:13px;word-break:break-word}
+input{font:inherit;padding:8px;border:1px solid #bbb;border-radius:8px}.btn{font:inherit;padding:6px 12px;border:1px solid #bbb;border-radius:8px;background:#fff;cursor:pointer}{% endblock %}
+{% block content %}
+<div class="card" id="admin-data">
+<h1>Данные: {{ title }}</h1>
+<p><a href="/admin/users">Пользователи</a>{% for t, label in tables %} · {% if t == table %}<b>{{ label }}</b>{% else %}<a href="/admin/data/{{ t }}">{{ label }}</a>{% endif %}{% endfor %}</p>
+<p class="muted">Только чтение. Показано не более 200 последних записей.</p>
+<form method="get" action="/admin/data/{{ table }}"><input name="q" value="{{ q }}" placeholder="поиск" maxlength="100"> <button class="btn" type="submit">Найти</button></form>
+<table>
+<tr>{% for c in columns %}<th>{{ c }}</th>{% endfor %}</tr>
+{% for r in rows %}<tr>{% for v in r %}<td>{{ v }}</td>{% endfor %}</tr>{% else %}<tr><td colspan="{{ columns|length }}" class="muted">Записей нет</td></tr>{% endfor %}
+</table>
+</div>
+{% endblock %}
