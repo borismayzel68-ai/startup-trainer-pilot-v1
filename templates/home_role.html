@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}Nocvela{% endblock %}
+{% block content %}
+<div class="card">
+<h1>Добро пожаловать</h1>
+<p>Вы вошли как: {{ shell_user.roles }}.</p>
+<p class="muted">Сценарий проверки готовности стартапа предназначен для основателя. Для вашей роли в меню показаны доступные разделы; «Профиль» открыт всегда.</p>
+</div>
+{% endblock %}

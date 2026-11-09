@@ -2,6 +2,9 @@
 
 Подробный handoff ведётся по задачам в `docs/handoff/<issue>.md`; здесь — только ссылки. При каждом коммите обновляется файл своей задачи (и эта таблица, если появилась новая задача).
 
+## T-203 стартовая страница и меню по роли, #114 / FEAT-002 (Claude, ветка `claude/issue-114-20261109-1031`, 09.11) — ВЫСОКИЙ РИСК (`app.py`)
+- `shell_menu.py` (таблица роль → пункты, источник — строки ACCESS_MATRIX), меню в `base.html`, `GET /` по роли (`home_role.html` для ролей без сценария основателя). 22 теста (`tests/test_t203_role_menu.py`), pytest: 1003 passed, 7 skipped (`docs/handoff/114_T203_pytest.log`). Q-002 не решён: выбора кабинета нет. Подробно — `docs/handoff/114.md`.
+
 ## T-004 оболочка кабинета, #114 (Claude, ветка `claude/issue-114-20261107-0751`, 07.11; 08.11 влит master с #133 buyer) — ВЫСОКИЙ РИСК (`auth.py`: `logout`; `app.py`: `/profile`, `after_request`)
 - `templates/base.html` (Nocvela · имя · роли · меню · Профиль · Сообщить о проблеме · Выйти; виджет обратной связи перенесён из `index.html`), `index.html` на нём. `GET /profile`, `POST /profile/revoke-consent` (свой email, сессия завершается, вход только после нового согласия). «Выйти» — форма `POST /auth/logout` с CSRF → 303 на `/auth/login`; для API прежний JSON. HTML-страницы 401/403/404 по-русски для перехода браузера (кроме `/api/*` и `/auth/*`), `no-store` для страниц под сессией. 8 тестов (`tests/test_t004_shell.py`), pytest: 770 passed, 7 skipped (`docs/handoff/114_T004_pytest.log`). Активная роль (T-005) и домашние страницы (T-006) не делались: в шапке перечень ролей. Формат сессии и шлюзы не менялись.
 
