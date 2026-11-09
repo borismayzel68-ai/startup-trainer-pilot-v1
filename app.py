@@ -327,13 +327,50 @@ def _shell_context():
     roles = sorted({r for r, _ in user["grants"]})
     labels = ", ".join(ROLE_LABELS.get(r, r) for r in roles)
     return {"shell_user": {"name": user["display_name"] or user["email"], "email": user["email"], "roles": labels,
-                           "is_owner": any(r == "owner" and sc == "*" for r, sc in user["grants"])}}
+                           "is_owner": any(r == "owner" and sc == "*" for r, sc in user["grants"]),
+                           "can_train": any(r in ("owner", "founder") for r, _ in user["grants"])}}
 
 
 @app.get("/")
 @require_role(ANY_ROLE)
 def home():
     return render_template("index.html", csrf_token=auth.csrf_token())
+
+
+@app.get("/cabinet")
+@require_role(ANY_ROLE)
+def role_cabinet():
+    """FEAT-002: безопасная стартовая страница назначенных ролей без изменения прав."""
+    user = auth.current_user()
+    sections = []
+    # Ссылки видны только для существующих грантов; каждое действие всё равно
+    # повторно проверяется require_role и областью доступа целевого маршрута.
+    for role, scope in sorted(user["grants"]):
+        links = []
+        if role in ("owner", "founder"):
+            links.append(("Тренажёр основателя", "/"))
+        if role == "owner" and scope == "*":
+            links.extend([("Пользователи", "/admin/users"),
+                          ("Портфель", "/portfolio"),
+                          ("Сводка S5 (учебные данные)", "/s5/today")])
+        elif role == "fund_staff":
+            links.append(("Сводка S5 (учебные данные)", "/s5/today"))
+            if scope == "*":
+                links.append(("Портфель", "/portfolio"))
+        elif role == "investor":
+            links.extend([("Портфель (только разрешённые объекты)", "/portfolio"),
+                          ("Сводка S5 (учебные данные)", "/s5/today")])
+        sections.append({
+            "name": ROLE_LABELS.get(role, role),
+            "scope": "Все разрешённые объекты" if scope == "*" else scope,
+            "links": links,
+            "available": bool(links),
+        })
+    response = app.make_response(render_template(
+        "role_cabinet.html", sections=sections, csrf_token=auth.csrf_token()
+    ))
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @app.get("/profile")
