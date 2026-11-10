@@ -23,6 +23,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 import auth
 from auth import require_role, public, ANY_ROLE, STAFF_ROLES
 from auth_store import ROLE_LABELS
+from shell_menu import menu_for, shows_trainer
 from pdn_consent.blueprint import bp as consent_bp
 from pdn_consent.store import PdnConsentStore
 from s3_expert.blueprint import bp as s3_bp
@@ -327,12 +328,16 @@ def _shell_context():
     roles = sorted({r for r, _ in user["grants"]})
     labels = ", ".join(ROLE_LABELS.get(r, r) for r in roles)
     return {"shell_user": {"name": user["display_name"] or user["email"], "email": user["email"], "roles": labels,
-                           "is_owner": any(r == "owner" and sc == "*" for r, sc in user["grants"])}}
+                           "is_owner": any(r == "owner" and sc == "*" for r, sc in user["grants"]),
+                           "menu": menu_for(user["grants"])}}
 
 
 @app.get("/")
 @require_role(ANY_ROLE)
 def home():
+    user = auth.current_user()
+    if user and not shows_trainer(user["grants"]):  # T-203: сценарий основателя другим ролям не показываем
+        return render_template("home_role.html", csrf_token=auth.csrf_token())
     return render_template("index.html", csrf_token=auth.csrf_token())
 
 
