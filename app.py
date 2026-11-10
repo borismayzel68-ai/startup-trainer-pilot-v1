@@ -23,6 +23,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 import auth
 from auth import require_role, public, ANY_ROLE, STAFF_ROLES
 from auth_store import ROLE_LABELS
+from shell_menu import menu_for, shows_trainer
 from pdn_consent.blueprint import bp as consent_bp
 from pdn_consent.store import PdnConsentStore
 from s3_expert.blueprint import bp as s3_bp
@@ -328,41 +329,33 @@ def _shell_context():
     labels = ", ".join(ROLE_LABELS.get(r, r) for r in roles)
     return {"shell_user": {"name": user["display_name"] or user["email"], "email": user["email"], "roles": labels,
                            "is_owner": any(r == "owner" and sc == "*" for r, sc in user["grants"]),
-                           "can_train": any(r in ("owner", "founder") for r, _ in user["grants"])}}
+                           "menu": menu_for(user["grants"])}}
 
 
 @app.get("/")
 @require_role(ANY_ROLE)
 def home():
+    user = auth.current_user()
+    if user and not shows_trainer(user["grants"]):  # T-203: сценарий основателя другим ролям не показываем
+        return render_template("home_role.html", csrf_token=auth.csrf_token())
     return render_template("index.html", csrf_token=auth.csrf_token())
 
 
 @app.get("/cabinet")
 @require_role(ANY_ROLE)
 def role_cabinet():
-    """FEAT-002: безопасная стартовая страница назначенных ролей без изменения прав."""
+    """FEAT-002: области доступа по ролям. Ссылки — только из shell_menu.MENU (единый источник); права не выдаёт."""
     user = auth.current_user()
+    by_role = {}
+    for role, scope in user["grants"]:
+        by_role.setdefault(role, []).append(scope)
     sections = []
-    # Ссылки видны только для существующих грантов; каждое действие всё равно
-    # повторно проверяется require_role и областью доступа целевого маршрута.
-    for role, scope in sorted(user["grants"]):
-        links = []
-        if role in ("owner", "founder"):
-            links.append(("Тренажёр основателя", "/"))
-        if role == "owner" and scope == "*":
-            links.extend([("Пользователи", "/admin/users"),
-                          ("Портфель", "/portfolio"),
-                          ("Сводка S5 (учебные данные)", "/s5/today")])
-        elif role == "fund_staff":
-            links.append(("Сводка S5 (учебные данные)", "/s5/today"))
-            if scope == "*":
-                links.append(("Портфель", "/portfolio"))
-        elif role == "investor":
-            links.extend([("Портфель (только разрешённые объекты)", "/portfolio"),
-                          ("Сводка S5 (учебные данные)", "/s5/today")])
+    for role in sorted(by_role):  # одна карточка на роль, области нескольких грантов объединены
+        scopes = sorted(set(by_role[role]))
+        links = [(i["label"], i["href"]) for i in menu_for([(role, sc) for sc in scopes])]
         sections.append({
             "name": ROLE_LABELS.get(role, role),
-            "scope": "Все разрешённые объекты" if scope == "*" else scope,
+            "scope": ", ".join("все разрешённые объекты" if sc == "*" else sc for sc in scopes),
             "links": links,
             "available": bool(links),
         })

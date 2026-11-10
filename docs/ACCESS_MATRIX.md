@@ -35,7 +35,7 @@ owner (Владелец фонда), fund_staff (Сотрудник фонда),
 | `/auth/login`, `/auth/callback` | GET | публичный | — | — |
 | `/auth/me`, `/auth/logout` | GET, POST | любая роль | любой грант | — |
 | `/` | GET | любая роль | любой грант | — |
-| `/cabinet` | GET | любая назначенная роль | любой действующий грант | — (только отображение разрешённых ссылок, целевой маршрут проверяет права повторно) |
+| `/cabinet` | GET | любая назначенная роль | любой действующий грант | — (области доступа по ролям; ссылки только из `shell_menu.MENU`, без JSON-адресов; целевой маршрут проверяет права повторно) |
 | `/api/start` | POST | founder, owner | ID кейса (`project_id`) или `*` | — |
 | `/api/session/<sid>` | GET | founder, investor, fund_staff, owner | кейс сессии или `*` | secret |
 | `/api/session/<sid>/report.md`, `/report.json` | GET | founder, investor, fund_staff, owner | кейс сессии или `*` | secret |

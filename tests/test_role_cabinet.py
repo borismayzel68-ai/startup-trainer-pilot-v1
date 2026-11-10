@@ -1,91 +1,76 @@
-"""FEAT-002: кабинет показывает только существующие назначения и безопасную навигацию."""
-import os
+"""FEAT-002: /cabinet — области доступа по ролям; ссылки только из shell_menu.MENU. Только синтетика."""
+import re
+
 import pytest
 
-os.environ.setdefault("OPENAI_API_KEY", "test-key")
-os.environ.setdefault("INVITE_CODE", "PILOT-S1-EXT-001")
-os.environ.setdefault("SESSION_DATABASE_URL", "sqlite:///:memory:")
-import app as appmod  # noqa: E402
-from auth_store import AuthStore  # noqa: E402
+from auth_store import ROLE_LABELS
+from shell_menu import menu_for
+from test_auth import BASE, appmod, env, make_client  # noqa: F401  (env — фикстура)
 
 pytestmark = pytest.mark.auth_enforced
-BASE = "https://localhost"
+HTML = {"Accept": "text/html"}
+NAV = re.compile(r'<nav aria-label="Доступные[^>]*>.*?</nav>', re.S)
 
 
-@pytest.fixture
-def store(monkeypatch):
-    monkeypatch.setenv("AUTH_ALLOWLIST", "")
-    previous = appmod.app.extensions["auth_store"]
-    fresh = AuthStore("sqlite:///:memory:")
-    appmod.app.extensions["auth_store"] = fresh
-    appmod.app.testing = True
-    yield fresh
-    appmod.app.extensions["auth_store"] = previous
+def _page(c):
+    r = c.get("/cabinet", base_url=BASE, headers=HTML)
+    assert r.status_code == 200
+    assert r.headers["Cache-Control"] == "no-store"
+    return r.get_data(as_text=True)
 
 
-def client_with(store, role, scope="*"):
-    email = "cabinet-" + role + "@example.test"
-    # Исключаем случайные отказы в require_role из-за отсутствия в allowlist.
-    os.environ["AUTH_ALLOWLIST"] += ("," if os.environ["AUTH_ALLOWLIST"] else "") + email + ":" + role + ":" + scope
-    user = store.upsert_user(email, "Synthetic Cabinet")
-    store.ensure_grant(user["id"], role, scope)
-    client = appmod.app.test_client()
-    with client.session_transaction() as sess:
-        sess["uid"] = user["id"]
-        sess["csrf"] = "cabinet-csrf"
-    return client
+def _links(page):
+    main = page.split("<main>", 1)[1]
+    return re.findall(r'href="([^"]*)"', "".join(NAV.findall(main)))
 
 
-def test_cabinet_requires_login(store):
-    response = appmod.app.test_client().get("/cabinet", base_url=BASE)
-    assert response.status_code == 401
+def test_cabinet_requires_login(env):
+    assert appmod.app.test_client().get("/cabinet", base_url=BASE).status_code == 401
 
 
-@pytest.mark.parametrize("role", [
-    "founder", "investor", "fund_staff", "owner",
-    "expert", "signer", "clinic", "syndicator", "buyer",
-])
-def test_cabinet_accessible_for_current_grant(store, role):
-    client = client_with(store, role)
-    response = client.get("/cabinet", base_url=BASE)
-    assert response.status_code == 200
-    assert "Мой рабочий кабинет" in response.get_data(as_text=True)
-    assert response.headers["Cache-Control"] == "no-store"
+@pytest.mark.parametrize("role", sorted(ROLE_LABELS))
+def test_cabinet_links_equal_menu_and_open_as_html(env, role):
+    c, _ = make_client(env, "cab-%s@example.test" % role, [(role, "*")])
+    page = _page(c)
+    expected = [i["href"] for i in menu_for([(role, "*")])]
+    assert _links(page) == expected, role
+    for href in expected:
+        r = c.get(href, base_url=BASE, headers=HTML)
+        assert r.status_code == 200 and r.mimetype == "text/html", (role, href)
+    if not expected:
+        assert "пока не подключены" in page
 
 
-def test_founder_only_sees_trainer_not_fund_or_admin(store):
-    response = client_with(store, "founder", "VC-SYNTH").get("/cabinet", base_url=BASE)
-    page = response.get_data(as_text=True)
-    assert "Тренажёр основателя" in page
-    assert 'href="/admin/users"' not in page
-    assert 'href="/portfolio"' not in page
-    assert "VC-SYNTH" in page
+@pytest.mark.parametrize("role", sorted(ROLE_LABELS))
+def test_no_json_links(env, role):
+    c, _ = make_client(env, "cabj-%s@example.test" % role, [(role, "*")])
+    page = _page(c)
+    for bad in ("/portfolio", "/s5/today", "/s1/jobs", "/s1/tasks", "/admin/audit"):
+        assert 'href="%s"' % bad not in page, (role, bad)
 
 
-def test_investor_has_read_only_links_and_not_admin(store):
-    response = client_with(store, "investor", "VC-SYNTH").get("/cabinet", base_url=BASE)
-    page = response.get_data(as_text=True)
-    assert 'href="/portfolio"' in page
-    assert 'href="/s5/today"' in page
-    assert 'href="/admin/users"' not in page
-    assert "Тренажёр основателя" not in page
+def test_scoped_owner_has_no_admin_links(env):
+    c, _ = make_client(env, "cab-so@example.test", [("owner", "VC-SYNTH")])
+    page = _page(c)
+    assert "/admin/users" not in page and "VC-SYNTH" in page
 
 
-def test_scoped_staff_does_not_offer_global_portfolio(store):
-    response = client_with(store, "fund_staff", "CASE-SYNTH").get("/cabinet", base_url=BASE)
-    page = response.get_data(as_text=True)
-    assert 'href="/portfolio"' not in page
-    assert 'href="/s5/today"' in page
+def test_multi_grant_same_role_single_card(env):
+    c, _ = make_client(env, "cab-multi@example.test", [("fund_staff", "VC-991"), ("fund_staff", "VC-992")])
+    page = _page(c)
+    assert page.count("<section") == 1
+    assert "VC-991" in page and "VC-992" in page
 
 
-def test_unimplemented_role_does_not_claim_working_functions(store):
-    response = client_with(store, "expert").get("/cabinet", base_url=BASE)
-    page = response.get_data(as_text=True)
-    assert "пока не подключены" in page
-    assert 'href="/portfolio"' not in page
-    assert 'href="/admin/users"' not in page
+def test_multi_role_one_card_per_role_and_q002_note(env):
+    c, _ = make_client(env, "cab-mr@example.test",
+                       [("founder", "VC-991"), ("investor", "VC-992"), ("founder", "VC-993")])
+    page = _page(c)
+    assert page.count("<section") == 2
+    assert "Q-002" in page and "нужно решение" in page.lower()
 
 
-def test_owner_global_has_admin_link(store):
-    response = client_with(store, "owner").get("/cabinet", base_url=BASE)
-    assert 'href="/admin/users"' in response.get_data(as_text=True)
+def test_header_has_no_cabinet_link_for_roles_outside_menu(env):
+    c, _ = make_client(env, "cab-inv@example.test", [("investor", "*")])
+    head = c.get("/", base_url=BASE, headers=HTML).get_data(as_text=True).split("</nav>")[0]
+    assert 'href="/cabinet"' not in head
