@@ -322,3 +322,9 @@
 - Что: `tests/test_t202_role_route_matrix.py` — параметризация 9 ролей (`ROLE_LABELS`, с `buyer`) × 16 маршрутов (разрешено / 403 + deny в журнале / 401 без входа), ссылки шапки не ведут на 403, «Пользователи» только у owner. У каждой строки источник — строка `ACCESS_MATRIX.md`. Только тест: код, шаблоны, `auth.py`, `app.py`, матрица не менялись.
 - Расхождений матрицы с кодом в проверенных строках нет; в матрице отсутствуют `/profile`, `/profile/revoke-consent`, `/admin/users*`, `/admin/invites/*`, `/admin/data*` — ожидание из кода, матрицу обновляет T-008. Права шире матрицы не найдены, `xfail` нет.
 - Проверка: `python -m pytest -q` → 981 passed, 7 skipped (`docs/handoff/114_T202_pytest.log`). Риск низкий, откат: `git revert`.
+
+## T-205 (FEAT-002, 10.11): 4 кабинета — ВЫСОКИЙ РИСК (`app.py`: данные в шаблон на `/` и `/cabinet`) (Claude, Refs #114, #137)
+- Выбор кабинета: `GET /` по роли (investor, fund_staff — блоки на `home_role.html`; founder — тренажёр как раньше), owner — блок «Ожидают решения» на `/cabinet` + пункт меню «Кабинет владельца». Остальные роли — `/cabinet` из #138 без изменений.
+- Новых адресов данных, прав, `auth.py`, схемы нет. Блоки — текст и области из собственных грантов (`shell_menu.cabinet_blocks`, `templates/_cabinet_blocks.html`).
+- Вопрос в PR: разделы S1/S6/S2/S5/портфель отдают JSON, поэтому названы текстом без ссылок (см. T-203, DoD T-004). Нужны HTML-страницы (новые адреса) или решение показывать JSON.
+- Тесты `tests/test_t205_cabinets.py` (16); в `test_t203_role_menu.py` ожидание меню owner дополнено «/cabinet». Лог: `114_T205_pytest.log` → 1043 passed, 7 skipped.

@@ -1,10 +1,15 @@
 {% extends "base.html" %}
 {% block title %}Nocvela{% endblock %}
+{% block style %}
+.role-card{border:1px solid #ddd;border-radius:12px;padding:16px;margin:16px 0;background:#fff}
+.role-meta{color:#555}.notice{background:#f5f5f5;padding:12px;border-radius:9px}
+{% endblock %}
 {% block content %}
 <div class="card">
 <h1>Добро пожаловать</h1>
 <p>Вы вошли как: {{ shell_user.roles }}.</p>
 <p class="muted">Сценарий проверки готовности стартапа предназначен для основателя. Для вашей роли в меню показаны доступные разделы; «Профиль» открыт всегда.</p>
+{% include "_cabinet_blocks.html" %}
 <p><a href="/cabinet">Области доступа по ролям</a></p>
 </div>
 {% endblock %}

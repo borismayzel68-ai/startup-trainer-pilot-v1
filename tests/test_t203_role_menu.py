@@ -19,7 +19,7 @@ OWNER_ONLY = ["/admin/users", "/admin/sessions"]  # ACCESS_MATRIX.md:45 (session
 # роль -> пункты меню (кроме «Профиль», он у всех: ACCESS_MATRIX.md:36-37, любая роль)
 EXPECTED = {r: [] for r in ROLE_LABELS}
 EXPECTED["founder"] = TRAINER
-EXPECTED["owner"] = TRAINER + OWNER_ONLY
+EXPECTED["owner"] = TRAINER + ["/cabinet"] + OWNER_ONLY  # T-205: «Кабинет владельца»
 
 
 def _items(c):
@@ -65,12 +65,12 @@ def test_multi_role_menu_is_union(env):
     assert items == TRAINER
     c2, _ = make_client(env, "t203multi2@example.test", [("founder", "VC-991"), ("owner", "*")])
     _, items2 = _items(c2)
-    assert items2 == TRAINER + OWNER_ONLY
+    assert items2 == EXPECTED["owner"]
 
 
 def test_owner_with_case_scope_gets_no_star_only_items(env):
     """Матрица: «только *» — owner с грантом на один проект не видит админские пункты (иначе 403)."""
     c, _ = make_client(env, "t203scope@example.test", [("owner", "VC-991")])
     _, items = _items(c)
-    assert items == TRAINER
+    assert items == TRAINER + ["/cabinet"]  # T-205: кабинет открыт любой роли
     assert c.get("/admin/users", base_url=BASE, headers=HTML).status_code == 403
