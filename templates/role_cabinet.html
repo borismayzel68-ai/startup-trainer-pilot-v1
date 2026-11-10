@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Рабочий кабинет — Nocvela{% endblock %}
+{% block style %}
+.role-card{border:1px solid #ddd;border-radius:12px;padding:16px;margin:16px 0;background:#fff}
+.role-card ul{list-style:none;padding:0}.role-card li{margin:10px 0}
+.role-card a{display:inline-block;padding:9px 12px;border:1px solid #ccc;border-radius:9px;color:#111;text-decoration:none}
+.role-card a:hover,.role-card a:focus{background:#eee;text-decoration:underline}
+.role-meta{color:#555}.notice{background:#f5f5f5;padding:12px;border-radius:9px}
+{% endblock %}
+{% block content %}
+<main>
+<h1>Мой рабочий кабинет</h1>
+<p>Здесь показаны только ваши назначенные роли и доступные рабочие разделы. Права проверяются повторно при открытии каждого раздела.</p>
+{% for section in sections %}
+<section class="role-card" aria-label="{{ section.name }}">
+<h2>{{ section.name }}</h2>
+<p class="role-meta">Область доступа: {{ section.scope }}</p>
+{% if section.available %}
+<nav aria-label="Доступные действия роли {{ section.name }}">
+<ul>{% for label,url in section.links %}
+<li><a href="{{ url }}">{{ label }}</a></li>
+{% endfor %}</ul>
+</nav>
+{% else %}
+<p class="notice">Рабочие действия для этой роли пока не подключены. Новые полномочия не выдаются автоматически.</p>
+{% endif %}
+</section>
+{% endfor %}
+<p class="muted">Нужно решение (Q-002): выбор активной роли не реализован, показаны все назначенные роли сразу.</p>
+<p class="muted">Сведения о проектах, заданиях и результатах доступны только через соответствующие разрешённые разделы. Отсутствующие данные не считаются выполненной работой.</p>
+<p><a href="/profile">Проверить назначения и согласия</a></p>
+</main>
+{% endblock %}

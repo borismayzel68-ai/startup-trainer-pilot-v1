@@ -341,6 +341,31 @@ def home():
     return render_template("index.html", csrf_token=auth.csrf_token())
 
 
+@app.get("/cabinet")
+@require_role(ANY_ROLE)
+def role_cabinet():
+    """FEAT-002: области доступа по ролям. Ссылки — только из shell_menu.MENU (единый источник); права не выдаёт."""
+    user = auth.current_user()
+    by_role = {}
+    for role, scope in user["grants"]:
+        by_role.setdefault(role, []).append(scope)
+    sections = []
+    for role in sorted(by_role):  # одна карточка на роль, области нескольких грантов объединены
+        scopes = sorted(set(by_role[role]))
+        links = [(i["label"], i["href"]) for i in menu_for([(role, sc) for sc in scopes])]
+        sections.append({
+            "name": ROLE_LABELS.get(role, role),
+            "scope": ", ".join("все разрешённые объекты" if sc == "*" else sc for sc in scopes),
+            "links": links,
+            "available": bool(links),
+        })
+    response = app.make_response(render_template(
+        "role_cabinet.html", sections=sections, csrf_token=auth.csrf_token()
+    ))
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
 @app.get("/profile")
 @require_role(ANY_ROLE)
 def profile():
