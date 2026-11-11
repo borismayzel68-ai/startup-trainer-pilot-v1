@@ -23,7 +23,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 import auth
 from auth import require_role, public, ANY_ROLE, STAFF_ROLES
 from auth_store import ROLE_LABELS
-from shell_menu import menu_for, shows_trainer
+from shell_menu import menu_for, shows_trainer, cabinet_blocks
 from pdn_consent.blueprint import bp as consent_bp
 from pdn_consent.store import PdnConsentStore
 from s3_expert.blueprint import bp as s3_bp
@@ -337,7 +337,8 @@ def _shell_context():
 def home():
     user = auth.current_user()
     if user and not shows_trainer(user["grants"]):  # T-203: сценарий основателя другим ролям не показываем
-        return render_template("home_role.html", csrf_token=auth.csrf_token())
+        return render_template("home_role.html", csrf_token=auth.csrf_token(),
+                               blocks=cabinet_blocks(user["grants"], ("investor", "fund_staff")))
     return render_template("index.html", csrf_token=auth.csrf_token())
 
 
@@ -360,7 +361,8 @@ def role_cabinet():
             "available": bool(links),
         })
     response = app.make_response(render_template(
-        "role_cabinet.html", sections=sections, csrf_token=auth.csrf_token()
+        "role_cabinet.html", sections=sections, csrf_token=auth.csrf_token(),
+        blocks=cabinet_blocks(user["grants"], ("owner",))
     ))
     response.headers["Cache-Control"] = "no-store"
     return response
