@@ -55,7 +55,7 @@ ul{padding-left:22px}
 <p><label>Pitch deck, PDF (необязательно)</label><input id="deck" type="file" accept="application/pdf"></p>
 <p><label><input id="consent" type="checkbox" style="width:auto"> Я согласен на обработку материалов для этого закрытого пилота и не загружаю персональные медицинские данные пациентов.</label></p>
 <p id="startErr" class="error" role="alert"></p>
-<button onclick="startSession()">Начать</button>
+<button id="startBtn" onclick="startSession()">Начать</button>
 </div>
 <div id="chat" class="card hidden">
 <div id="progress" class="muted"></div>
@@ -86,34 +86,44 @@ let sid=null, state=null;
     if(own.length===1&&!isOwner){ const f=document.getElementById('projectId'); f.value=own[0]; f.readOnly=true; }
   }catch(e){}
 })();
+let startBusy=false;
+const START_FAIL='Не удалось отправить, попробуйте ещё раз';
 async function startSession(){
-  document.getElementById('startErr').textContent='';
-  const fd=new FormData();
-  fd.append('project_id',document.getElementById('projectId').value);
-  fd.append('project_name',document.getElementById('project').value);
-  fd.append('founder_name',document.getElementById('founderName').value);
-  fd.append('founder_email',document.getElementById('founderEmail').value);
-  fd.append('jurisdiction',document.getElementById('jurisdiction').value);
-  fd.append('target_markets',document.getElementById('targetMarkets').value);
-  fd.append('intended_use',document.getElementById('intendedUse').value);
-  fd.append('product_class',document.getElementById('productClass').value);
-  fd.append('stage',document.getElementById('stage').value);
-  fd.append('user',document.getElementById('userRole').value);
-  fd.append('buyer',document.getElementById('buyer').value);
-  fd.append('payer',document.getElementById('payer').value);
-  fd.append('mode',document.getElementById('mode').value);
-  fd.append('hypothesis_a',document.getElementById('ha').value);
-  fd.append('hypothesis_b',document.getElementById('hb').value);
-  fd.append('description',document.getElementById('desc').value);
-  fd.append('consent',document.getElementById('consent').checked?'true':'false');
-  const f=document.getElementById('deck').files[0]; if(f) fd.append('deck',f);
-  const err=document.getElementById('startErr');
-  let r,j={};
-  try{ r=await fetch('/api/start',{method:'POST',body:fd}); }
-  catch(e){ err.textContent='Нет связи с сервером. Проверьте интернет и повторите.'; return; }
-  try{ j=await r.json(); }catch(e){ j={}; }
-  if(!r.ok){ err.textContent=j.error||('Ошибка '+r.status+'. Повторите или сообщите администратору.'); return; }
-  sid=j.id; state=j; document.getElementById('start').classList.add('hidden'); document.getElementById('chat').classList.remove('hidden'); renderState();
+  if(startBusy) return;  // T-302: повторный клик до ответа запроса не создаёт
+  const btn=document.getElementById('startBtn'), err=document.getElementById('startErr');
+  const label=btn.textContent;
+  startBusy=true; btn.disabled=true; btn.textContent='Отправляем…'; err.textContent='';
+  try{
+    const fd=new FormData();
+    fd.append('project_id',document.getElementById('projectId').value);
+    fd.append('project_name',document.getElementById('project').value);
+    fd.append('founder_name',document.getElementById('founderName').value);
+    fd.append('founder_email',document.getElementById('founderEmail').value);
+    fd.append('jurisdiction',document.getElementById('jurisdiction').value);
+    fd.append('target_markets',document.getElementById('targetMarkets').value);
+    fd.append('intended_use',document.getElementById('intendedUse').value);
+    fd.append('product_class',document.getElementById('productClass').value);
+    fd.append('stage',document.getElementById('stage').value);
+    fd.append('user',document.getElementById('userRole').value);
+    fd.append('buyer',document.getElementById('buyer').value);
+    fd.append('payer',document.getElementById('payer').value);
+    fd.append('mode',document.getElementById('mode').value);
+    fd.append('hypothesis_a',document.getElementById('ha').value);
+    fd.append('hypothesis_b',document.getElementById('hb').value);
+    fd.append('description',document.getElementById('desc').value);
+    fd.append('consent',document.getElementById('consent').checked?'true':'false');
+    const f=document.getElementById('deck').files[0]; if(f) fd.append('deck',f);
+    const r=await fetch('/api/start',{method:'POST',body:fd});
+    const raw=await r.text();  // сначала текст, затем попытка разобрать JSON; тело на экран не выводится
+    let j=null; try{ j=JSON.parse(raw); }catch(e){ j=null; }
+    if(j===null||typeof j!=='object'||Array.isArray(j)){ err.textContent=START_FAIL; return; }
+    if(!r.ok){ err.textContent=(typeof j.error==='string'&&j.error)||('Ошибка '+r.status+'. Повторите или сообщите администратору.'); return; }
+    sid=j.id; state=j; document.getElementById('start').classList.add('hidden'); document.getElementById('chat').classList.remove('hidden'); renderState();
+  }catch(e){
+    err.textContent=START_FAIL;  // сбой сети; значения формы не очищаются
+  }finally{
+    startBusy=false; btn.disabled=false; btn.textContent=label;
+  }
 }
 function renderState(){
  if(state.done){ showReport(); return; }
