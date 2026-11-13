@@ -89,8 +89,8 @@ class StartApiTests(unittest.TestCase):
         self.assertNotIn("diagnostics_validity",j["selected_modules"])
 
     def test_invite_and_mode_regression(self):
-        x=self.base(); x["invite_code"]="wrong"
-        self.assertEqual(self.post(x).status_code,403)
+        x=self.base(); x["invite_code"]="wrong"  # T-305: параметр игнорируется, не проверяется
+        self.assertEqual(self.post(x).status_code,200)
         x=self.base(); x["mode"]="Z"
         self.assertEqual(self.post(x).status_code,400)
 
