@@ -339,3 +339,6 @@
 - `tests/test_t304_api_start.py` (9): под сессией founder → 200 с `id`; investor → 403; чужой VC → 403; без согласия → 400 `consent_required`; не PDF → 400 `deck_mime_invalid`; без CSRF → 403; отказы всегда JSON с `error`/`code`. Режим без RBAC: неверный код → 403 `invite_code_invalid`, верный → 200.
 - Расхождение с карточкой: «неверный код → 403» под сессией не наступает — после T-001 вошедшему код не нужен (так и задумано, T-305). Тест неверного кода работает только в режиме без RBAC. Дефектов не найдено. `app.py` не менялся.
 - Проверка: `python -m pytest -q` → 1057 passed, 7 skipped (`docs/handoff/114_T304_pytest.log`). Риск низкий, откат: `git revert`.
+
+## T-402 (13.11): тесты доступа к /admin/sessions, /admin/audit (Refs #114)
+- Добавлен `tests/test_t402_admin_access.py`; код и матрица не менялись. Лог: `docs/handoff/114_T402_pytest.log` → 1091 passed, 8 skipped. Подробности — `docs/handoff/114.md`.
