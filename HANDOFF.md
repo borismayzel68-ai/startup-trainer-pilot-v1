@@ -331,3 +331,8 @@
 - Новых адресов данных, прав, `auth.py`, схемы нет. Блоки — текст и области из собственных грантов (`shell_menu.cabinet_blocks`, `templates/_cabinet_blocks.html`).
 - Вопрос в PR: разделы S1/S6/S2/S5/портфель отдают JSON, поэтому названы текстом без ссылок (см. T-203, DoD T-004). Нужны HTML-страницы (новые адреса) или решение показывать JSON.
 - Тесты `tests/test_t205_cabinets.py` (16); в `test_t203_role_menu.py` ожидание меню owner дополнено «/cabinet». Лог: `114_T205_pytest.log` → 1043 passed, 7 skipped.
+
+## T-304 (FEAT-003, 12.11): тесты POST /api/start (Claude, Refs #114)
+- `tests/test_t304_api_start.py` (9): под сессией founder → 200 с `id`; investor → 403; чужой VC → 403; без согласия → 400 `consent_required`; не PDF → 400 `deck_mime_invalid`; без CSRF → 403; отказы всегда JSON с `error`/`code`. Режим без RBAC: неверный код → 403 `invite_code_invalid`, верный → 200.
+- Расхождение с карточкой: «неверный код → 403» под сессией не наступает — после T-001 вошедшему код не нужен (так и задумано, T-305). Тест неверного кода работает только в режиме без RBAC. Дефектов не найдено. `app.py` не менялся.
+- Проверка: `python -m pytest -q` → 1057 passed, 7 skipped (`docs/handoff/114_T304_pytest.log`). Риск низкий, откат: `git revert`.
