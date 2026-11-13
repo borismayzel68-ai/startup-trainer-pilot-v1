@@ -17,7 +17,7 @@ class HypothesisModeLeakTests(unittest.TestCase):
 
     def _start(self, mode):
         c = appmod.app.test_client()
-        data = {"invite_code": appmod.INVITE_CODE, "consent": "true", "project_id": "VC-993", "project_name": "Синтетика",
+        data = {"consent": "true", "project_id": "VC-993", "project_name": "Синтетика",
                 "founder_name": "Тест", "founder_email": "t@example.test", "jurisdiction": "RF",
                 "intended_use": "синтетика", "product_class": "WELLNESS_INFORMATION", "mode": mode,
                 "hypothesis_a": "ТЕКСТ-A", "hypothesis_b": "ТЕКСТ-B", "description": "синтетика"}

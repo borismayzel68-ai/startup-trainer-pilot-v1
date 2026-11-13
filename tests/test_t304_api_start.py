@@ -1,6 +1,6 @@
 """T-304 (#114, FEAT-003): тесты POST /api/start. AC-001, AC-004, AC-005. Только синтетика (@example.test, VC-99x).
 ИИ не вызывается на /api/start (маршрутизация и next_question детерминированы); на всякий случай сеть закрыта моком.
-Код сервера не менялся."""
+Код сервера не менялся (T-305 заменил тесты кода доступа)."""
 import io
 from unittest import mock
 
@@ -72,17 +72,29 @@ class TestStartUnderSession:
             assert j and j["error"] and j["code"]
 
 
-class TestInviteCodeLegacyMode:
-    """RBAC выключен (старый режим без сессии): код доступа проверяется (T-001 оставил проверку)."""
+class TestNoInviteCodeT305:
+    """T-305 (AC-007): код доступа не требуется и не проверяется; защита — вход, роль, scope."""
 
-    def test_wrong_code_403_invite_code_invalid(self):
-        appmod.app.testing = True
-        c = appmod.app.test_client()
-        r = c.post("/api/start", data=form(invite_code="wrong"), base_url=BASE)
-        assert r.status_code == 403 and r.get_json()["code"] == "invite_code_invalid"
+    @pytest.mark.auth_enforced
+    def test_anonymous_401_even_with_any_code(self, env):  # права не ослаблены
+        c, _ = make_client(env, "f@example.test", [("founder", "VC-991")])
+        anon = appmod.app.test_client()
+        for extra in ({}, {"invite_code": "PILOT-S1-EXT-001"}, {"invite_code": "wrong"}):
+            r = anon.post("/api/start", data=form(**extra), base_url=BASE)
+            assert r.status_code in (401, 403), r.status_code
 
-    def test_right_code_200(self):
-        appmod.SESSIONS.clear()
-        c = appmod.app.test_client()
-        r = c.post("/api/start", data=form(invite_code=appmod.INVITE_CODE), base_url=BASE)
-        assert r.status_code == 200 and r.get_json()["id"]
+    @pytest.mark.auth_enforced
+    def test_disallowed_role_still_403(self, env):  # права не ослаблены
+        for role in ("investor", "fund_staff", "expert"):
+            c, _ = make_client(env, "%s@example.test" % role, [(role, "*")])
+            assert post(c, form(invite_code="PILOT-S1-EXT-001")).status_code == 403
+
+    @pytest.mark.auth_enforced
+    def test_founder_without_code_200_and_code_ignored(self, env):
+        c, _ = make_client(env, "f@example.test", [("founder", "VC-991")])
+        assert post(c, form()).status_code == 200
+        assert post(c, form(invite_code="wrong")).status_code == 200
+
+    def test_no_invite_code_check_in_source(self):
+        import inspect
+        assert "invite_code" not in inspect.getsource(appmod.start)

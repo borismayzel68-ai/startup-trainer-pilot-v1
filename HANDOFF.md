@@ -2,6 +2,9 @@
 
 Подробный handoff ведётся по задачам в `docs/handoff/<issue>.md`; здесь — только ссылки. При каждом коммите обновляется файл своей задачи (и эта таблица, если появилась новая задача).
 
+## T-305 убрать «Код доступа», #114 / FEAT-003 (Claude, ветка `claude/issue-114-20261113-0628`, 13.11) — ВЫСОКИЙ РИСК (`app.py`)
+- Убраны проверка `invite_code` в `/api/start` и константа `INVITE_CODE` в `app.py`; защита — `require_role` (вход, роль, scope). Тесты кода заменены (`tests/test_t304_api_start.py::TestNoInviteCodeT305`), чек-лист `docs/for-sergey/02…:58` обновлён. pytest: 1059 passed, 7 skipped (`docs/handoff/114_T305_pytest.log`). Переменная `INVITE_CODE` в окружении и `tests.yml` не тронуты. Подробно — `docs/handoff/114.md`.
+
 ## T-302 форма «Начать» не «молчит», #114 / FEAT-003 (Claude, ветка `claude/issue-114-20261111-1024`, 11.11)
 - Только `templates/index.html` (`startSession()`: индикатор, блокировка, любой ответ) и `tests/test_t302_start_form_js.py`. pytest: 1048 passed, 7 skipped (`docs/handoff/114_T302_pytest.log`). Сервер, коды ошибок, `AUTH_ALLOWLIST`, `INVITE_CODE` не тронуты. Подробно — `docs/handoff/114.md`.
 

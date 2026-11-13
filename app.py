@@ -64,7 +64,6 @@ if _PROXIES:  # X-Forwarded-For доверяем только от N ближа�
     app.wsgi_app = ProxyFix(app.wsgi_app, x_for=_PROXIES, x_proto=1, x_host=0)
 app.secret_key = os.environ.get("SESSION_SECRET") or os.environ.get("FLASK_SECRET_KEY") or hashlib.sha256((COMPLETION_RECEIVER_SECRET or str(uuid.uuid4())).encode()).hexdigest()
 app.config.update(SESSION_COOKIE_SECURE=True, SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax", PERMANENT_SESSION_LIFETIME=timedelta(hours=12))
-INVITE_CODE = os.environ.get("INVITE_CODE", "PILOT-S1-EXT-001")
 SESSION_RETENTION_DAYS = int(os.environ.get("SESSION_RETENTION_DAYS", "30"))
 SESSION_DATABASE_URL = (
     os.environ.get("SESSION_DATABASE_URL")
@@ -667,9 +666,7 @@ def start_error(message,code,status=400,allowed=None):
 @app.post("/api/start")
 @require_role(["founder", "owner"], scope=lambda kw: normalize_project_id(request.form.get("project_id")))
 def start():
-    # T-001 (#114): вошедшему по сессии код не нужен; без сессии (RBAC выключен) проверка остаётся
-    if not auth.session_ok() and request.form.get("invite_code") != INVITE_CODE:
-        return start_error("\u041d\u0435\u0432\u0435\u0440\u043d\u044b\u0439 \u043a\u043e\u0434 \u0434\u043e\u0441\u0442\u0443\u043f\u0430","invite_code_invalid",403)
+    # T-305 (#114): код доступа убран (Q-B2); защита — require_role выше: вход, роль, scope
     if request.form.get("consent") != "true":
         return start_error("\u041d\u0443\u0436\u043d\u043e \u0441\u043e\u0433\u043b\u0430\u0441\u0438\u0435 \u043d\u0430 \u043e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0443 \u043c\u0430\u0442\u0435\u0440\u0438\u0430\u043b\u043e\u0432","consent_required")
 
