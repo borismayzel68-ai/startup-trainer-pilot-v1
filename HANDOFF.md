@@ -2,6 +2,9 @@
 
 Подробный handoff ведётся по задачам в `docs/handoff/<issue>.md`; здесь — только ссылки. При каждом коммите обновляется файл своей задачи (и эта таблица, если появилась новая задача).
 
+## T-403 шаги 1–2 (FEAT-004, 14.11): формат `detail` журнала просмотров — на согласование Борису (Claude, Refs #114)
+- Только документ `docs/handoff/114_T403_format.md`: как пишется запись сейчас, вариант А (рекомендуется) и Б, вопрос «Принять А?». Код, тесты, схема, права не менялись. pytest: 1091 passed, 8 skipped (`docs/handoff/114_T403_pytest.log`). Шаги 3–5 — после ответа Бориса.
+
 ## T-305 убрать «Код доступа», #114 / FEAT-003 (Claude, ветка `claude/issue-114-20261113-0628`, 13.11) — ВЫСОКИЙ РИСК (`app.py`)
 - Убраны проверка `invite_code` в `/api/start` и константа `INVITE_CODE` в `app.py`; защита — `require_role` (вход, роль, scope). Тесты кода заменены (`tests/test_t304_api_start.py::TestNoInviteCodeT305`), чек-лист `docs/for-sergey/02…:58` обновлён. pytest: 1059 passed, 7 skipped (`docs/handoff/114_T305_pytest.log`). Переменная `INVITE_CODE` в окружении и `tests.yml` не тронуты. Подробно — `docs/handoff/114.md`.
 
