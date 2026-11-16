@@ -45,7 +45,7 @@ window.fetch=function(u,o){o=o||{};if((o.method||"GET").toUpperCase()!=="GET"){o
 </header>
 {% endif %}
 {% block content %}{% endblock %}
-<button id="fbBtn" type="button">Сообщить о проблеме</button>
+{% if not shell_user %}<button id="fbBtn" type="button">Сообщить о проблеме</button>{% endif %}
 <div id="fbBox" class="hidden" role="dialog" aria-label="Сообщить о проблеме">
 <p class="muted"><b>Не вводите персональные данные пациентов и закрытые сведения</b></p>
 <label for="fbText">Что случилось</label>
@@ -57,7 +57,7 @@ window.fetch=function(u,o){o=o||{};if((o.method||"GET").toUpperCase()!=="GET"){o
 </div>
 <script>
 (function(){var $=function(i){return document.getElementById(i)},box=$("fbBox"),msg=$("fbMsg");
-$("fbBtn").onclick=function(){box.classList.toggle("hidden");};
+var fb=$("fbBtn");if(fb)fb.onclick=function(){box.classList.toggle("hidden");};
 var fl=$("fbLink");if(fl)fl.onclick=function(e){e.preventDefault();box.classList.toggle("hidden");};
 $("fbSend").onclick=function(){var text=$("fbText").value.trim();msg.className="msg";
 if(!text){msg.className="msg error";msg.textContent="Опишите, что случилось.";return;}
