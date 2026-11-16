@@ -43,10 +43,10 @@ def test_header_on_every_page_for_every_role(env, role):
 
 @pytest.mark.parametrize("role", sorted(ROLE_LABELS))
 def test_role_shown_as_label_not_code(env, role):
-    c, _ = make_client(env, "t201c-%s@example.test" % role, [(role, "*")])
+    email = "t201c-%s@example.test" % role
+    c, _ = make_client(env, email, [(role, "*")])
     who = re.search(r'<span class="who">(.*?)</span>', _get(c, "/profile").get_data(as_text=True), re.S).group(1)
-    assert ROLE_LABELS[role] in who
-    assert ("· " + role) not in who and who.strip().split("·")[-1].strip() != role
+    assert who.strip() == "Synthetic %s \u00b7 %s" % (email, ROLE_LABELS[role])
 
 
 def test_only_one_report_entry_point(env):
@@ -59,10 +59,14 @@ def test_only_one_report_entry_point(env):
 
 
 def test_no_session_page_keeps_floating_button(env):
-    """Страница без шапки (нет сессии) сохраняет плавающую кнопку: единственная точка входа."""
+    """Страница без шапки (нет сессии) сохраняет плавающую кнопку: ровно одна точка входа."""
     c = appmod.app.test_client()
-    html = _get(c, "/no-such-page").get_data(as_text=True)
-    assert 'id="shell"' not in html and html.count('id="fbBtn"') <= 1
+    r = _get(c, "/no-such-page")  # HTML-страница ошибки на error.html (наследует base.html)
+    assert r.status_code in (401, 404)
+    assert r.content_type.startswith("text/html")
+    html = r.get_data(as_text=True)
+    assert 'id="shell"' not in html and 'id="fbLink"' not in html
+    assert html.count('id="fbBtn"') == 1 and html.count('id="fbBox"') == 1
 
 
 def test_no_name_falls_back_to_email(env):
@@ -95,8 +99,14 @@ def test_name_is_escaped_xss(env):
 
 def test_header_has_no_other_users_data(env):
     c, _ = make_client(env, "t201own@example.test", [("founder", "VC-991")])
-    make_client(env, "t201other@example.test", [("investor", "*")])
-    assert "t201other@example.test" not in _header(_get(c, "/").get_data(as_text=True))
+    other = "t201other@example.test"
+    other_name = "Uniq-Other-Name-7Q3"
+    make_client(env, other, [("investor", "*")])
+    _set_name(env, other, other_name)
+    for path in PAGES:
+        head = _header(_get(c, path).get_data(as_text=True))
+        assert other not in head and other_name not in head, path
+        assert ROLE_LABELS["investor"] not in head, path
 
 
 def test_header_on_admin_page_for_owner(env):

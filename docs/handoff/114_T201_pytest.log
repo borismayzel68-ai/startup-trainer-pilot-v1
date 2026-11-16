@@ -21,4 +21,4 @@ tests/test_hq020_scenario.py::EndToEndTests::test_approve_requires_call_done
     warnings.warn(
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-1116 passed, 8 skipped, 1 warning, 35 subtests passed in 41.09s
+1116 passed, 8 skipped, 1 warning, 35 subtests passed in 43.59s
