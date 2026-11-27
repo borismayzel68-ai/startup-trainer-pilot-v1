@@ -352,3 +352,8 @@
 
 ## T-201 (16.11): правки по ревью второй модели (Claude, Refs #114)
 - Только тесты `tests/test_t201_header.py`: без сессии страница ошибки (`error.html`) — статус 401/404, `text/html`, `#fbBtn` ровно 1 (`== 1`), шапки и `#fbLink` нет; роль — точное сравнение `"<имя> · <метка>"`; у другого пользователя уникальное имя, его почты, имени и роли в шапке нет. Шаблоны и `app.py` не менялись. Лог: `114_T201_pytest.log` → 1116 passed, 8 skipped. Риск низкий, откат: `git revert`.
+
+## #114 (27.11): запасной вход по одноразовой ссылке — ВЫСОКИЙ РИСК (`auth.py`, миграция 008) (Claude 50, Refs #114)
+- Флаг `AUTH_INVITE_FALLBACK=1` (по умолчанию выключен → маршрут 404). `GET /auth/invite/<token>`: токен одноразовый, срок жизни, в БД только SHA-256 (`login_tokens`, миграция 008 + down). Только почта из allowlist; иначе 403 «Доступ по приглашению». Согласие ПДн проверяется как при входе через Google. Google OAuth, `AUTH_ALLOWLIST`, шлюзы не менялись.
+- Выдача: `python scripts/issue_login_token.py <email> --ttl-minutes 60 --base-url https://<ДОМЕН>` (письма не шлёт). Тесты: `tests/test_issue114_invite_login.py` (10). Лог: `docs/handoff/114_fallback_pytest.log` → 1126 passed, 9 skipped.
+- Не сделано: миграция на стенд не заливалась (нужен список заливки, правило 6); приёмка через Google по-прежнему не подтверждена. Откат: `git revert`; при применённой миграции — `db/migrations/down/008_login_tokens.down.sql`.

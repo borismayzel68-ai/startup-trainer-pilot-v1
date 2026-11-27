@@ -18,7 +18,7 @@ pytestmark = pytest.mark.auth_enforced
 BASE = "https://localhost"  # cookie Secure не уходит по http
 CLIENT_ID = "synthetic-client-id.apps.example.test"
 PUBLIC_ENDPOINTS = {
-    "health", "robots", "auth.login", "auth.callback",
+    "health", "robots", "auth.login", "auth.callback", "auth.invite_login",
     "pdn_consent.page", "pdn_consent.submit", "pdn_consent.revoke",
 }
 EXTERNAL_OK_STATUSES = {401, 403, 404, 503}  # собственная проверка маршрута (Bearer / ключ / подпись ссылки)

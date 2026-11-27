@@ -386,6 +386,55 @@ def callback():
     return redirect("/")
 
 
+def invite_fallback_enabled():
+    """Запасной вход по одноразовой ссылке (#114). По умолчанию выключен."""
+    return os.environ.get("AUTH_INVITE_FALLBACK", "") == "1"
+
+
+@bp.get("/invite/<token>")
+@public
+def invite_login(token):
+    """Вход по одноразовой ссылке — только для почты из allowlist и только при AUTH_INVITE_FALLBACK=1.
+    Согласие на ПДн проверяется так же, как при входе через Google; Google OAuth не затрагивается."""
+    if not invite_fallback_enabled():
+        return jsonify({"error": "Не найдено", "code": "not_found"}), 404
+    email = store().peek_login_token(token)
+    if not email:
+        audit("login", "/auth/invite", "deny", detail="invite_token_invalid")
+        return jsonify({"error": "Ссылка недействительна или устарела", "code": "invite_token_invalid"}), 403
+    entries = allowlist().get(email)
+    if not entries:
+        store().consume_login_token(token)
+        audit("login", "/auth/invite", "deny", actor=email, detail="not_in_allowlist")
+        log.warning("auth: not_in_allowlist %s", mask_email(email))
+        resp = current_app.make_response((render_template("access_invite.html", email=email), 403))
+        resp.headers["Cache-Control"] = "no-store"
+        return resp
+    known = store().user_by_email(email)
+    if known and known["blocked_at"]:
+        audit("login", "/auth/invite", "deny", actor=email, detail="user_blocked")
+        return _blocked_response()
+    consent_row = _investor_consent_row()
+    if consent_row is None:  # токен не гасится: сначала согласие, затем та же ссылка
+        audit("login", "/auth/invite", "deny", actor=email, detail="pdn_consent_required")
+        return redirect("/consent")
+    if consent_row["user_email"] != email:
+        audit("login", "/auth/invite", "deny", actor=email, detail="pdn_consent_email_mismatch")
+        return jsonify({"error": "Email согласия не совпадает с аккаунтом входа", "code": "consent_email_mismatch"}), 403
+    if store().consume_login_token(token) != email:  # гонка: токен погасил другой запрос
+        audit("login", "/auth/invite", "deny", actor=email, detail="invite_token_invalid")
+        return jsonify({"error": "Ссылка недействительна или устарела", "code": "invite_token_invalid"}), 403
+    user = store().upsert_user(email, email)
+    for role, scope in entries:
+        store().ensure_grant(user["id"], role, scope)
+    session.clear()
+    session["uid"] = user["id"]
+    session.permanent = True
+    csrf_token()
+    audit("login", "/auth/invite", "allow", actor=email, detail="invite_token")
+    return redirect("/")
+
+
 @bp.post("/logout")
 @require_role(ANY_ROLE)
 def logout():

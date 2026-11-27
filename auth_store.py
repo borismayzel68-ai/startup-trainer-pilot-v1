@@ -3,15 +3,18 @@
 Postgres — применяется db/migrations/001_roles_access.sql (единый источник схемы).
 SQLite (тесты, локально) — эквивалентный DDL. Только синтетические данные в тестах.
 """
+import hashlib
 import os
+import secrets
 import sqlite3
 import threading
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 MIGRATION = os.path.join(os.path.dirname(os.path.abspath(__file__)), "db", "migrations", "001_roles_access.sql")
 
 MIGRATION_007 = os.path.join(os.path.dirname(os.path.abspath(__file__)), "db", "migrations", "007_access_invites.sql")
+MIGRATION_008 = os.path.join(os.path.dirname(os.path.abspath(__file__)), "db", "migrations", "008_login_tokens.sql")
 DEFAULT_TENANT = "pilot"
 
 ROLE_LABELS = {
@@ -39,6 +42,9 @@ CREATE TABLE IF NOT EXISTS access_invites (
     role TEXT NOT NULL REFERENCES roles(code), scope TEXT NOT NULL DEFAULT '*', invited_by TEXT,
     created_at TEXT NOT NULL, revoked_at TEXT);
 CREATE INDEX IF NOT EXISTS access_invites_email_idx ON access_invites (lower(email));
+CREATE TABLE IF NOT EXISTS login_tokens (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, token_hash TEXT NOT NULL UNIQUE, email TEXT NOT NULL,
+    created_at TEXT NOT NULL, expires_at TEXT NOT NULL, used_at TEXT);
 """
 
 
@@ -92,7 +98,7 @@ class AuthStore:
     def initialize(self):
         with self._conn() as conn:
             if self.pg:
-                for path in (MIGRATION, MIGRATION_007):  # обе идемпотентны
+                for path in (MIGRATION, MIGRATION_007, MIGRATION_008):  # обе идемпотентны
                     with open(path, encoding="utf-8") as f:
                         conn.execute(f.read())
             else:
@@ -224,6 +230,35 @@ class AuthStore:
             params = [_like(q)] * len(columns)
         sql += " ORDER BY 1 DESC LIMIT %d" % int(limit)
         return [["" if v is None else str(v) for v in r] for r in self._run(sql, tuple(params), fetch=True)]
+
+    # ---- одноразовые ссылки входа (#114, запасной вход) ----------------------
+    @staticmethod
+    def _token_hash(raw):
+        return hashlib.sha256(str(raw).encode("utf-8")).hexdigest()
+
+    def create_login_token(self, email, ttl_seconds=3600):
+        """Выдаёт токен: в БД только хэш. Возвращает сам токен (показать один раз)."""
+        email = (email or "").strip().lower()
+        if "@" not in email or not 60 <= int(ttl_seconds) <= 7 * 86400:
+            raise ValueError("invalid_login_token")
+        raw = secrets.token_urlsafe(32)
+        now = datetime.now(timezone.utc)
+        exp = (now + timedelta(seconds=int(ttl_seconds))).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        self._run("INSERT INTO login_tokens (token_hash, email, created_at, expires_at) VALUES (?, ?, ?, ?)",
+                  (self._token_hash(raw), email, utc_iso(), exp))
+        return raw
+
+    def peek_login_token(self, raw):
+        """Email действующего (не использованного, не истёкшего) токена или None. Токен не гасится."""
+        rows = self._run("SELECT email FROM login_tokens WHERE token_hash = ? AND used_at IS NULL AND expires_at > ?",
+                         (self._token_hash(raw), utc_iso()), fetch=True)
+        return rows[0][0] if rows else None
+
+    def consume_login_token(self, raw):
+        """Атомарно гасит токен; возвращает email или None (нет, использован, истёк)."""
+        rows = self._run("UPDATE login_tokens SET used_at = ? WHERE token_hash = ? AND used_at IS NULL "
+                         "AND expires_at > ? RETURNING email", (utc_iso(), self._token_hash(raw), utc_iso()), fetch=True)
+        return rows[0][0] if rows else None
 
     # ---- audit ------------------------------------------------------------
     def audit(self, actor, action, obj, result, ip, detail=None):
