@@ -26,7 +26,12 @@ const METRICS = [
   ['прибыл', 'profit'], ['маржинальн', 'margin'], ['затрат', 'expenses'], ['расход', 'expenses'], ['стоимост', 'generic'],
 ];
 const SCOPE = [['перв', 'ord1'], ['втор', 'ord2'], ['трет', 'ord3'], ['четверт', 'ord4'], ['последн', 'last'],
-  ['следующ', 'next'], ['этап', 'phase'], ['пилот', 'phase'], ['фаз', 'phase']];
+  ['следующ', 'next'], ['этап', 'phase'], ['пилот', 'phase'], ['фаз', 'phase'],
+  ['ежемесячн', 'per_month'], ['ежегодн', 'per_year'], ['ежеквартальн', 'per_quarter'], ['еженедельн', 'per_week'],
+  ['ежедневн', 'per_day'], ['квартал', 'quarter'], ['январ', 'm01'], ['феврал', 'm02'], ['март', 'm03'], ['апрел', 'm04'],
+  ['июн', 'm06'], ['июл', 'm07'], ['август', 'm08'], ['сентябр', 'm09'], ['октябр', 'm10'], ['ноябр', 'm11'], ['декабр', 'm12']];
+const MODEL_WORDS = ['модел', 'верси', 'вариант'];
+const UNIT_TOK = /^(тыс|млн|млрд|руб|тенге|долл|евро|usd|eur|кг|г|т|р)/;
 const UNIT_KG = { кг: 1, г: 0.001, т: 1000 };
 const MULT = [['тыс', 1e3], ['млн', 1e6], ['млрд', 1e9]];
 const NEG = new Set(['не', 'нет', 'без', 'ни']);
@@ -44,9 +49,11 @@ function analyze(text) {
   const toks = tokenize(text);
   const f = { toks, num: null, metrics: new Set(), objects: new Set(), nouns: new Set(), scope: new Set(), quant: [], neg: 0, content: new Set() };
   let hasCountWord = false;
+  f.ctx = new Set();
   toks.forEach((tk, i) => {
     if (/^\d/.test(tk)) {
       if (/^(19|20)\d\d$/.test(tk)) { f.scope.add('y' + tk); return; }
+      if (i > 0 && stemIn(toks[i - 1], MODEL_WORDS)) { f.scope.add('m:' + tk); return; } // «модель 2»: это имя, не значение
       if (!f.num) {
         let v = parseFloat(tk), j = i + 1, unit = '';
         for (const [m, k] of MULT) if (toks[j] && toks[j].startsWith(m)) { v *= k; j++; break; }
@@ -59,12 +66,13 @@ function analyze(text) {
     }
     if (/^(числ|количеств)/.test(tk)) hasCountWord = true;
     const sc = stemIn(tk, SCOPE); if (sc) f.scope.add(sc);
+    if (stemIn(tk, MODEL_WORDS) && toks[i + 1] && !/^\d/.test(toks[i + 1]) && toks[i + 1].length <= 2) f.scope.add('m:' + toks[i + 1]); // «модель А»
     const cn = stemIn(tk, COUNTED); if (cn) { f.nouns.add(cn); }
     const ob = stemIn(tk, OBJECTS); if (ob) { f.objects.add(ob); f.nouns.add(ob); }
     const mt = stemIn(tk, METRICS); if (mt) f.metrics.add(mt);
     if (/^(один|одн)/.test(tk) || tk.startsWith('единственн')) f.quant.push({ q: 'one', at: i });
     else if (/^нескольк/.test(tk) || tk.startsWith('многих')) f.quant.push({ q: 'many', at: i });
-    if (NEG.has(tk)) f.neg++; else if (!STOP.has(tk) && tk.length > 2 && !/^\d/.test(tk)) f.content.add(tk.slice(0, 5));
+    if (NEG.has(tk)) f.neg++; else if (!STOP.has(tk) && tk.length > 2 && !/^\d/.test(tk)) { f.content.add(tk.slice(0, 5)); if (!UNIT_TOK.test(tk) && !stemIn(tk, MODEL_WORDS)) f.ctx.add(tk.slice(0, 5)); }
   });
   // что считается: существительное сразу после числа или любое считаемое при «число/количество»
   if (f.num) {
@@ -88,8 +96,24 @@ function cmpScope(a, b) { // same | one | diff
   return setEq(a, b) ? 'same' : 'diff';
 }
 
+// Показатель не назван ни там, ни там: сравниваем окружение (слова вокруг числа) и этап.
+function compareUnnamed(a, b) {
+  const sc = cmpScope(a.scope, b.scope);
+  if (sc === 'diff') return res('none', 'Разный этап/период/модель.');
+  const shared = inter(a.ctx, b.ctx).length, uni = new Set([...a.ctx, ...b.ctx]).size, mn = Math.min(a.ctx.size, b.ctx.size);
+  const ratio = sc === 'same' ? shared / (uni || 1) : shared / (mn || 1);
+  if (mn < 2 || ratio < 0.75) {
+    return inter(a.nouns, b.nouns).length ? res('clarify', 'Числа разные, но показатель не назван: уточните, что именно измеряется.') : res('none', 'Разные числа без общего показателя и объекта.');
+  }
+  if (sc === 'one') return res('clarify', 'Этап или период назван только в одном из утверждений: уточните.');
+  if (a.num.unit && b.num.unit && a.num.unit !== b.num.unit) return res('clarify', 'Разные единицы измерения: приведите к одной.');
+  if (a.num.v === b.num.v) return res('none', 'Значения совпадают.');
+  return res('contradiction', 'Одно и то же утверждение (окружение совпадает, этап не различается), но разные значения: ' + a.num.v + ' и ' + b.num.v + '.');
+}
+
 function compareNumeric(a, b) {
   const ma = a.metrics, mb = b.metrics;
+  if (ma.size === 0 && mb.size === 0) return compareUnnamed(a, b);
   if (ma.size === 0 || mb.size === 0) {
     return inter(a.nouns, b.nouns).length ? res('clarify', 'Числа разные, но показатель не назван: уточните, что именно измеряется.') : res('none', 'Разные числа без общего показателя и объекта.');
   }
@@ -151,4 +175,30 @@ function findContradictions(text) {
   return { error: null, pairs };
 }
 
-module.exports = { isContradiction, findContradictions, MAX_TEXT_CHARS, MAX_FRAGMENT_CHARS, TOO_LONG_TEXT };
+// --- refine: фильтр поверх старого разбора -------------------------------------------------------
+// Старые правила главные. Модуль проверяет только две их ветки (ложные K01/K02/K03/K08/K12):
+//   «numeric»  — разные числа при одном слове;  «one_many» — один ↔ несколько.
+// Любая другая причина (oldWhy) проходит без изменений: «contradiction».
+// Ветка определяется по тексту oldWhy (регистр не важен) либо по явному коду 'numeric' / 'one_many'.
+function classifyOldWhy(oldWhy) {
+  const w = norm(oldWhy == null ? '' : (typeof oldWhy === 'object' ? (oldWhy.kind || oldWhy.why || '') : oldWhy));
+  if (/нескольк|one.?many|several|множествен|единственн/.test(w)) return 'one_many';
+  if (/числ|number|numeric/.test(w)) return 'numeric';
+  return null;
+}
+
+function refine(a, b, oldWhy) {
+  const pass = (why) => res('contradiction', why);
+  const kind = classifyOldWhy(oldWhy);
+  if (!kind) return pass('Смысловое правило прежнего разбора: оставлено без изменений.');
+  if (typeof a !== 'string' || typeof b !== 'string') return pass('Нет двух текстовых утверждений: оставлено решение прежнего правила.');
+  if (a.length > MAX_FRAGMENT_CHARS || b.length > MAX_FRAGMENT_CHARS) return res('clarify', 'Фрагмент длиннее ' + MAX_FRAGMENT_CHARS + ' знаков: разбейте его на отдельные утверждения.');
+  const fa = analyze(a), fb = analyze(b);
+  if (kind === 'numeric') {
+    if (!fa.num || !fb.num) return pass('Числа не удалось разобрать: оставлено решение прежнего правила.');
+    return compareNumeric(fa, fb);
+  }
+  return compareQuant(fa, fb) || pass('«Один/несколько»: объект не распознан, оставлено решение прежнего правила.');
+}
+
+module.exports = { refine, classifyOldWhy, isContradiction, findContradictions, MAX_TEXT_CHARS, MAX_FRAGMENT_CHARS, TOO_LONG_TEXT };

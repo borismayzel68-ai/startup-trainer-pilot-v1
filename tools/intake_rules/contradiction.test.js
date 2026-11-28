@@ -2,7 +2,7 @@
 // node --test tools/intake_rules/  (без браузера, без сети). Только синтетика.
 const test = require('node:test');
 const assert = require('node:assert');
-const { isContradiction, findContradictions, MAX_TEXT_CHARS, TOO_LONG_TEXT } = require('./contradiction.js');
+const { refine, isContradiction, findContradictions, MAX_TEXT_CHARS, TOO_LONG_TEXT } = require('./contradiction.js');
 
 // [id, a, b]. K* — ложные из HOLD b16 v3; H16/C5/C3 — по поручению.
 const MUST_NOT_CONTRADICT = [
@@ -87,4 +87,55 @@ test('20000 знаков укладываются в 5 секунд', () => {
   const text = unit.repeat(Math.floor(MAX_TEXT_CHARS / unit.length));
   const t0 = Date.now(); const r = findContradictions(text); const ms = Date.now() - t0;
   assert.strictEqual(r.error, null); assert.ok(ms < 5000, 'время ' + ms + ' мс');
+});
+
+// --- refine: фильтр поверх старого разбора. Свои синтетические примеры, не из приёмки. ---
+const NUM = 'разные числа при одном слове', ONE = 'один ↔ несколько';
+test('refine: K01/K02/K03/K08/K12 -> none', () => {
+  const rows = [['K01', NUM], ['K02', NUM], ['K03', NUM], ['K08', ONE], ['K12', NUM]];
+  for (const [id, why] of rows) {
+    const [, a, b] = MUST_NOT_CONTRADICT.find(x => x[0] === id);
+    assert.strictEqual(refine(a, b, why).verdict, 'none', id);
+  }
+});
+test('refine: S3-SYN-07 (числа) и T6 (один/несколько) сохраняются', () => {
+  assert.strictEqual(refine('У нас 12 клиник-клиентов', 'Ещё 10 клиник: письма о намерениях', NUM).verdict, 'contradiction');
+  assert.strictEqual(refine('Продукт работает в одной клинике', 'Продукт работает в нескольких клиниках', ONE).verdict, 'contradiction');
+});
+test('refine: этап и объект не названы нигде, окружение совпадает -> contradiction', () => {
+  assert.strictEqual(refine('Ежемесячно собираем 30 картриджей.', 'Ежемесячно собираем 45 картриджей.', NUM).verdict, 'contradiction');
+  assert.strictEqual(isContradiction('Выпускаем 100 наборов в смену', 'Выпускаем 140 наборов в смену').verdict, 'contradiction');
+});
+test('refine: этап назван только с одной стороны -> clarify', () => {
+  assert.strictEqual(refine('Ежемесячно собираем 30 картриджей.', 'Собираем 45 картриджей.', NUM).verdict, 'clarify');
+});
+test('refine: разные периоды, модели, объекты с обеих сторон -> none', () => {
+  const none = [
+    ['В 2021 г. продано 10 наборов.', 'В 2022 г. продано 15 наборов.'],
+    ['Ежемесячно собираем 30 картриджей.', 'Ежегодно собираем 45 картриджей.'],
+    ['Цена модели А 9 тысяч рублей', 'Цена модели Б 12 тысяч рублей'],
+    ['Модель 1 весит 300 г', 'Модель 2 весит 450 г'],
+    ['В марте продано 10 наборов', 'В апреле продано 15 наборов'],
+    ['Вес датчика 50 г', 'Вес прибора 2 кг'],
+  ];
+  for (const [a, b] of none) assert.strictEqual(refine(a, b, NUM).verdict, 'none', a + ' | ' + b);
+});
+test('refine: неизвестный числовой формат и неизвестный объект «один/несколько» не теряются', () => {
+  assert.strictEqual(refine('Нет чисел', 'Совсем нет', NUM).verdict, 'contradiction');
+  assert.strictEqual(refine('Пилот в одном городе', 'Работаем в нескольких городах', ONE).verdict, 'contradiction');
+});
+test('refine: смысловые ветки проходят сквозь без изменений', () => {
+  const pairs = [
+    ['Не ставит диагноз, не является медизделием', 'Решение о лечении принимает врач', 'назначение продукта'],
+    ['Штатный инженер', 'Внешний консультант', 'штатный ↔ внешний'],
+    ['Деньги получены', 'Деньги зависят от условия', 'деньги закрыты ↔ зависят от условия'],
+    ['Есть лицензия', 'Нет лицензии', 'есть ↔ нет'],
+    ['Цена датчика 9 тысяч', 'Себестоимость датчика 3 тысячи', 'одно поле — разные значения'],
+    ['x', 'y', ''], ['x', 'y', null], ['x', 'y', undefined],
+  ];
+  for (const [a, b, why] of pairs) assert.strictEqual(refine(a, b, why).verdict, 'contradiction', String(why));
+});
+test('refine: предел длины фрагмента и всегда есть причина', () => {
+  assert.strictEqual(refine('а'.repeat(2001), 'б', NUM).verdict, 'clarify');
+  const r = refine('Цена 5', 'Цена 6', NUM); assert.ok(r.reason.length > 3);
 });
