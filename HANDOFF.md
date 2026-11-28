@@ -2,6 +2,9 @@
 
 Подробный handoff ведётся по задачам в `docs/handoff/<issue>.md`; здесь — только ссылки. При каждом коммите обновляется файл своей задачи (и эта таблица, если появилась новая задача).
 
+## Правило противоречий intake, #114 (Claude, ветка `claude/issue-114-20261128-0404`, 28.11)
+- `tools/intake_rules/contradiction.js` (чистый JS): `isContradiction(a,b)` → contradiction/clarify/none; противоречие только при совпадении показателя, объекта и этапа, иначе clarify/none. Предел `findContradictions` — 20000 знаков, дальше понятная строка. Тесты `tools/intake_rules/contradiction.test.js` (40) + обёртка `tests/test_intake_contradiction_js.py`. pytest: 1117 passed, 8 skipped (`docs/handoff/114_contradiction_pytest.log`). Python/`app.py`/`intake.js` не тронуты. C1–C8 ChatGPT в треде не приведены — стоят заглушки P01–P08.
+
 ## T-403 шаги 1–2 (FEAT-004, 14.11): формат `detail` журнала просмотров — на согласование Борису (Claude, Refs #114)
 - Только документ `docs/handoff/114_T403_format.md`: как пишется запись сейчас, вариант А (рекомендуется) и Б, вопрос «Принять А?». Код, тесты, схема, права не менялись. pytest: 1091 passed, 8 skipped (`docs/handoff/114_T403_pytest.log`). Шаги 3–5 — после ответа Бориса.
 
